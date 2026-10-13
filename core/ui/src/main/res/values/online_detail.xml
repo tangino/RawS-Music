@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="online_detail_play_all">播放全部</string>
+    <string name="online_detail_favorite">收藏</string>
+    <string name="online_detail_unfavorite">取消收藏</string>
+    <string name="online_detail_added">已收藏</string>
+    <string name="online_detail_removed">已取消收藏</string>
+    <string name="online_detail_empty">该歌单暂无歌曲</string>
+    <string name="online_detail_load_failed">加载失败，请重试</string>
+    <string name="online_detail_retry">重试</string>
+    <string name="online_detail_no_source">还没有可用的音源，无法解析播放地址</string>
+    <string name="online_detail_no_match">音源里没有找到匹配的歌曲</string>
+    <string name="online_detail_play_failed">播放失败</string>
+    <string name="online_detail_invalid_argument">歌单参数无效</string>
+    <string name="online_detail_track_count">%1$d 首</string>
+    <string name="online_detail_creator">创建者：%1$s</string>
+    <string name="online_detail_play_count">%1$s 次播放</string>
+</resources>

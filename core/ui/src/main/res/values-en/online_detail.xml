@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="online_detail_play_all">Play all</string>
+    <string name="online_detail_favorite">Favorite</string>
+    <string name="online_detail_unfavorite">Remove</string>
+    <string name="online_detail_added">Added to favorites</string>
+    <string name="online_detail_removed">Removed from favorites</string>
+    <string name="online_detail_empty">This playlist has no songs</string>
+    <string name="online_detail_load_failed">Failed to load, tap to retry</string>
+    <string name="online_detail_retry">Retry</string>
+    <string name="online_detail_no_source">No enabled music source, cannot resolve a playable URL</string>
+    <string name="online_detail_no_match">No matching song found in your sources</string>
+    <string name="online_detail_play_failed">Playback failed</string>
+    <string name="online_detail_invalid_argument">Invalid playlist argument</string>
+    <string name="online_detail_track_count">%1$d tracks</string>
+    <string name="online_detail_creator">By %1$s</string>
+    <string name="online_detail_play_count">%1$s plays</string>
+</resources>

@@ -71,6 +71,7 @@ internal enum class OnlinePortalTab(
 @Composable
 fun OnlineMusicPortalPage(
     onBack: () -> Unit,
+    onOpenPlaylist: (OnlinePlatform, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = themeColors()
@@ -110,7 +111,7 @@ fun OnlineMusicPortalPage(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
-            OnlinePortalBody(selectedTab)
+            OnlinePortalBody(selectedTab, onOpenPlaylist)
         }
 
         OnlinePortalBottomBar(
@@ -161,9 +162,15 @@ private fun OnlinePlatformChipRow(
  * `OnlineFavoritesTab`），既满足「新代码单文件 ≤800 行」，也让它们可以分别演进。
  */
 @Composable
-private fun OnlinePortalBody(tab: OnlinePortalTab) {
+private fun OnlinePortalBody(
+    tab: OnlinePortalTab,
+    onOpenPlaylist: (OnlinePlatform, String) -> Unit,
+) {
     when (tab) {
-        OnlinePortalTab.Plaza -> OnlinePlazaTab(modifier = Modifier.fillMaxSize())
+        OnlinePortalTab.Plaza -> OnlinePlazaTab(
+            onOpenPlaylist = onOpenPlaylist,
+            modifier = Modifier.fillMaxSize(),
+        )
         OnlinePortalTab.Artists -> OnlineArtistTab(modifier = Modifier.fillMaxSize())
         OnlinePortalTab.Search -> OnlineSearchTab(modifier = Modifier.fillMaxSize())
         OnlinePortalTab.Favorites -> OnlineFavoritesTab(modifier = Modifier.fillMaxSize())

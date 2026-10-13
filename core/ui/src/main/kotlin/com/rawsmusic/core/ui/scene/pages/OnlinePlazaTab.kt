@@ -40,6 +40,7 @@ import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineLeaderboard
+import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.model.OnlinePlaylistTag
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
@@ -70,7 +71,10 @@ private const val GRID_COLUMNS = 2
  * 网格用 `chunked(2)` + `LazyColumn` 内嵌行，**不用 `LazyVerticalGrid`**（决策 D11）。
  */
 @Composable
-internal fun OnlinePlazaTab(modifier: Modifier = Modifier) {
+internal fun OnlinePlazaTab(
+    onOpenPlaylist: (OnlinePlatform, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
@@ -190,7 +194,7 @@ internal fun OnlinePlazaTab(modifier: Modifier = Modifier) {
                                 OnlinePlaylistCard(
                                     playlist = playlist,
                                     modifier = Modifier.weight(1f),
-                                    onClick = { /* P1-14 后续：跳 ONLINE_PLAYLIST_DETAIL */ },
+                                    onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
                                 )
                             }
                             // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。
