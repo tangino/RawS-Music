@@ -6,6 +6,7 @@ import android.widget.Toast
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.ui.AppNoticeAnimation
+import com.rawsmusic.core.common.utils.AppLogger
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.togetherWith
@@ -68,7 +69,10 @@ import com.rawsmusic.core.ui.widget.predictiveBottomSheetMotion
 import com.rawsmusic.core.ui.widget.predictiveBottomSheetScrim
 import com.rawsmusic.core.ui.widget.rememberPredictiveDialogProgress
 import com.rawsmusic.module.data.prefs.PlaylistStore
+import com.rawsmusic.module.data.repository.SongAttitudeRepository
+import com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
 import com.rawsmusic.module.player.PlayerController
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -121,6 +125,19 @@ class SongActionSheetHelper(
     private var pendingPlaylistSongs: List<AudioFile> = emptyList()
     private var playlistChoicesObserverStarted = false
 
+    /**
+     * 长按菜单里「喜欢 / 不喜欢」两个开关的当前状态，作用于当前 pending 的歌曲。
+     *
+     * 为什么用普通 state 而不是直接读 Store：`PlaylistStore.playlists` 与
+     * `SongAttitudeRepository.dislikedKeys` 都是 `StateFlow`，在 Composable 里读 `.value`
+     * 不会建立快照依赖，界面不会重组。这里在动作前后显式算好再发布。
+     */
+    var pendingSongsAreFavorite by mutableStateOf(false)
+        private set
+
+    var pendingSongsAreDisliked by mutableStateOf(false)
+        private set
+
     var onEditMetadata: (() -> Unit)? = null
     var onOpenMetadataDetail: (() -> Unit)? = null
     var onDeleteCurrentSong: (() -> Unit)? = null
@@ -167,6 +184,7 @@ class SongActionSheetHelper(
         setGestureInterceptDisabled(true)
         onVisibilityChanged(true)
         observePlaylistChoicesWhilePickerVisible(playlistStore)
+        refreshAttitudeStateAndLoad()
     }
 
     fun showPlaylistPickerForSongs(songs: List<AudioFile>) {
@@ -182,6 +200,7 @@ class SongActionSheetHelper(
         setGestureInterceptDisabled(true)
         onVisibilityChanged(true)
         observePlaylistChoicesWhilePickerVisible(playlistStore)
+        refreshAttitudeStateAndLoad()
     }
 
     fun showPlayerPlaylistPicker(song: AudioFile) {
@@ -206,6 +225,143 @@ class SongActionSheetHelper(
                 } else playlists
                 val liveIds = playlistChoices.asSequence().map { it.id }.toSet()
                 selectedPlaylistIds = selectedPlaylistIds.intersect(liveIds)
+                // 心形状态跟着歌单变化走（例如另一个入口改了喜欢）。
+                refreshAttitudeState()
+            }
+        }
+    }
+
+    /** pending 歌曲（单曲或多选）去重后的态度目标。 */
+    private fun attitudeTargets(): List<AudioFile> {
+        val songs = pendingPlaylistSongs.ifEmpty {
+            listOfNotNull(pendingPlaylistSong ?: getPlayerController()?.currentSong?.value)
+        }
+        return songs.distinctBy { it.playlistIdentityKey() }
+    }
+
+    /**
+     * 当前 pending 歌曲是否支持「喜欢 / 不喜欢」。
+     *
+     * 在线解析后的曲目（`MUSIC_SOURCE_ONLINE_ENCODING_MARKER`）只剩一个可播放 URL：
+     * 平台身份 `online://<platform>/<songId>` 在解析后就没有了（见 `OnlineSourceMediaMapper`），
+     * 此时写 `song_attitude` 只会落一条永远匹配不上、还会随 URL 变化而失效的脏数据，
+     * 所以这类曲目不显示、也不执行这两个动作。
+     */
+    val pendingSongsSupportAttitude: Boolean
+        get() {
+            val songs = attitudeTargets()
+            return songs.isNotEmpty() && songs.none {
+                it.encodingFormat == MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+            }
+        }
+
+    /** 依据单例 Store / Repository 的当前值刷新两个开关状态。 */
+    private fun refreshAttitudeState() {
+        val songs = attitudeTargets()
+        val store = PlaylistStore.getInstance(context)
+        pendingSongsAreFavorite = songs.isNotEmpty() && songs.all { store.isFavorite(it) }
+        pendingSongsAreDisliked = songs.isNotEmpty() &&
+            songs.all { SongAttitudeRepository.isDisliked(it.playlistIdentityKey()) }
+    }
+
+    /** 进菜单时先加载一次「不喜欢」集合（Repository 的 StateFlow 需要显式 refresh）。 */
+    private fun refreshAttitudeStateAndLoad() {
+        getCoroutineScope().launch {
+            try {
+                SongAttitudeRepository.refresh(context)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                AppLogger.e(TAG, "refresh song attitude failed", error)
+            }
+            refreshAttitudeState()
+        }
+    }
+
+    /**
+     * 喜欢 / 取消喜欢。
+     *
+     * ⚠️ 本地曲必须走 `PlaylistStore.toggleFavorite`（既有系统歌单，决策见 AGENTS.MD §9 D14），
+     * 不能写进 `song_attitude`，否则播放器与歌单页会看到两个事实来源。
+     */
+    fun toggleFavoriteForSongs() {
+        val songs = attitudeTargets()
+        if (songs.isEmpty() || !pendingSongsSupportAttitude) return
+        val removing = pendingSongsAreFavorite
+        val store = PlaylistStore.getInstance(context)
+        getCoroutineScope().launch {
+            var changed = 0
+            var failed = false
+            songs.forEach { song ->
+                try {
+                    // 目标状态与当前一致才动它，避免把「取消喜欢」做成反向加回。
+                    if (store.isFavorite(song) == removing) {
+                        store.toggleFavorite(song)
+                        changed++
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    failed = true
+                    AppLogger.e(TAG, "toggle favorite failed", error)
+                }
+            }
+            withContext(Dispatchers.Main) {
+                refreshAttitudeState()
+                if (changed > 0) {
+                    AppNoticeBus.post(
+                        message = context.getString(
+                            if (removing) R.string.playlist_attitude_notice_unliked
+                            else R.string.playlist_attitude_notice_liked
+                        ),
+                        icon = AppNoticeIcon.PLAYLIST,
+                        animation = AppNoticeAnimation.FAVORITE,
+                    )
+                } else if (failed) {
+                    AppNoticeBus.error(context.getString(R.string.playlist_attitude_notice_failed))
+                }
+            }
+        }
+    }
+
+    /** 不喜欢 / 取消不喜欢。本地曲与在线曲都归 `SongAttitudeRepository`。 */
+    fun toggleDislikeForSongs() {
+        val songs = attitudeTargets()
+        if (songs.isEmpty() || !pendingSongsSupportAttitude) return
+        val removing = pendingSongsAreDisliked
+        getCoroutineScope().launch {
+            var changed = 0
+            var failed = false
+            songs.forEach { song ->
+                val key = song.playlistIdentityKey()
+                try {
+                    if (removing) {
+                        SongAttitudeRepository.removeDislike(context, key)
+                    } else {
+                        SongAttitudeRepository.setDisliked(context, key, true)
+                    }
+                    changed++
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    failed = true
+                    AppLogger.e(TAG, "toggle dislike failed", error)
+                }
+            }
+            withContext(Dispatchers.Main) {
+                refreshAttitudeState()
+                if (changed > 0) {
+                    AppNoticeBus.post(
+                        message = context.getString(
+                            if (removing) R.string.playlist_attitude_notice_undisliked
+                            else R.string.playlist_attitude_notice_disliked
+                        ),
+                        icon = AppNoticeIcon.PLAYLIST,
+                        animation = if (removing) AppNoticeAnimation.DELETE else AppNoticeAnimation.FAVORITE,
+                    )
+                } else if (failed) {
+                    AppNoticeBus.error(context.getString(R.string.playlist_attitude_notice_failed))
+                }
             }
         }
     }
@@ -343,6 +499,10 @@ class SongActionSheetHelper(
             openAlbumDetail(song.album, song.artist, resolveCoverUri(song))
         } catch (_: Exception) {
         }
+    }
+
+    private companion object {
+        const val TAG = "SongActionSheet"
     }
 }
 
@@ -568,6 +728,49 @@ private fun PlaylistPickerOverlay(
                         }
                     } else {
                         if (!helper.isRemovingFromPlaylists) {
+                            // 喜欢 / 不喜欢：本地曲的「喜欢」沿用既有系统歌单（PlaylistStore），
+                            // 「不喜欢」归 SongAttitudeRepository（决策见 AGENTS.MD §9 D14）。
+                            // 三个动作按状态互斥显示，不重复占位。
+                            if (helper.pendingSongsSupportAttitude) {
+                                if (helper.pendingSongsAreFavorite) {
+                                    PlaylistPickerRow(
+                                        title = stringResource(R.string.playlist_attitude_action_unlike),
+                                        subtitle = stringResource(R.string.playlist_attitude_action_unlike_summary),
+                                        iconRes = R.drawable.ic_heart_fill,
+                                        accent = scheme.primary,
+                                        selected = true,
+                                        onClick = { helper.toggleFavoriteForSongs() }
+                                    )
+                                } else {
+                                    PlaylistPickerRow(
+                                        title = stringResource(R.string.playlist_attitude_action_like),
+                                        subtitle = stringResource(R.string.playlist_attitude_action_like_summary),
+                                        iconRes = R.drawable.ic_heart_fill,
+                                        accent = scheme.primary,
+                                        onClick = { helper.toggleFavoriteForSongs() }
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                if (helper.pendingSongsAreDisliked) {
+                                    PlaylistPickerRow(
+                                        title = stringResource(R.string.playlist_attitude_action_undo_dislike),
+                                        subtitle = stringResource(R.string.playlist_attitude_action_undo_dislike_summary),
+                                        iconRes = R.drawable.ic_thumb_down_fill,
+                                        accent = scheme.onSurfaceVariantSummary,
+                                        selected = true,
+                                        onClick = { helper.toggleDislikeForSongs() }
+                                    )
+                                } else {
+                                    PlaylistPickerRow(
+                                        title = stringResource(R.string.playlist_attitude_action_dislike),
+                                        subtitle = stringResource(R.string.playlist_attitude_action_dislike_summary),
+                                        iconRes = R.drawable.ic_thumb_down_fill,
+                                        accent = scheme.onSurfaceVariantSummary,
+                                        onClick = { helper.toggleDislikeForSongs() }
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
                             PlaylistPickerRow(
                                 title = stringResource(R.string.ui_create_playlist_title),
                                 subtitle = stringResource(R.string.ui_playlist_created_summary),
@@ -584,7 +787,15 @@ private fun PlaylistPickerOverlay(
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 336.dp)
+                                // 多出的两组态度行会挤占高度，这里等量让给歌单列表，
+                                // 否则底部的「取消 / 加入」按钮会被挤出屏幕。
+                                .heightIn(
+                                    max = if (helper.isRemovingFromPlaylists || !helper.pendingSongsSupportAttitude) {
+                                        336.dp
+                                    } else {
+                                        216.dp
+                                    }
+                                )
                         ) {
                             items(helper.playlistChoices, key = { it.id }) { playlist ->
                                 PlaylistPickerRow(

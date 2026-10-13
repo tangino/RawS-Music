@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,9 +67,11 @@ import androidx.compose.ui.zIndex
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
+import com.rawsmusic.core.common.ui.AppNoticeAnimation
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
+import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
 import com.rawsmusic.core.ui.widget.bitmaps.ArtworkSurface
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapRequest
@@ -79,9 +82,14 @@ import com.rawsmusic.core.ui.widget.virtuallist.VirtualListCustomProvider
 import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
 import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.repository.MusicRepository
+import com.rawsmusic.module.data.repository.SongAttitudeRepository
 import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Button as MiuixButton
+import top.yukonga.miuix.kmp.basic.ButtonDefaults as MiuixButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
 
 @Composable
 fun PlaylistScreen(
@@ -94,25 +102,50 @@ fun PlaylistScreen(
     val withSystemFileAccess = rememberSystemFileAccessGate()
     val playlists by playlistStore.playlists.collectAsState()
     val librarySongs by MusicRepository.songs.collectAsState()
+    // 「不喜欢」不在任何歌单里，状态只在 song_attitude 表；进入页面刷一次即可，
+    // 之后每次写入由 SongAttitudeRepository 自己 refresh（见其类注释）。
+    val dislikedKeys by SongAttitudeRepository.dislikedKeys.collectAsState()
+    LaunchedEffect(Unit) {
+        SongAttitudeRepository.refresh(context)
+    }
     val scope = rememberCoroutineScope()
     val colors = themeColors()
     var createDialog by remember { mutableStateOf(false) }
     var creatingPlaylist by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<UserPlaylist?>(null) }
     var deleteTarget by remember { mutableStateOf<UserPlaylist?>(null) }
+    var clearDislikesConfirm by remember { mutableStateOf(false) }
     val listState = virtualListState ?: rememberComposeVirtualListState("playlists")
     val windowLayoutProfile = LocalRawWindowLayoutProfile.current
     val playlistColumns = windowLayoutProfile.homeCardColumns
 
-    val resolvedSongsByPlaylistId = remember(playlists, librarySongs) {
-        playlists.associate { playlist ->
+    // 两张伪歌单卡：本地曲的「喜欢」沿用既有系统歌单（PlaylistStore），「不喜欢」走
+    // SongAttitudeRepository（决策见 AGENTS.MD §9 D14）。它们排在真实歌单之前，
+    // 并复用同一套网格 / 行高 / 卡片写法，不另起样式。
+    val favoriteKeyCount = remember(playlists) { playlistStore.favoriteSongKeys().size }
+    val attitudePlaylists = remember(playlists, dislikedKeys, librarySongs) {
+        listOfNotNull(
+            attitudePlaylistView(context, playlistStore, librarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys),
+            attitudePlaylistView(context, playlistStore, librarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys),
+        )
+    }
+    val displayedPlaylists = remember(attitudePlaylists, playlists) { attitudePlaylists + playlists }
+    val attitudeSongCounts = remember(favoriteKeyCount, dislikedKeys) {
+        mapOf(
+            ATTITUDE_FAVORITES_PLAYLIST_ID to favoriteKeyCount,
+            ATTITUDE_DISLIKED_PLAYLIST_ID to dislikedKeys.size,
+        )
+    }
+
+    val resolvedSongsByPlaylistId = remember(displayedPlaylists, librarySongs) {
+        displayedPlaylists.associate { playlist ->
             playlist.id to playlistStore.resolveSongs(playlist, librarySongs)
         }
     }
     val collageSongsByPlaylistId = remember(resolvedSongsByPlaylistId) {
         resolvedSongsByPlaylistId.mapValues { (_, songs) -> buildPlaylistCollageSongs(songs) }
     }
-    val playlistRows = remember(playlists, playlistColumns) { playlists.chunked(playlistColumns) }
+    val playlistRows = remember(displayedPlaylists, playlistColumns) { displayedPlaylists.chunked(playlistColumns) }
     val playlistVirtualItems = remember(playlistRows) {
         playlistRows.mapIndexed { rowIndex, row -> playlistRowVirtualItem(rowIndex, row) }
     }
@@ -127,6 +160,7 @@ fun PlaylistScreen(
         playlistRows,
         collageSongsByPlaylistId,
         playlistRowHeight,
+        attitudeSongCounts,
         onPlaylistClick,
     ) {
         VirtualListCustomProvider(
@@ -146,6 +180,7 @@ fun PlaylistScreen(
                     .toIntOrNull()
                     ?: -1
                 val row = playlistRows.getOrNull(rowIndex).orEmpty()
+                val rowColors = themeColors()
                 Row(
                     modifier = modifier
                         .fillMaxSize()
@@ -153,13 +188,23 @@ fun PlaylistScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     row.forEach { playlist ->
+                        // 伪歌单沿用同一张卡片，只是锁住改名/删除；颜色仍取自主题。
+                        val attitudeCard = isAttitudePlaylistId(playlist.id)
                         PlaylistFrameCard(
                             playlist = playlist,
                             collageSongs = collageSongsByPlaylistId[playlist.id].orEmpty(),
                             modifier = Modifier.weight(1f),
+                            iconRes = playlistCardIconRes(playlist),
+                            accentOverride = when (playlist.id) {
+                                ATTITUDE_FAVORITES_PLAYLIST_ID -> rowColors.primary
+                                ATTITUDE_DISLIKED_PLAYLIST_ID -> rowColors.outline
+                                else -> null
+                            },
+                            songCountOverride = attitudeSongCounts[playlist.id],
+                            actionsEnabled = !attitudeCard && !playlist.isFavorites,
                             onClick = { onPlaylistClick(playlist.id, playlist.name) },
-                            onRename = { if (!playlist.isFavorites) renameTarget = playlist },
-                            onDelete = { if (!playlist.isFavorites) deleteTarget = playlist },
+                            onRename = { if (!attitudeCard && !playlist.isFavorites) renameTarget = playlist },
+                            onDelete = { if (!attitudeCard && !playlist.isFavorites) deleteTarget = playlist },
                         )
                     }
                     repeat((playlistColumns - row.size).coerceAtLeast(0)) {
@@ -192,6 +237,26 @@ fun PlaylistScreen(
         }
     }
 
+    // 「清空所有不喜欢」只在确实有不喜欢时出现，避免常驻一个无意义的入口。
+    // 没有更好的归属：歌单页没有「更多」菜单槽位，只有顶栏尾部这个插槽。
+    val clearDislikesHeaderAction: (@Composable () -> Unit)? = if (dislikedKeys.isEmpty()) {
+        null
+    } else {
+        {
+            IconButton(
+                onClick = { clearDislikesConfirm = true },
+                modifier = Modifier.size(42.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_bin_6_fill),
+                    contentDescription = stringResource(R.string.playlist_attitude_clear_dislikes),
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
+
     LibraryListScaffold(
         title = stringResource(com.rawsmusic.core.ui.R.string.library_title_playlists),
         sceneId = NavScene.PLAYLISTS.name,
@@ -211,6 +276,7 @@ fun PlaylistScreen(
                 )
             }
         },
+        headerTrailingContent = clearDislikesHeaderAction,
         virtualListState = listState,
         contentOverlap = 0.dp
     ) { topPadding, backdropSource ->
@@ -300,6 +366,58 @@ fun PlaylistScreen(
             }
         )
     }
+
+    // 危险操作：清空所有「不喜欢」。按规范用 RawMiuixOverlayDialog 做二次确认。
+    if (clearDislikesConfirm) {
+        RawMiuixOverlayDialog(
+            show = true,
+            title = stringResource(R.string.playlist_attitude_clear_dislikes_title),
+            summary = stringResource(R.string.playlist_attitude_clear_dislikes_summary),
+            backgroundColor = colors.surface,
+            onDismissRequest = { clearDislikesConfirm = false },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                MiuixTextButton(
+                    text = stringResource(R.string.playlist_cancel_action),
+                    onClick = { clearDislikesConfirm = false },
+                    modifier = Modifier.weight(1f),
+                )
+                MiuixButton(
+                    onClick = {
+                        clearDislikesConfirm = false
+                        scope.launch {
+                            try {
+                                SongAttitudeRepository.clearAllDislikes(context)
+                                AppNoticeBus.post(
+                                    message = context.getString(R.string.playlist_attitude_cleared),
+                                    icon = AppNoticeIcon.PLAYLIST,
+                                    animation = AppNoticeAnimation.DELETE,
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                AppNoticeBus.error(context.getString(R.string.playlist_attitude_clear_failed))
+                            }
+                        }
+                    },
+                    colors = MiuixButtonDefaults.buttonColorsPrimary(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.playlist_attitude_clear_dislikes_confirm))
+                }
+            }
+        }
+    }
+}
+
+/** 伪歌单卡的图标：喜欢沿用既有心形，「不喜欢」用新加的拇指向下图形。 */
+private fun playlistCardIconRes(playlist: UserPlaylist): Int = when {
+    playlist.id == ATTITUDE_DISLIKED_PLAYLIST_ID -> R.drawable.ic_thumb_down_fill
+    playlist.isFavorites || playlist.id == ATTITUDE_FAVORITES_PLAYLIST_ID -> R.drawable.ic_heart_fill
+    else -> R.drawable.ic_music_note
 }
 
 private const val PLAYLIST_ROW_ENCODING_PREFIX = "raws_playlist_row:"
@@ -380,13 +498,17 @@ private fun PlaylistFrameCard(
     playlist: UserPlaylist,
     collageSongs: List<AudioFile>,
     modifier: Modifier = Modifier,
+    iconRes: Int,
+    accentOverride: Color? = null,
+    songCountOverride: Int? = null,
+    actionsEnabled: Boolean = !playlist.isFavorites,
     onClick: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val colors = themeColors()
-    val accent = remember(playlist.id, playlist.isFavorites) {
-        playlistFrameAccent(playlist)
+    val accent = remember(playlist.id, playlist.isFavorites, accentOverride) {
+        accentOverride ?: playlistFrameAccent(playlist)
     }
     val frameShape = PlaylistOrganicFrameShape
 
@@ -411,7 +533,10 @@ private fun PlaylistFrameCard(
                 )
             )
             .border(1.dp, accent.copy(alpha = 0.42f), frameShape)
-            .combinedClickable(onClick = onClick, onLongClick = onRename)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = if (actionsEnabled) onRename else null,
+            )
     ) {
         val collageHeight = maxHeight - 64.dp
 
@@ -436,9 +561,7 @@ private fun PlaylistFrameCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            painter = painterResource(
-                                if (playlist.isFavorites) R.drawable.ic_heart_fill else R.drawable.ic_music_note
-                            ),
+                            painter = painterResource(iconRes),
                             contentDescription = null,
                             tint = accent.copy(alpha = 0.92f),
                             modifier = Modifier.size(32.dp)
@@ -508,9 +631,7 @@ private fun PlaylistFrameCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    painter = painterResource(
-                        if (playlist.isFavorites) R.drawable.ic_heart_fill else R.drawable.ic_music_note
-                    ),
+                    painter = painterResource(iconRes),
                     contentDescription = null,
                     tint = accent,
                     modifier = Modifier.size(17.dp)
@@ -533,7 +654,7 @@ private fun PlaylistFrameCard(
                     fontFamily = appFontFamily(),
                 )
                 Text(
-                    text = stringResource(R.string.playlist_song_count, playlist.songs.size),
+                    text = stringResource(R.string.playlist_song_count, songCountOverride ?: playlist.songs.size),
                     color = colors.onSurface.copy(alpha = 0.50f),
                     fontSize = 11.sp,
                     maxLines = 1,
@@ -541,9 +662,7 @@ private fun PlaylistFrameCard(
                 )
             }
 
-            if (playlist.isFavorites) {
-                Spacer(Modifier.width(32.dp))
-            } else {
+            if (actionsEnabled) {
                 IconButton(
                     onClick = onDelete,
                     modifier = Modifier.size(32.dp)
@@ -555,6 +674,8 @@ private fun PlaylistFrameCard(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+            } else {
+                Spacer(Modifier.width(32.dp))
             }
         }
     }

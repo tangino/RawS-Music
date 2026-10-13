@@ -32,9 +32,15 @@ import com.rawsmusic.module.player.dsp.MonoBassController
 import com.rawsmusic.module.player.dsp.NativeDSPEngine
 import com.rawsmusic.module.player.dsp.MoogLadderController
 import com.rawsmusic.ui.analytics.AnalyticsScreen
+import com.rawsmusic.ui.playlist.ATTITUDE_DISLIKED_PLAYLIST_ID
+import com.rawsmusic.ui.playlist.ATTITUDE_FAVORITES_PLAYLIST_ID
 import com.rawsmusic.ui.playlist.PlaylistDetailScreen
+import com.rawsmusic.ui.playlist.attitudePlaylistView
+import com.rawsmusic.ui.playlist.isAttitudePlaylistId
+import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
 import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.model.playlistIdentityKey
+import com.rawsmusic.module.data.repository.SongAttitudeRepository
 import com.rawsmusic.ui.playlist.PlaylistScreen
 import com.rawsmusic.ui.search.GlobalSearchScreen
 import com.rawsmusic.ui.settings.LiquidGlassAudioSettingsScreen
@@ -138,8 +144,15 @@ class AppPageRendererImpl(
                 val playlistStore = PlaylistStore.getInstance(context)
                 val playlists by playlistStore.playlists.collectAsState()
                 val librarySongs by com.rawsmusic.module.data.repository.MusicRepository.songs.collectAsState()
+                // 读一次「不喜欢」集合，伪歌单详情的曲目才会随态度变化重组。
+                val dislikedKeys by com.rawsmusic.module.data.repository.SongAttitudeRepository.dislikedKeys.collectAsState()
                 val scope = rememberCoroutineScope()
-                val playlist = playlists.find { it.id == argument }
+                // 伪歌单（喜欢 / 不喜欢）不落盘，按需即时构造；真实歌单照旧按 id 查。
+                val playlist = if (isAttitudePlaylistId(argument)) {
+                    attitudePlaylistView(context, playlistStore, librarySongs, argument, dislikedKeys)
+                } else {
+                    playlists.find { it.id == argument }
+                }
                 PlaylistDetailScreen(
                     playlistStore = playlistStore,
                     playlist = playlist,
@@ -150,20 +163,33 @@ class AppPageRendererImpl(
                         pc?.playQueue(songs, index)
                     },
                     onRemoveSong = { song ->
-                        val playlistId = playlist?.id ?: return@PlaylistDetailScreen
-                        val playlistName = playlist?.name ?: return@PlaylistDetailScreen
+                        val targetId = argument
+                        val targetName = playlist?.name ?: return@PlaylistDetailScreen
                         scope.launch {
-                            runCatching { playlistStore.removeSongFromPlaylist(playlistId, song.playlistIdentityKey()) }
-                                .onSuccess { changed ->
-                                    if (changed) com.rawsmusic.helper.playlistSongChangeMessage(context, listOf(song.title), playlistName, true)
-                                        ?.let { com.rawsmusic.core.common.ui.AppNoticeBus.post(it,
-                                            com.rawsmusic.core.common.ui.AppNoticeIcon.PLAYLIST,
+                            try {
+                                val changed = when (targetId) {
+                                    // 「喜欢」是既有系统歌单，直接按 song_key 移除，避免 toggle 反向加回来。
+                                    ATTITUDE_FAVORITES_PLAYLIST_ID -> playlistStore.removeSongFromPlaylist(
+                                        FAVORITES_PLAYLIST_ID,
+                                        song.playlistIdentityKey(),
+                                    )
+                                    ATTITUDE_DISLIKED_PLAYLIST_ID -> {
+                                        SongAttitudeRepository.removeDislike(context, song.playlistIdentityKey())
+                                        true
+                                    }
+                                    else -> playlistStore.removeSongFromPlaylist(targetId, song.playlistIdentityKey())
+                                }
+                                if (changed) {
+                                    com.rawsmusic.helper.playlistSongChangeMessage(context, listOf(song.title), targetName, true)
+                                        ?.let { AppNoticeBus.post(it,
+                                            AppNoticeIcon.PLAYLIST,
                                             com.rawsmusic.core.common.ui.AppNoticeAnimation.DELETE) }
                                 }
-                                .onFailure { failure ->
-                                    if (failure is kotlinx.coroutines.CancellationException) throw failure
-                                    com.rawsmusic.core.common.ui.AppNoticeBus.error(context.getString(com.rawsmusic.R.string.ui_playlist_remove_failed))
-                                }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                AppNoticeBus.error(context.getString(com.rawsmusic.R.string.ui_playlist_remove_failed))
+                            }
                         }
                     }
                 )
