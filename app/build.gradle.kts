@@ -127,6 +127,7 @@ dependencies {
     implementation(project(":module:player"))
     implementation(project(":module:scanner"))
     implementation(project(":module:data"))
+    implementation(project(":module:online"))
     // Backup coordinates both durable stores in one existing Room transaction.
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

@@ -23,6 +23,14 @@
     <string name="side_rail_lyrics">Lyrics</string>
     <string name="side_rail_ai_models">AI models</string>
     <string name="side_rail_source_import">Source import</string>
+    <string name="side_rail_online_music">Online music</string>
+    <string name="online_tab_plaza">Playlists</string>
+    <string name="online_tab_artists">Artists</string>
+    <string name="online_tab_search">Search</string>
+    <string name="online_tab_favorites">Favorites</string>
+    <string name="online_section_placeholder">Coming soon</string>
+    <string name="nav_scene_online_music">Online music</string>
+    <string name="nav_scene_online_playlist_detail">Online playlist</string>
     <string name="side_rail_log_analysis">Log analysis</string>
     <string name="lyric_more_timing_editor_title">External timing tools</string>
     <string name="lyric_more_timing_editor_summary">Choose an installed lyric timing editor for this song</string>

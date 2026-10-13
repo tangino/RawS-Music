@@ -59,7 +59,9 @@ enum class NavScene(
     LIBRARY_ANALYSIS_DETAIL(50, "library_analysis_detail", "曲库分析详情", "bar_chart"),
     ARTIST_BIOGRAPHY(51, "artist_biography", "艺术家传记", "info"),
     ARTIST_ALL_SONGS(52, "artist_all_songs", "所有艺术家歌曲", "music_note"),
-    HDR_SETTINGS(53, "hdr_settings", "HDR 显示", "display_settings");
+    HDR_SETTINGS(53, "hdr_settings", "HDR 显示", "display_settings"),
+    ONLINE_MUSIC(54, "online_music", "在线音乐", "public"),
+    ONLINE_PLAYLIST_DETAIL(55, "online_playlist_detail", "在线歌单详情", "queue_music");
 
     companion object {
         private val idMap = entries.associateBy { it.id }
@@ -96,6 +98,7 @@ enum class NavScene(
         FOLDER_DETAIL,
         GENRE_DETAIL,
         YEAR_DETAIL,
-        COMPOSER_DETAIL
+        COMPOSER_DETAIL,
+        ONLINE_PLAYLIST_DETAIL
     )
 }

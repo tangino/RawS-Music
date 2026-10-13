@@ -59,4 +59,6 @@ fun NavScene.labelRes(): Int = when (this) {
     NavScene.ARTIST_BIOGRAPHY -> R.string.nav_scene_artist_biography
     NavScene.ARTIST_ALL_SONGS -> R.string.nav_scene_artist_all_songs
     NavScene.HDR_SETTINGS -> R.string.settings_hdr_title
+    NavScene.ONLINE_MUSIC -> R.string.nav_scene_online_music
+    NavScene.ONLINE_PLAYLIST_DETAIL -> R.string.nav_scene_online_playlist_detail
 }

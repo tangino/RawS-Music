@@ -21,6 +21,14 @@
     <string name="side_rail_lyrics">歌词</string>
     <string name="side_rail_ai_models">AI 模型</string>
     <string name="side_rail_source_import">音源导入</string>
+    <string name="side_rail_online_music">在线音乐</string>
+    <string name="online_tab_plaza">歌单广场</string>
+    <string name="online_tab_artists">歌手库</string>
+    <string name="online_tab_search">全网搜歌</string>
+    <string name="online_tab_favorites">我的收藏</string>
+    <string name="online_section_placeholder">功能开发中</string>
+    <string name="nav_scene_online_music">在线音乐</string>
+    <string name="nav_scene_online_playlist_detail">在线歌单详情</string>
     <string name="side_rail_log_analysis">日志分析</string>
     <string name="lyric_more_lyrico_title">使用 Lyrico 编辑</string>
     <string name="lyric_more_lyrico_summary">搜索、补全并写回当前歌曲的歌词与标签</string>

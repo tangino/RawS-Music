@@ -55,6 +55,7 @@ enum class AppSideRailDestination {
     LYRICS,
     AI_MODELS,
     SOURCE_IMPORT,
+    ONLINE_MUSIC,
     LOG_ANALYSIS,
 }
 
@@ -79,6 +80,7 @@ private val sideRailItems = listOf(
     SideRailItem(AppSideRailDestination.LYRICS, R.string.side_rail_lyrics, R.drawable.ic_side_rail_lyrics),
     SideRailItem(AppSideRailDestination.AI_MODELS, R.string.side_rail_ai_models, R.drawable.ic_side_rail_ai),
     SideRailItem(AppSideRailDestination.SOURCE_IMPORT, R.string.side_rail_source_import, R.drawable.ic_source_download),
+    SideRailItem(AppSideRailDestination.ONLINE_MUSIC, R.string.side_rail_online_music, R.drawable.ic_side_rail_online),
     SideRailItem(AppSideRailDestination.LOG_ANALYSIS, R.string.side_rail_log_analysis, R.drawable.ic_side_rail_log),
 )
 

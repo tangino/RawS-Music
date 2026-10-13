@@ -46,6 +46,7 @@ import com.rawsmusic.core.ui.scene.pages.LibraryChromeInfo
 import com.rawsmusic.core.ui.scene.pages.LibrarySceneGroupingWarmup
 import com.rawsmusic.core.ui.scene.pages.LocalLibraryChromeInfo
 import com.rawsmusic.core.ui.scene.pages.MetadataMatchSourceUi
+import com.rawsmusic.core.ui.scene.pages.OnlineMusicPortalPage
 import com.rawsmusic.core.ui.scene.pages.PlaylistsPage
 import com.rawsmusic.core.ui.scene.pages.resolveCollectionHeroWindowGeometry
 import com.rawsmusic.core.ui.scene.pages.LibrarySongSelectionActions
@@ -461,6 +462,11 @@ fun ComposeNavHost(
             )
 
             NavScene.SOURCE_IMPORT -> SourceImportPage(
+                onBack = onBack,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            NavScene.ONLINE_MUSIC -> OnlineMusicPortalPage(
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )
