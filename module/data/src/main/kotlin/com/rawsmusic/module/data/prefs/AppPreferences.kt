@@ -2056,6 +2056,57 @@ object AppPreferences {
      * `:module:online` 的 `PlatformCredentialCipher`（Android Keystore）。这样 `:module:data`
      * 不必依赖 `:module:online`（依赖方向是 online → data，反过来会成环）。
      */
+    /**
+     * 云同步（Cloudflare D1）配置。
+     *
+     * ⚠️ **服务器地址由用户自填，绝不内嵌**（决策 D9）：Worker 仓库里查不到线上地址
+     * （`wrangler.jsonc` 没有 `routes` / `workers_dev`），所以只能用用户自己的
+     * `https://orbit.<subdomain>.workers.dev`。
+     *
+     * 密码与平台账号同样处理：**只存密文**（`PlatformCredentialCipher`，Keystore + AES-GCM），
+     * `:module:data` 不负责加解密 —— 否则要反向依赖 `:module:online` 成环。
+     * 注意本后端的鉴权本身很弱（明文密码随请求传输、无 token/限流），那是服务端现状，
+     * 客户端能做的只有「至少不要明文落盘」。
+     */
+    object CloudSync {
+        var serverUrl: String
+            get() = kv.decodeString("cloud_sync_server_url", "") ?: ""
+            set(value) { kv.encode("cloud_sync_server_url", value.trim()) }
+
+        var username: String
+            get() = kv.decodeString("cloud_sync_username", "") ?: ""
+            set(value) { kv.encode("cloud_sync_username", value.trim()) }
+
+        /** 该账号密码的密文；未设置返回空串。 */
+        fun encryptedPassword(): String =
+            kv.decodeString("cloud_sync_password_encrypted", "") ?: ""
+
+        fun setEncryptedPassword(encrypted: String) {
+            kv.encode("cloud_sync_password_encrypted", encrypted)
+        }
+
+        fun clearPassword() {
+            kv.removeValueForKey("cloud_sync_password_encrypted")
+        }
+
+        /** 最近一次上传 / 下载成功的时间（epoch 毫秒，0 表示从未）。 */
+        var lastBackupAtMs: Long
+            get() = kv.decodeLong("cloud_sync_last_backup_at", 0L)
+            set(value) { kv.encode("cloud_sync_last_backup_at", value) }
+
+        var lastRestoreAtMs: Long
+            get() = kv.decodeLong("cloud_sync_last_restore_at", 0L)
+            set(value) { kv.encode("cloud_sync_last_restore_at", value) }
+
+        /**
+         * 上次使用的上传模式：`"merge"`（增量合并）或 `"overwrite"`（全量覆盖）。
+         * 契约里 `mode` 默认是 `merge`，所以缺省值也用它。
+         */
+        var uploadMode: String
+            get() = kv.decodeString("cloud_sync_upload_mode", "merge") ?: "merge"
+            set(value) { kv.encode("cloud_sync_upload_mode", value) }
+    }
+
     object PlatformAuth {
         private fun accountKey(platformId: String) = "platform_auth_account_$platformId"
 
