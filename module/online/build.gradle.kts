@@ -22,6 +22,10 @@ dependencies {
     implementation(project(":core:common"))
     implementation(project(":module:data"))
 
+    // 本模块要拿 MusicDatabase 取 DAO，而 RoomDatabase 是它的父类型；
+    // :module:data 把 Room 声明成 implementation，不会传递过来，所以这里必须显式声明。
+    implementation(libs.androidx.room.runtime)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
