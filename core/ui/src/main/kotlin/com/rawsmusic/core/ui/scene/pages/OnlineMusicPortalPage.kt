@@ -155,10 +155,21 @@ private fun OnlinePlatformChipRow(
 }
 
 /**
- * 板块内容。P1-14 会用真实数据填进来；当前只占位，保证 tab 切换可见。
+ * 板块内容。
+ *
+ * 已实现：歌单广场（[OnlinePlazaTab]）。其余三个 tab 仍是占位，由 P1-14 后续填充
+ * （各自拆成独立文件，避免多任务改同一文件冲突）。
  */
 @Composable
 private fun OnlinePortalBody(tab: OnlinePortalTab) {
+    when (tab) {
+        OnlinePortalTab.Plaza -> OnlinePlazaTab(modifier = Modifier.fillMaxSize())
+        else -> OnlinePlaceholderBody()
+    }
+}
+
+@Composable
+private fun OnlinePlaceholderBody() {
     val colors = themeColors()
     Box(
         modifier = Modifier.fillMaxSize(),
