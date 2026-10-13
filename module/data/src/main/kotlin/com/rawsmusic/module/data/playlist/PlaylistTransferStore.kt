@@ -4,9 +4,8 @@ import android.content.Context
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
-import com.rawsmusic.core.common.model.generateVirtualSongId
 import com.rawsmusic.core.common.model.isOnlineSongKey
-import com.rawsmusic.core.common.model.onlineSongKey
+import com.rawsmusic.core.common.model.onlineUserPlaylistSong
 import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.PlaylistStore
@@ -47,13 +46,6 @@ object PlaylistTransferStore {
 
     private const val TAG = "PlaylistTransfer"
 
-    /**
-     * 在线条目的 `format` 标记。⚠️ 它**只是给人看的标记**：
-     * `UserPlaylistSong.isOnlineEntry()` 判的是 `key`/`path` 前缀，**不依赖这个字段**，
-     * 所以即使这里留空也不影响识别。
-     */
-    private const val ONLINE_FORMAT_MARKER = "online"
-
     /** 导出歌单为 M3U8 文件（落在 `cacheDir/playlist_exports`），返回文件句柄。 */
     suspend fun exportM3u8(context: Context, playlist: UserPlaylist): File? =
         PlaylistM3u8Codec.writeExportFile(context, playlist)
@@ -83,22 +75,13 @@ object PlaylistTransferStore {
                 // 有明确的在线身份 → 直接构造在线行，不走曲库匹配。
                 onlineParts != null -> {
                     val (platformId, songId) = onlineParts
-                    onlineRows += UserPlaylistSong(
-                        key = onlineSongKey(platformId, songId),
-                        id = generateVirtualSongId(platformId, songId),
+                    // 行的落库形态统一由 core 的 onlineUserPlaylistSong 定义，不要在这里自己拼。
+                    onlineRows += onlineUserPlaylistSong(
+                        platformId = platformId,
+                        songId = songId,
                         title = entry.title,
                         artist = entry.artist,
-                        album = "",
-                        albumId = 0L,
-                        duration = entry.durationMs,
-                        path = onlineSongKey(platformId, songId),
-                        fileSize = 0L,
-                        format = ONLINE_FORMAT_MARKER,
-                        sampleRate = 0,
-                        bitRate = 0,
-                        bitsPerSample = 0,
-                        albumArtPath = "",
-                        addedAt = System.currentTimeMillis(),
+                        durationMs = entry.durationMs,
                     )
                 }
 

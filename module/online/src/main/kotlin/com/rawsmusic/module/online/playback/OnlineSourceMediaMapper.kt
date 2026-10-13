@@ -26,9 +26,6 @@ import com.rawsmusic.module.online.model.OnlineSongItem
  */
 object OnlineSourceMediaMapper {
 
-    /** 在线曲目在 `user_playlist_songs.format` 里的标记；便于排查与导出时一眼认出在线曲。 */
-    const val ONLINE_ENTRY_FORMAT = "online"
-
     /**
      * 在线歌曲的稳定标识，用于 `song_attitude.song_key` 与歌单行，**必须与 OrBit 端逐字一致**才能跨端互认。
      *
@@ -87,30 +84,19 @@ object OnlineSourceMediaMapper {
     /**
      * 在线歌曲 → 本地歌单行（P2-05b 约定的落库形态）。
      *
-     * `key` 与 `path` 用**同一个** `online://` 串：OrBit 的 `isOnlineSong` 就是靠
-     * `path.startsWith("online://")` 判断的，沿用这条约定能让「是否在线曲」跟着行走，
-     * 也让从 OrBit 导出的歌单/备份能被识别。
-     *
-     * `id` 用负数虚拟 id（见 `generateVirtualSongId`），**不可能与本地曲的 MediaStore id 冲突**。
-     * `albumArtPath` 故意留空：在线封面是 http URL，塞进这个字段会被下游当作本地文件路径使用而出错。
+     * 具体约定（`key`/`path` 用同一个 `online://` 串、负数虚拟 id、`albumArtPath` 留空）
+     * **统一由 `core:common` 的 `onlineUserPlaylistSong` 定义** —— 这里只是把
+     * [OnlineSongItem] 的字段喂进去，不要在本文件里重新拼一份。
      */
-    fun toUserPlaylistSong(item: OnlineSongItem): UserPlaylistSong = UserPlaylistSong(
-        key = onlineSongKey(item),
-        id = com.rawsmusic.core.common.model.generateVirtualSongId(item.platform.id, item.id),
-        title = item.title,
-        artist = item.artist,
-        album = item.album,
-        albumId = 0L,
-        duration = item.durationMs,
-        path = onlineSongKey(item),
-        fileSize = 0L,
-        format = ONLINE_ENTRY_FORMAT,
-        sampleRate = 0,
-        bitRate = 0,
-        bitsPerSample = 0,
-        albumArtPath = "",
-        addedAt = System.currentTimeMillis(),
-    )
+    fun toUserPlaylistSong(item: OnlineSongItem): UserPlaylistSong =
+        com.rawsmusic.core.common.model.onlineUserPlaylistSong(
+            platformId = item.platform.id,
+            songId = item.id,
+            title = item.title,
+            artist = item.artist,
+            album = item.album,
+            durationMs = item.durationMs,
+        )
 
     /** 在线歌单的稳定标识，取值约定 `<platformId>_<remoteId>`（与 `online_playlist_favorites.playlist_key` 一致）。 */
     fun onlinePlaylistKey(platform: OnlinePlatform, playlistId: String): String = "${platform.id}_$playlistId"

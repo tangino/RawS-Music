@@ -78,6 +78,51 @@ fun generateVirtualSongId(platformId: String, songId: String): Long {
 fun UserPlaylistSong.isOnlineEntry(): Boolean =
     isOnlineSongKey(key) || isOnlineSongKey(path)
 
+/** 在线行在 `format` 里的标记。**只是给人看的**：`isOnlineEntry()` 判的是 key/path 前缀。 */
+const val ONLINE_ENTRY_FORMAT = "online"
+
+/**
+ * 用在线身份构造一条歌单行（`P2-05b` 约定的落库形态）。
+ *
+ * **这是在线行构造的唯一入口** —— 之前 M3U8 导入与云同步还原各拼了一份，
+ * 两处一旦漂移（比如一处忘了把 `path` 设成同一个 `online://` 串）就会出现
+ * 「歌单里看得到、但喜欢状态对不上」这类隐蔽错位。
+ *
+ * 约定（不要改动其中任何一条，跨端同步与既有数据都依赖它们）：
+ * - `key` 与 `path` 是**同一个** `online://<platformId>/<songId>` 串
+ *   （OrBit 的 `isOnlineSong` 就是判 `path` 前缀，沿用这条让「是否在线曲」跟着行走）
+ * - `id` 用 [generateVirtualSongId] 生成的**负数**虚拟 id（不与 MediaStore id 冲突）
+ * - `albumArtPath` 留空：在线封面是 http URL，塞进这个「本地路径」字段会被下游当文件路径用而出错
+ */
+fun onlineUserPlaylistSong(
+    platformId: String,
+    songId: String,
+    title: String,
+    artist: String,
+    album: String = "",
+    durationMs: Long = 0L,
+    addedAt: Long = System.currentTimeMillis(),
+): UserPlaylistSong {
+    val key = onlineSongKey(platformId, songId)
+    return UserPlaylistSong(
+        key = key,
+        id = generateVirtualSongId(platformId, songId),
+        title = title,
+        artist = artist,
+        album = album,
+        albumId = 0L,
+        duration = durationMs,
+        path = key,
+        fileSize = 0L,
+        format = ONLINE_ENTRY_FORMAT,
+        sampleRate = 0,
+        bitRate = 0,
+        bitsPerSample = 0,
+        albumArtPath = "",
+        addedAt = addedAt,
+    )
+}
+
 fun AudioFile.toUserPlaylistSong(): UserPlaylistSong {
     return UserPlaylistSong(
         key = playlistIdentityKey(),
