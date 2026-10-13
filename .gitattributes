@@ -2,3 +2,11 @@
 # 注意：仅约束 Markdown 与本文件；其他文件仍走 core.autocrlf，不做全仓库重新归一化。
 .gitattributes text eol=lf
 *.md text eol=lf
+
+# 构建/运维脚本必须锁定换行符：
+# - .sh 若是 CRLF，Linux/macOS 下会报 "bash\r: No such file or directory" 或
+#   "$'\r': command not found"，而本机 core.autocrlf=true 恰好会把 .sh 签出成 CRLF。
+# - .bat 用 CRLF 最稳（cmd.exe 对 LF 的批处理容错不完整，尤其是带标签跳转/goto 的脚本）。
+*.sh text eol=lf
+*.bat text eol=crlf
+
