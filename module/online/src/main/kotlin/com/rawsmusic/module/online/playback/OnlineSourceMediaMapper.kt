@@ -1,0 +1,113 @@
+package com.rawsmusic.module.online.playback
+
+import com.rawsmusic.core.common.source.RawSourceMediaItem
+import com.rawsmusic.core.common.source.RawSourceMediaType
+import com.rawsmusic.core.common.source.RawSourceQuality
+import com.rawsmusic.module.online.model.OnlineAlbum
+import com.rawsmusic.module.online.model.OnlineArtist
+import com.rawsmusic.module.online.model.OnlinePlaylist
+import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.model.OnlineSongItem
+
+/**
+ * 在线平台模型 ↔ RawS 音源协议模型的映射。
+ *
+ * 目的：广场歌曲只有平台 catalog 的**元数据**、没有播放地址。要让它进入 RawS 既有的
+ * 播放链路（`MusicSourceAudioResolver` / `MusicSourcePlaybackController`），
+ * 必须先换成 RawS 认识的 [RawSourceMediaItem]。
+ *
+ * ⚠️ **[toRawSourceMediaItem] 产出的是「身份」而不是「可解析的源」**：
+ * 它的 `sourceId` 是平台 id（`netease`/`qq`/…），而 RawS 的解析器是按
+ * 「用户已安装的 LX / MusicFree 音源 id」去查表的，所以这种 item **不能直接丢给解析器**。
+ * 解析要走 [OnlinePlaybackBridge.selectBestCandidate] 先从用户音源里挑出候选，
+ * 再交给既有的 `MusicSourceAudioResolver`。不要绕过这一步。
+ */
+object OnlineSourceMediaMapper {
+
+    /** 在线歌曲的稳定标识，用于 `song_attitude.song_key`，**必须与 OrBit 端逐字一致**才能跨端互认。 */
+    fun onlineSongKey(platform: OnlinePlatform, songId: String): String = "online://${platform.id}/$songId"
+
+    fun onlineSongKey(item: OnlineSongItem): String = onlineSongKey(item.platform, item.id)
+
+    /** 在线歌单的稳定标识，取值约定 `<platformId>_<remoteId>`（与 `online_playlist_favorites.playlist_key` 一致）。 */
+    fun onlinePlaylistKey(platform: OnlinePlatform, playlistId: String): String = "${platform.id}_$playlistId"
+
+    fun onlinePlaylistKey(playlist: OnlinePlaylist): String = onlinePlaylistKey(playlist.platform, playlist.id)
+
+    /**
+     * 在线歌曲 → RawS 媒体项（**身份用途**，见类注释）。
+     *
+     * 歌手串按 OrBit 的习惯是多歌手用 `/` 分隔，这里用同一套拆分逻辑保证两边一致。
+     */
+    fun toRawSourceMediaItem(item: OnlineSongItem): RawSourceMediaItem = RawSourceMediaItem(
+        sourceId = item.platform.id,
+        remoteId = item.id,
+        mediaType = RawSourceMediaType.Music,
+        title = item.title,
+        artists = splitArtistNames(item.artist),
+        album = item.album,
+        durationMs = item.durationMs,
+        artworkUrl = item.coverUrl.orEmpty(),
+        availableQualities = availableQualities(item.platform),
+        // 原样保留平台与专辑 id，解析/详情回查时需要。
+        sourcePayload = buildString {
+            append("{\"platform\":\"").append(item.platform.id).append('"')
+            item.albumId?.takeIf { it.isNotBlank() }?.let { append(",\"albumId\":\"").append(it).append('"') }
+            append('}')
+        },
+    )
+
+    fun toRawSourceMediaItem(playlist: OnlinePlaylist): RawSourceMediaItem = RawSourceMediaItem(
+        sourceId = playlist.platform.id,
+        remoteId = playlist.id,
+        mediaType = RawSourceMediaType.Playlist,
+        title = playlist.title,
+        artworkUrl = playlist.coverUrl,
+    )
+
+    fun toRawSourceMediaItem(artist: OnlineArtist): RawSourceMediaItem = RawSourceMediaItem(
+        sourceId = artist.platform.id,
+        remoteId = artist.id,
+        mediaType = RawSourceMediaType.Artist,
+        title = artist.name,
+        artworkUrl = artist.avatarUrl,
+    )
+
+    fun toRawSourceMediaItem(album: OnlineAlbum): RawSourceMediaItem = RawSourceMediaItem(
+        sourceId = album.platform.id,
+        remoteId = album.id,
+        mediaType = RawSourceMediaType.Album,
+        title = album.title,
+        artists = splitArtistNames(album.artist),
+        artworkUrl = album.coverUrl,
+    )
+
+    /** 多歌手拆分：与 [OnlinePlaybackMatcher.splitArtists] 同源，但保留可读原文（不归一化）。 */
+    fun splitArtistNames(artistStr: String): List<String> {
+        val cleaned = OnlinePlaybackMatcher.cleanText(artistStr)
+            .replace("（", "(")
+            .replace("）", ")")
+        val withoutBracket = cleaned.replace(Regex("\\([^)]*\\)"), "").trim()
+        val base = if (withoutBracket.isNotBlank()) withoutBracket else cleaned
+        return base.split('/', '\\', ',', '，', '、', '&', '|', '+')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+    }
+
+    /**
+     * 平台宣称可用的音质集合。
+     *
+     * ⚠️ 这是**声明**而非保证 —— 平台接口倒推不出稳定的可用音质，所以这里给的是
+     * 「允许尝试的范围」，真正的可用性由解析 + [OnlinePlaybackProbe] 探活决定。
+     * 取值范围与 OrBit 的音质阶梯对齐（`flac24bit` / `flac` / `320k` / `128k`）。
+     */
+    fun availableQualities(@Suppress("UNUSED_PARAMETER") platform: OnlinePlatform): Set<RawSourceQuality> = setOf(
+        RawSourceQuality.Standard,
+        RawSourceQuality.High,
+        RawSourceQuality.Lossless,
+        RawSourceQuality.HiRes,
+    )
+
+    /** OrBit 音质字符串 → RawS 音质枚举。`RawSourceQuality.fromKey` 已覆盖 320k/flac/flac24bit。 */
+    fun qualityFromOrbitKey(key: String?): RawSourceQuality = RawSourceQuality.fromKey(key)
+}
