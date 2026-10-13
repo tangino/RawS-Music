@@ -2045,6 +2045,38 @@ object AppPreferences {
             set(value) { kv.encode("fft_convolver_ir_frames", value.coerceAtLeast(0)) }
     }
 
+    /**
+     * 平台账号（QQ / 酷狗）凭据。
+     *
+     * 为什么存「一整个加密 blob」而不是拆成多个字段：cookie + token 是一整组键值对，
+     * 拆开存会让明文散落在 MMKV 里，也更容易在新增字段时忘记加密。整体 AES-GCM 加密后
+     * 只存一个 base64 串，MMKV 文件里看不到任何明文凭据（决策 D7）。
+     *
+     * ⚠️ **本对象只负责存取密文，不负责加解密**。加解密在
+     * `:module:online` 的 `PlatformCredentialCipher`（Android Keystore）。这样 `:module:data`
+     * 不必依赖 `:module:online`（依赖方向是 online → data，反过来会成环）。
+     */
+    object PlatformAuth {
+        private fun accountKey(platformId: String) = "platform_auth_account_$platformId"
+
+        /** 该平台账号的密文 blob；未登录返回空串。 */
+        fun encryptedAccount(platformId: String): String =
+            kv.decodeString(accountKey(platformId), "") ?: ""
+
+        fun setEncryptedAccount(platformId: String, encrypted: String) {
+            kv.encode(accountKey(platformId), encrypted)
+        }
+
+        fun clearAccount(platformId: String) {
+            kv.removeValueForKey(accountKey(platformId))
+        }
+
+        /** 最近一次扫码登录成功的时间，用于设置页显示「上次登录」。 */
+        var lastQrLoginAtMs: Long
+            get() = kv.decodeLong("platform_auth_last_qr_login_at", 0L)
+            set(value) { kv.encode("platform_auth_last_qr_login_at", value) }
+    }
+
     object WebDav {
         var url: String
             get() = kv.decodeString("webdav_url", "") ?: ""
