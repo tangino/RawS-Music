@@ -15,6 +15,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 
 /**
  * 在线公共歌单数据仓库（单例）
@@ -86,8 +87,8 @@ class OnlineMusicRepository private constructor() {
      * 获取指定平台的分类标签
      */
     suspend fun getTags(platform: OnlinePlatform = _currentPlatform.value): Result<List<OnlinePlaylistTag>> {
-        return runCatching {
-            tagsCache[platform]?.let { return@runCatching it }
+        return resultOf {
+            tagsCache[platform]?.let { return@resultOf it }
             val tags = getSource(platform).getTags()
             tagsCache[platform] = tags
             tags
@@ -103,7 +104,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 30,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<OnlinePlaylist>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getPlaylists(tagId, page, pageSize)
         }
     }
@@ -112,8 +113,8 @@ class OnlineMusicRepository private constructor() {
      * 获取官方排行榜
      */
     suspend fun getLeaderboards(platform: OnlinePlatform = _currentPlatform.value): Result<List<OnlineLeaderboard>> {
-        return runCatching {
-            leaderboardCache[platform]?.let { return@runCatching it }
+        return resultOf {
+            leaderboardCache[platform]?.let { return@resultOf it }
             val list = getSource(platform).getLeaderboards()
             leaderboardCache[platform] = list
             list
@@ -136,7 +137,7 @@ class OnlineMusicRepository private constructor() {
                 }
             }
         }
-        return runCatching {
+        return resultOf {
             val detail = getSource(platform).getPlaylistDetail(playlistId)
             if (detail.second.isNotEmpty()) {
                 detailCache.put(cacheKey, detail)
@@ -154,7 +155,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 20,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<OnlinePlaylist>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).searchPlaylists(keyword, page, pageSize)
         }
     }
@@ -168,7 +169,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 30,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<OnlineSongItem>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).searchSongs(keyword, page, pageSize)
         }
     }
@@ -185,7 +186,7 @@ class OnlineMusicRepository private constructor() {
         val allPlatforms = OnlinePlatform.values()
         val deferredList = allPlatforms.map { plat ->
             plat to async(Dispatchers.IO) {
-                runCatching {
+                resultOf {
                     getSource(plat).searchSongs(keyword, page, pageSize)
                 }
             }
@@ -243,7 +244,7 @@ class OnlineMusicRepository private constructor() {
      * 获取歌手分类标签
      */
     suspend fun getArtistCategories(platform: OnlinePlatform = _currentPlatform.value): Result<List<com.rawsmusic.module.online.model.OnlineArtistCategory>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getArtistCategories()
         }
     }
@@ -257,7 +258,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 30,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<com.rawsmusic.module.online.model.OnlineArtist>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getArtists(category, page, pageSize)
         }
     }
@@ -271,7 +272,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 20,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<com.rawsmusic.module.online.model.OnlineArtist>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).searchArtists(keyword, page, pageSize)
         }
     }
@@ -283,7 +284,7 @@ class OnlineMusicRepository private constructor() {
         artistId: String,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<com.rawsmusic.module.online.model.OnlineArtistDetail> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getArtistDetail(artistId)
         }
     }
@@ -297,7 +298,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 50,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<OnlineSongItem>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getArtistSongs(artistId, page, pageSize)
         }
     }
@@ -311,7 +312,7 @@ class OnlineMusicRepository private constructor() {
         pageSize: Int = 30,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<List<com.rawsmusic.module.online.model.OnlineAlbum>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getArtistAlbums(artistId, page, pageSize)
         }
     }
@@ -323,7 +324,7 @@ class OnlineMusicRepository private constructor() {
         albumId: String,
         platform: OnlinePlatform = _currentPlatform.value
     ): Result<Pair<com.rawsmusic.module.online.model.OnlineAlbum, List<OnlineSongItem>>> {
-        return runCatching {
+        return resultOf {
             getSource(platform).getAlbumDetail(albumId)
         }
     }
@@ -338,13 +339,13 @@ class OnlineMusicRepository private constructor() {
         artist: String,
         defaultCover: String? = null
     ): Result<Pair<com.rawsmusic.module.online.model.OnlineAlbum, List<OnlineSongItem>>> {
-        return runCatching {
+        return resultOf {
             // 1. 若有明确 albumId，优先直接拉取
             if (!albumId.isNullOrBlank() && albumId != "0" && albumId != "00000000000000") {
                 try {
                     val direct = getSource(platform).getAlbumDetail(albumId)
                     if (direct.second.isNotEmpty()) {
-                        return@runCatching direct
+                        return@resultOf direct
                     }
                 } catch (_: Exception) {}
             }
@@ -371,7 +372,7 @@ class OnlineMusicRepository private constructor() {
                         try {
                             val albumRes = getSource(platform).getAlbumDetail(foundAlbumId)
                             if (albumRes.second.isNotEmpty()) {
-                                return@runCatching albumRes
+                                return@resultOf albumRes
                             }
                         } catch (_: Exception) {}
                     }
@@ -387,7 +388,7 @@ class OnlineMusicRepository private constructor() {
                             songCount = targetList.size,
                             description = "收录匹配曲目的专属精选专辑"
                         )
-                        return@runCatching Pair(resolvedAlbum, targetList)
+                        return@resultOf Pair(resolvedAlbum, targetList)
                     }
                 } catch (_: Exception) {}
             }
@@ -452,4 +453,23 @@ class OnlineMusicRepository private constructor() {
         tagsCache.clear()
         leaderboardCache.clear()
     }
+}
+
+
+/**
+ * 与 [runCatching] 相同，但**不吞掉 [CancellationException]**。
+ *
+ * 为什么不能用 `runCatching`：它捕获 `Throwable`，会把「协程被取消」也变成
+ * `Result.failure`。于是在用户切平台、切分类或退出页面时，被取消的旧请求会伪装成
+ * 网络失败，在界面上闪出一个并不存在的错误提示。
+ *
+ * `AGENTS.MD` §5.3 要求 `CancellationException` 必须原样抛出；RawS 既有的
+ * `MusicSourceAudioResolver` 也是显式 rethrow 的写法。这里统一走这个helper。
+ */
+private inline fun <T> resultOf(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (error: Throwable) {
+    Result.failure(error)
 }
