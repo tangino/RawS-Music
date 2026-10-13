@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="online_artist_category_all">All</string>
+    <string name="online_artist_song_count">%1$d songs</string>
+    <string name="online_artist_load_more">Load more</string>
+    <string name="online_artist_no_more">No more</string>
+    <string name="online_artist_loading">Loading…</string>
+    <string name="online_artist_empty">No artists</string>
+    <string name="online_artist_load_failed">Failed to load, tap to retry</string>
+    <string name="online_artist_retry">Retry</string>
+</resources>

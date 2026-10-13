@@ -26,7 +26,6 @@
     <string name="online_tab_artists">歌手库</string>
     <string name="online_tab_search">全网搜歌</string>
     <string name="online_tab_favorites">我的收藏</string>
-    <string name="online_section_placeholder">功能开发中</string>
     <string name="nav_scene_online_music">在线音乐</string>
     <string name="nav_scene_online_playlist_detail">在线歌单详情</string>
     <string name="online_plaza_section_recommend">推荐</string>

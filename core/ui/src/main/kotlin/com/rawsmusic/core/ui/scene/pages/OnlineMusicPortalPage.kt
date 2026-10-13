@@ -155,31 +155,18 @@ private fun OnlinePlatformChipRow(
 }
 
 /**
- * 板块内容。
+ * 板块内容分发。
  *
- * 已实现：歌单广场（[OnlinePlazaTab]）。其余三个 tab 仍是占位，由 P1-14 后续填充
- * （各自拆成独立文件，避免多任务改同一文件冲突）。
+ * 四个 tab 各自独立成文件（`OnlinePlazaTab` / `OnlineArtistTab` / `OnlineSearchTab` /
+ * `OnlineFavoritesTab`），既满足「新代码单文件 ≤800 行」，也让它们可以分别演进。
  */
 @Composable
 private fun OnlinePortalBody(tab: OnlinePortalTab) {
     when (tab) {
         OnlinePortalTab.Plaza -> OnlinePlazaTab(modifier = Modifier.fillMaxSize())
-        else -> OnlinePlaceholderBody()
-    }
-}
-
-@Composable
-private fun OnlinePlaceholderBody() {
-    val colors = themeColors()
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = stringResource(R.string.online_section_placeholder),
-            color = colors.secondaryText,
-            fontSize = 15.sp,
-        )
+        OnlinePortalTab.Artists -> OnlineArtistTab(modifier = Modifier.fillMaxSize())
+        OnlinePortalTab.Search -> OnlineSearchTab(modifier = Modifier.fillMaxSize())
+        OnlinePortalTab.Favorites -> OnlineFavoritesTab(modifier = Modifier.fillMaxSize())
     }
 }
 

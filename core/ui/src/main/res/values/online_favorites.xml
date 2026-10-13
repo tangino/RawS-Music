@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="online_favorites_group_all">全部</string>
+    <string name="online_favorites_empty">还没有收藏的在线歌单</string>
+    <string name="online_favorites_remove">取消收藏</string>
+    <string name="online_favorites_removed">已取消收藏</string>
+    <string name="online_favorites_load_failed">读取收藏失败</string>
+    <string name="online_favorites_track_count">%1$d 首</string>
+    <string name="online_favorites_creator">创建者：%1$s</string>
+</resources>

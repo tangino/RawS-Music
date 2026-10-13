@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全网搜歌 tab（OnlineSearchTab）的全部文案。key 统一以 online_search_ 开头。 -->
+<resources>
+    <string name="online_search_title_hint">歌名</string>
+    <string name="online_search_artist_hint">歌手</string>
+    <string name="online_search_action">搜索</string>
+    <string name="online_search_clear_input">清空</string>
+    <string name="online_search_empty_query">请先输入歌名或歌手</string>
+    <string name="online_search_platform_all">全部</string>
+    <string name="online_search_initial_hint">输入歌名或歌手后点「搜索」；选择「全部」会同时搜索 5 个平台，并按平台分组展示结果</string>
+    <string name="online_search_history_title">最近搜索</string>
+    <string name="online_search_history_clear">清空历史</string>
+    <string name="online_search_history_empty">暂无搜索历史</string>
+    <string name="online_search_loading">正在加载…</string>
+    <string name="online_search_empty">没有搜到相关歌曲</string>
+    <string name="online_search_load_failed">搜索失败，请重试</string>
+    <string name="online_search_retry">重试</string>
+    <string name="online_search_platform_failed">该平台搜索失败</string>
+    <string name="online_search_platform_empty">该平台无结果</string>
+    <string name="online_search_artist_album">%1$s · %2$s</string>
+    <string name="online_search_load_more">加载更多</string>
+    <string name="online_search_loading_more">正在加载</string>
+    <string name="online_search_no_more">没有更多了</string>
+</resources>

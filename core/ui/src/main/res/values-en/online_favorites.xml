@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="online_favorites_group_all">All</string>
+    <string name="online_favorites_empty">No favorite online playlists yet</string>
+    <string name="online_favorites_remove">Remove</string>
+    <string name="online_favorites_removed">Removed</string>
+    <string name="online_favorites_load_failed">Failed to load favorites</string>
+    <string name="online_favorites_track_count">%1$d tracks</string>
+    <string name="online_favorites_creator">By %1$s</string>
+</resources>

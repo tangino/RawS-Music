@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English strings for the all-platform song search tab (OnlineSearchTab). -->
+<resources>
+    <string name="online_search_title_hint">Song title</string>
+    <string name="online_search_artist_hint">Artist</string>
+    <string name="online_search_action">Search</string>
+    <string name="online_search_clear_input">Clear</string>
+    <string name="online_search_empty_query">Enter a song title or an artist first</string>
+    <string name="online_search_platform_all">All</string>
+    <string name="online_search_initial_hint">Enter a song title or an artist, then tap Search. Choosing All searches five platforms at once and groups the results by platform</string>
+    <string name="online_search_history_title">Recent searches</string>
+    <string name="online_search_history_clear">Clear history</string>
+    <string name="online_search_history_empty">No search history yet</string>
+    <string name="online_search_loading">Loading…</string>
+    <string name="online_search_empty">No matching songs</string>
+    <string name="online_search_load_failed">Search failed. Please try again</string>
+    <string name="online_search_retry">Retry</string>
+    <string name="online_search_platform_failed">This platform failed to respond</string>
+    <string name="online_search_platform_empty">No results on this platform</string>
+    <string name="online_search_artist_album">%1$s · %2$s</string>
+    <string name="online_search_load_more">Load more</string>
+    <string name="online_search_loading_more">Loading</string>
+    <string name="online_search_no_more">No more results</string>
+</resources>
