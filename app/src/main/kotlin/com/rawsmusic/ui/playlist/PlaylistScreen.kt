@@ -78,8 +78,8 @@ import com.rawsmusic.core.ui.widget.bitmaps.BitmapRequest
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualList
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListState
 import com.rawsmusic.core.ui.widget.virtuallist.LocalVirtualListCustomProvider
-import com.rawsmusic.core.ui.widget.virtuallist.VirtualListCustomProvider
 import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
+import com.rawsmusic.module.data.prefs.PlaylistGroupStore
 import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.repository.MusicRepository
 import com.rawsmusic.module.data.repository.SongAttitudeRepository
@@ -105,8 +105,15 @@ fun PlaylistScreen(
     // 「不喜欢」不在任何歌单里，状态只在 song_attitude 表；进入页面刷一次即可，
     // 之后每次写入由 SongAttitudeRepository 自己 refresh（见其类注释）。
     val dislikedKeys by SongAttitudeRepository.dislikedKeys.collectAsState()
+    // 分组与「歌单 → 分组」归属都在单例 Store 的 StateFlow 里（UserPlaylist 模型没有 groupName
+    // 字段，见 AGENTS.MD 任务说明），页面进入时刷一次，之后每次分组写入由 Store 自己 refresh。
+    val playlistGroups by PlaylistGroupStore.groups.collectAsState()
+    val playlistGroupMap by PlaylistGroupStore.playlistGroups.collectAsState()
     LaunchedEffect(Unit) {
         SongAttitudeRepository.refresh(context)
+    }
+    LaunchedEffect(Unit) {
+        PlaylistGroupStore.refresh(context)
     }
     val scope = rememberCoroutineScope()
     val colors = themeColors()
@@ -115,6 +122,8 @@ fun PlaylistScreen(
     var renameTarget by remember { mutableStateOf<UserPlaylist?>(null) }
     var deleteTarget by remember { mutableStateOf<UserPlaylist?>(null) }
     var clearDislikesConfirm by remember { mutableStateOf(false) }
+    // 分组管理 + 歌单卡动作菜单的弹窗状态；弹窗装配在 PlaylistGroupDialogHost 里。
+    val groupChrome = rememberPlaylistGroupChromeState()
     val listState = virtualListState ?: rememberComposeVirtualListState("playlists")
     val windowLayoutProfile = LocalRawWindowLayoutProfile.current
     val playlistColumns = windowLayoutProfile.homeCardColumns
@@ -145,75 +154,40 @@ fun PlaylistScreen(
     val collageSongsByPlaylistId = remember(resolvedSongsByPlaylistId) {
         resolvedSongsByPlaylistId.mapValues { (_, songs) -> buildPlaylistCollageSongs(songs) }
     }
-    val playlistRows = remember(displayedPlaylists, playlistColumns) { displayedPlaylists.chunked(playlistColumns) }
-    val playlistVirtualItems = remember(playlistRows) {
-        playlistRows.mapIndexed { rowIndex, row -> playlistRowVirtualItem(rowIndex, row) }
+    // 分组只影响真实歌单：伪卡是系统入口，不属于任何分组，固定排在所有分区之上（默认选择，
+    // 理由见汇报）；同一分组内保持既有「先 chunked、再交给虚拟列表」的网格排布。
+    // Store 首帧还没刷回来时按「只有默认」处理，否则真实歌单会整个消失一帧。
+    val orderedGroupNames = remember(playlistGroups) {
+        playlistGroups.map { it.name }.ifEmpty { listOf(DEFAULT_PLAYLIST_GROUP) }
     }
-    val playlistRowHeight = remember(windowLayoutProfile.contentMaxWidth, playlistColumns) {
-        val horizontalPadding = 24.dp
-        val totalGap = 10.dp * (playlistColumns - 1).coerceAtLeast(0)
-        val cardWidth = ((windowLayoutProfile.contentMaxWidth - horizontalPadding - totalGap) /
-            playlistColumns.toFloat()).coerceAtLeast(120.dp)
-        cardWidth / 0.86f + 14.dp
-    }
-    val playlistCustomProvider = remember(
-        playlistRows,
-        collageSongsByPlaylistId,
-        playlistRowHeight,
-        attitudeSongCounts,
-        onPlaylistClick,
+    val playlistGridPlan = remember(
+        attitudePlaylists,
+        playlists,
+        orderedGroupNames,
+        playlistGroupMap,
+        playlistColumns,
     ) {
-        VirtualListCustomProvider(
-            itemHeight = { song, _ ->
-                if (song.encodingFormat.startsWith(PLAYLIST_ROW_ENCODING_PREFIX)) {
-                    playlistRowHeight
-                } else {
-                    null
-                }
-            },
-            handles = { song, _ ->
-                song.encodingFormat.startsWith(PLAYLIST_ROW_ENCODING_PREFIX)
-            },
-            content = { song, _, modifier ->
-                val rowIndex = song.encodingFormat
-                    .removePrefix(PLAYLIST_ROW_ENCODING_PREFIX)
-                    .toIntOrNull()
-                    ?: -1
-                val row = playlistRows.getOrNull(rowIndex).orEmpty()
-                val rowColors = themeColors()
-                Row(
-                    modifier = modifier
-                        .fillMaxSize()
-                        .padding(start = 12.dp, end = 12.dp, bottom = 14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    row.forEach { playlist ->
-                        // 伪歌单沿用同一张卡片，只是锁住改名/删除；颜色仍取自主题。
-                        val attitudeCard = isAttitudePlaylistId(playlist.id)
-                        PlaylistFrameCard(
-                            playlist = playlist,
-                            collageSongs = collageSongsByPlaylistId[playlist.id].orEmpty(),
-                            modifier = Modifier.weight(1f),
-                            iconRes = playlistCardIconRes(playlist),
-                            accentOverride = when (playlist.id) {
-                                ATTITUDE_FAVORITES_PLAYLIST_ID -> rowColors.primary
-                                ATTITUDE_DISLIKED_PLAYLIST_ID -> rowColors.outline
-                                else -> null
-                            },
-                            songCountOverride = attitudeSongCounts[playlist.id],
-                            actionsEnabled = !attitudeCard && !playlist.isFavorites,
-                            onClick = { onPlaylistClick(playlist.id, playlist.name) },
-                            onRename = { if (!attitudeCard && !playlist.isFavorites) renameTarget = playlist },
-                            onDelete = { if (!attitudeCard && !playlist.isFavorites) deleteTarget = playlist },
-                        )
-                    }
-                    repeat((playlistColumns - row.size).coerceAtLeast(0)) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
-            },
+        buildPlaylistGridPlan(
+            attitudePlaylists = attitudePlaylists,
+            playlists = playlists,
+            groupNames = orderedGroupNames,
+            playlistGroups = playlistGroupMap,
+            columns = playlistColumns,
         )
     }
+    val playlistRowHeight = remember(windowLayoutProfile.contentMaxWidth, playlistColumns) {
+        playlistGridRowHeight(windowLayoutProfile.contentMaxWidth, playlistColumns)
+    }
+    val playlistCustomProvider = rememberPlaylistGridProvider(
+        plan = playlistGridPlan,
+        columns = playlistColumns,
+        rowHeight = playlistRowHeight,
+        collageSongsByPlaylistId = collageSongsByPlaylistId,
+        attitudeSongCounts = attitudeSongCounts,
+        onPlaylistClick = onPlaylistClick,
+        onPlaylistActions = { groupChrome.playlistActionsTarget = it },
+        onGroupLongPress = { groupChrome.groupMenuTarget = it },
+    )
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
@@ -282,7 +256,7 @@ fun PlaylistScreen(
     ) { topPadding, backdropSource ->
         CompositionLocalProvider(LocalVirtualListCustomProvider provides playlistCustomProvider) {
             ComposeVirtualList(
-                songs = playlistVirtualItems,
+                songs = playlistGridPlan.virtualItems,
                 state = listState,
                 pinchEnabled = false,
                 contentTopPadding = topPadding + 12.dp,
@@ -293,6 +267,16 @@ fun PlaylistScreen(
             )
         }
     }
+
+    // 分组长按菜单、新建/改名/删除分组、歌单卡动作菜单的装配都在这里（见 PlaylistGroupDialogs.kt）。
+    PlaylistGroupDialogHost(
+        state = groupChrome,
+        groupNames = orderedGroupNames,
+        playlistGroupMap = playlistGroupMap,
+        // 改名与删除歌单沿用页面既有的确认弹窗，行为不变。
+        onRenamePlaylist = { renameTarget = it },
+        onDeletePlaylist = { deleteTarget = it },
+    )
 
     if (createDialog) {
         PlaylistNameDialog(
@@ -414,23 +398,10 @@ fun PlaylistScreen(
 }
 
 /** 伪歌单卡的图标：喜欢沿用既有心形，「不喜欢」用新加的拇指向下图形。 */
-private fun playlistCardIconRes(playlist: UserPlaylist): Int = when {
+internal fun playlistCardIconRes(playlist: UserPlaylist): Int = when {
     playlist.id == ATTITUDE_DISLIKED_PLAYLIST_ID -> R.drawable.ic_thumb_down_fill
     playlist.isFavorites || playlist.id == ATTITUDE_FAVORITES_PLAYLIST_ID -> R.drawable.ic_heart_fill
     else -> R.drawable.ic_music_note
-}
-
-private const val PLAYLIST_ROW_ENCODING_PREFIX = "raws_playlist_row:"
-
-private fun playlistRowVirtualItem(rowIndex: Int, row: List<UserPlaylist>): AudioFile {
-    // The physical holder identity belongs to the visual two-card row, not to a fake playable
-    // track. Keep it in a private encoding namespace so VirtualListCustomProvider owns every draw.
-    val identity = row.fold(17L) { acc, playlist -> acc * 31L + playlist.id.hashCode().toLong() }
-    return AudioFile(
-        id = Long.MIN_VALUE / 4L + identity,
-        title = "Playlist row $rowIndex",
-        encodingFormat = "$PLAYLIST_ROW_ENCODING_PREFIX$rowIndex",
-    )
 }
 
 private data class PlaylistArtworkSlot(
@@ -494,7 +465,7 @@ private fun buildPlaylistCollageSongs(songs: List<AudioFile>): List<AudioFile> {
 }
 
 @Composable
-private fun PlaylistFrameCard(
+internal fun PlaylistFrameCard(
     playlist: UserPlaylist,
     collageSongs: List<AudioFile>,
     modifier: Modifier = Modifier,
@@ -503,8 +474,7 @@ private fun PlaylistFrameCard(
     songCountOverride: Int? = null,
     actionsEnabled: Boolean = !playlist.isFavorites,
     onClick: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onActions: () -> Unit,
 ) {
     val colors = themeColors()
     val accent = remember(playlist.id, playlist.isFavorites, accentOverride) {
@@ -535,7 +505,7 @@ private fun PlaylistFrameCard(
             .border(1.dp, accent.copy(alpha = 0.42f), frameShape)
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = if (actionsEnabled) onRename else null,
+                onLongClick = if (actionsEnabled) onActions else null,
             )
     ) {
         val collageHeight = maxHeight - 64.dp
@@ -664,12 +634,12 @@ private fun PlaylistFrameCard(
 
             if (actionsEnabled) {
                 IconButton(
-                    onClick = onDelete,
+                    onClick = onActions,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
-                        contentDescription = stringResource(R.string.playlist_delete_action),
+                        contentDescription = stringResource(R.string.playlist_group_playlist_actions),
                         tint = colors.onSurface.copy(alpha = 0.44f),
                         modifier = Modifier.size(18.dp)
                     )
