@@ -19,8 +19,24 @@ data class UserPlaylistEntity(
     @ColumnInfo(name = "updated_at")
     val updatedAt: Long,
     @ColumnInfo(name = "sort_order")
-    val sortOrder: Int
-)
+    val sortOrder: Int,
+
+    /**
+     * 歌单所属分组名。
+     *
+     * defaultValue 必须写成 "'默认'" —— @ColumnInfo 的 defaultValue 是**原样拼进 DDL**
+     * 的 SQL 片段，字符串字面量要求自带单引号；而 Room 会把它与 sqlite_master 里存下的
+     * 默认值逐字符比对，所以这里的写法必须与 MIGRATION_6_7 的
+     * `ADD COLUMN ... DEFAULT '默认'` 完全一致，否则打开库时 schema 校验直接抛异常。
+     */
+    @ColumnInfo(name = "group_name", defaultValue = "'默认'")
+    val groupName: String = DEFAULT_GROUP_NAME
+) {
+    companion object {
+        /** 与 PlaylistGroupEntity.DEFAULT_GROUP_NAME、迁移 SQL 三者保持一致。 */
+        const val DEFAULT_GROUP_NAME = "默认"
+    }
+}
 
 @Entity(
     tableName = "user_playlist_songs",

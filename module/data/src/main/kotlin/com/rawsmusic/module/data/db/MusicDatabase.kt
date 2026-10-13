@@ -25,6 +25,12 @@ import com.rawsmusic.module.data.db.entity.PlaybackStatEntity
 import com.rawsmusic.module.data.db.entity.SearchHistoryEntity
 import com.rawsmusic.module.data.db.entity.UserPlaylistEntity
 import com.rawsmusic.module.data.db.entity.UserPlaylistSongEntity
+import com.rawsmusic.module.data.db.dao.OnlinePlaylistFavoriteDao
+import com.rawsmusic.module.data.db.dao.SongAttitudeDao
+import com.rawsmusic.module.data.db.dao.PlaylistGroupDao
+import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
+import com.rawsmusic.module.data.db.entity.SongAttitudeEntity
+import com.rawsmusic.module.data.db.entity.PlaylistGroupEntity
 
 @Database(
     entities = [
@@ -38,9 +44,12 @@ import com.rawsmusic.module.data.db.entity.UserPlaylistSongEntity
         DailyListenEntity::class,
         UserPlaylistEntity::class,
         UserPlaylistSongEntity::class,
-        ScanDirectoryEntity::class
+        ScanDirectoryEntity::class,
+        OnlinePlaylistFavoriteEntity::class,
+        SongAttitudeEntity::class,
+        PlaylistGroupEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class MusicDatabase : RoomDatabase() {
@@ -53,12 +62,48 @@ abstract class MusicDatabase : RoomDatabase() {
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun playbackStatsDao(): PlaybackStatsDao
     abstract fun userPlaylistDao(): UserPlaylistDao
+    abstract fun onlinePlaylistFavoriteDao(): OnlinePlaylistFavoriteDao
+    abstract fun songAttitudeDao(): SongAttitudeDao
+    abstract fun playlistGroupDao(): PlaylistGroupDao
 
     companion object {
         private const val DB_NAME = "rawsmusic.db"
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(ScanDirectorySchema.CREATE_TABLE)
+            }
+        }
+
+        /**
+         * v6 -> v7：新增在线歌单收藏 / 歌曲态度 / 歌单分组三张表，
+         * 并给 user_playlists 加 group_name 列。
+         *
+         * 执行顺序刻意固定为「先建表、再建索引、最后 ALTER」：索引依赖表存在，
+         * 而 ALTER 加列是唯一一处会改写既有表结构的操作，放最后便于一旦失败时
+         * 前面已建的新表仍可被后续重试覆盖（全部用 IF NOT EXISTS）。
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. 在线歌单收藏
+                db.execSQL(OnlinePlaylistFavoriteSchema.CREATE_TABLE)
+                db.execSQL(OnlinePlaylistFavoriteSchema.CREATE_INDEX_PLATFORM)
+
+                // 2. 喜欢 / 不喜欢
+                db.execSQL(SongAttitudeSchema.CREATE_TABLE)
+                db.execSQL(SongAttitudeSchema.CREATE_INDEX_IS_FAVORITE)
+                db.execSQL(SongAttitudeSchema.CREATE_INDEX_IS_DISLIKED)
+
+                // 3. 歌单分组
+                db.execSQL(PlaylistGroupSchema.CREATE_TABLE)
+
+                // 4. user_playlists 加分组列。
+                //    默认值字面量必须与 UserPlaylistEntity.groupName 的
+                //    @ColumnInfo(defaultValue = "'默认'") 逐字符一致，否则 Room 的
+                //    schema 校验会失败。NOT NULL 列在 SQLite 里必须有默认值才能加，
+                //    这里给 '默认' 也让老用户的历史歌单自动落到默认分组，无需数据回填。
+                db.execSQL(
+                    "ALTER TABLE user_playlists ADD COLUMN group_name TEXT NOT NULL DEFAULT '默认'"
+                )
             }
         }
 
@@ -167,7 +212,14 @@ abstract class MusicDatabase : RoomDatabase() {
                     MusicDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
+                    )
                     .build()
                     .also { instance = it }
             }
