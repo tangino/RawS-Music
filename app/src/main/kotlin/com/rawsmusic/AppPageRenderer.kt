@@ -15,6 +15,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.model.isOnlineSongKey
+import com.rawsmusic.module.online.playback.OnlinePlayResult
+import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
+import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.scene.ExternalPageRenderer
 import com.rawsmusic.core.ui.scene.GlobalSearchScope
@@ -160,24 +164,57 @@ class AppPageRendererImpl(
                     playingSongId = pc?.currentSong?.collectAsState()?.value?.id ?: -1L,
                     onBack = onBack,
                     onPlaySong = { songs, index ->
-                        pc?.playQueue(songs, index)
+                        val clicked = songs.getOrNull(index)
+                        val onlineItem = clicked?.let(OnlineSourceMediaMapper::toOnlineSongItem)
+                        if (onlineItem != null) {
+                            // 在线曲在歌单里只有元数据快照、没有播放地址，必须回落在线解析层**单曲**起播。
+                            // 整单队列要为每首预解析候选（N 次音源检索），见 P2-05b，本轮不做。
+                            scope.launch {
+                                when (val result = OnlinePlaybackLauncher.play(context, onlineItem)) {
+                                    OnlinePlayResult.Started -> Unit
+                                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
+                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_no_source),
+                                    )
+                                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
+                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_no_match),
+                                    )
+                                    is OnlinePlayResult.Failed -> AppNoticeBus.error(
+                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_play_failed),
+                                    )
+                                }
+                            }
+                        } else {
+                            // 本地曲：队列里必须剔除在线项，否则播放器会拿到 online:// 这种假路径。
+                            val localOnly = songs.filterNot { isOnlineSongKey(it.path) }
+                            if (localOnly.isNotEmpty()) {
+                                val localIndex = clicked
+                                    ?.let { target -> localOnly.indexOfFirst { it.path == target.path } }
+                                    ?.takeIf { it >= 0 }
+                                    ?: index.coerceIn(0, localOnly.lastIndex)
+                                pc?.playQueue(localOnly, localIndex)
+                            }
+                        }
                     },
                     onRemoveSong = { song ->
                         val targetId = argument
                         val targetName = playlist?.name ?: return@PlaylistDetailScreen
+                        // ⚠️ 在线条目的 song_key 就是那个 `online://` 串**本身**；而 playlistIdentityKey()
+                        // 会给它加上 `path|` 前缀（见 core 的 UserPlaylist.kt）→ 直接拿来删会匹配不上、
+                        // 静默什么都不做。所以这里先判在线。
+                        val songKey = if (isOnlineSongKey(song.path)) song.path else song.playlistIdentityKey()
                         scope.launch {
                             try {
                                 val changed = when (targetId) {
                                     // 「喜欢」是既有系统歌单，直接按 song_key 移除，避免 toggle 反向加回来。
                                     ATTITUDE_FAVORITES_PLAYLIST_ID -> playlistStore.removeSongFromPlaylist(
                                         FAVORITES_PLAYLIST_ID,
-                                        song.playlistIdentityKey(),
+                                        songKey,
                                     )
                                     ATTITUDE_DISLIKED_PLAYLIST_ID -> {
-                                        SongAttitudeRepository.removeDislike(context, song.playlistIdentityKey())
+                                        SongAttitudeRepository.removeDislike(context, songKey)
                                         true
                                     }
-                                    else -> playlistStore.removeSongFromPlaylist(targetId, song.playlistIdentityKey())
+                                    else -> playlistStore.removeSongFromPlaylist(targetId, songKey)
                                 }
                                 if (changed) {
                                     com.rawsmusic.helper.playlistSongChangeMessage(context, listOf(song.title), targetName, true)

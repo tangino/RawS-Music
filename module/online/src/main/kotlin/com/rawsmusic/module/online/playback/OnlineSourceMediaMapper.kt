@@ -1,5 +1,6 @@
 package com.rawsmusic.module.online.playback
 
+import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceMediaType
@@ -40,6 +41,48 @@ object OnlineSourceMediaMapper {
         com.rawsmusic.core.common.model.onlineSongKey(platform.id, songId)
 
     fun onlineSongKey(item: OnlineSongItem): String = onlineSongKey(item.platform, item.id)
+
+    /**
+     * 从 `online://<platformId>/<songId>` 串里解出平台与远端 id。
+     *
+     * 用 `substringAfter` 而不是 `split`：songId 本身可能含 `/`（少数平台的 id 带路径段），
+     * 只按**第一个**斜杠切分才不会把它截断。
+     *
+     * @return 解析失败（前缀不对 / 平台不认识 / songId 为空）返回 null。
+     */
+    fun parseOnlineSongKey(key: String): Pair<OnlinePlatform, String>? {
+        if (!com.rawsmusic.core.common.model.isOnlineSongKey(key)) return null
+        val rest = key.removePrefix(com.rawsmusic.core.common.model.ONLINE_SONG_KEY_PREFIX)
+        val platformId = rest.substringBefore('/', "")
+        val songId = rest.substringAfter('/', "")
+        if (songId.isBlank()) return null
+        val platform = OnlinePlatform.fromId(platformId) ?: return null
+        return platform to songId
+    }
+
+    /**
+     * 反解：把本地歌单里存下的在线条目（或播放器手里的 `AudioFile`）还原成 [OnlineSongItem]，用于起播。
+     *
+     * 为什么需要它：在线曲目在歌单里只存了元数据快照 + `online://` 标识，**没有可播放地址**；
+     * 真要播的时候必须回到 `OnlineSongItem` 形态，交给 `OnlinePlaybackLauncher` 去音源里解析。
+     *
+     * 注意：`AudioFile.path` 对在线条目就是那个 `online://` 串（见 [toUserPlaylistSong]），
+     * 所以这里用 `path` 反解；`coverUrl` 无处可存（`albumArtPath` 是本地路径字段，不能塞 http URL），
+     * 因此还原出来的 `coverUrl` 为 null —— 播放不依赖它。
+     */
+    fun toOnlineSongItem(song: AudioFile): OnlineSongItem? {
+        val (platform, songId) = parseOnlineSongKey(song.path) ?: return null
+        return OnlineSongItem(
+            id = songId,
+            platform = platform,
+            title = song.title,
+            artist = song.artist,
+            album = song.album,
+            albumId = null,
+            durationMs = song.duration,
+            coverUrl = null,
+        )
+    }
 
     /**
      * 在线歌曲 → 本地歌单行（P2-05b 约定的落库形态）。

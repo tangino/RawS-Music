@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
+import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListFull
@@ -29,7 +30,12 @@ fun PlaylistDetailScreen(
     onPlaySong: (List<AudioFile>, Int) -> Unit,
     onRemoveSong: (AudioFile) -> Unit
 ) {
-    val songs = playlistStore.resolveSongs(playlist, librarySongs)
+    // 本地曲与在线曲**并列**取（见 PlaylistStore.playlistEntries / P2-05b）：
+    // 只用 resolveSongs 的话，在线曲目会被静默丢掉 —— 导入的 QQ/酷狗歌单会"看起来成功但列表是空的"。
+    val entries = playlistStore.playlistEntries(playlist, librarySongs)
+    // 在线条目用 toAudioFile() 就能进同一个虚拟列表：它的 id 是负数虚拟 id、path 就是 online:// 串，
+    // 都不会与本地曲冲突；播放时由调用方按 path 前缀分流（见 AppPageRenderer）。
+    val songs = entries.local + entries.online.map { it.toAudioFile() }
     val state = rememberComposeVirtualListState("playlist-${playlist?.id.orEmpty()}")
     LibraryListScaffold(
         title = playlist?.name ?: stringResource(R.string.playlist_fallback_name),
@@ -37,7 +43,9 @@ fun PlaylistDetailScreen(
         statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size),
         onBack = onBack,
         virtualListState = state,
-        onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
+        // 随机播放只取本地曲：在线曲需要逐首解析候选（见 P2-05b），把它混进队列会让播放器
+        // 拿到 online:// 这样的假路径。
+        onShuffle = { if (entries.local.isNotEmpty()) onPlaySong(entries.local.shuffled(), 0) },
         contentOverlap = 0.dp,
         modifier = Modifier.fillMaxSize()
     ) { topPadding, backdropSource ->
