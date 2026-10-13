@@ -28,11 +28,16 @@ android {
             abiFilters += listOf("arm64-v8a")
         }
 
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-            }
-        }
+        // ⚠️ 本项目不从源码编译原生库，改用 src/main/jniLibs/ 下的预编译 .so。
+        // 原因：公开仓库缺少 70 个 USB 独占原生源文件（usb_audio_engine.cpp、raw_usb_*.cpp 等），
+        // CMake configure 阶段必然失败（CMakeLists.txt:149 找不到源文件）。
+        // jniLibs 中的 .so 取自官方 1.0.13 release，JNI 与本源码同版本，
+        // 且**已包含 USB 独占实现**（比从源码编译时砍掉 USB 更完整）。
+        // externalNativeBuild {
+        //     cmake {
+        //         cppFlags += "-std=c++17"
+        //     }
+        // }
     }
 
     signingConfigs {
@@ -94,12 +99,14 @@ android {
         abortOnError = false
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // 同上：不编译原生源码。若要恢复原生构建，必须先补齐缺失的 USB 源文件，
+    // 再取消这里与 defaultConfig 中的注释。
+    // externalNativeBuild {
+    //     cmake {
+    //         path = file("src/main/cpp/CMakeLists.txt")
+    //         version = "3.22.1"
+    //     }
+    // }
 }
 
 tasks.whenTaskAdded {
