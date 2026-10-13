@@ -1,0 +1,4 @@
+# 统一换行符策略，避免 Windows 上 core.autocrlf 造成的整文件 diff 噪音。
+# 注意：仅约束 Markdown 与本文件；其他文件仍走 core.autocrlf，不做全仓库重新归一化。
+.gitattributes text eol=lf
+*.md text eol=lf
