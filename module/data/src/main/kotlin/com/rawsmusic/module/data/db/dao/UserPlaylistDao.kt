@@ -52,6 +52,25 @@ interface UserPlaylistDao {
     @Query("UPDATE user_playlists SET updated_at = :updatedAt WHERE playlist_id = :playlistId")
     suspend fun touchPlaylist(playlistId: String, updatedAt: Long)
 
+    /** 把单个歌单移到指定分组（P2-03 分组功能用）。 */
+    @Query(
+        "UPDATE user_playlists SET group_name = :groupName, updated_at = :updatedAt " +
+            "WHERE playlist_id = :playlistId"
+    )
+    suspend fun updatePlaylistGroup(playlistId: String, groupName: String, updatedAt: Long)
+
+    /**
+     * 把某个分组下的**全部**歌单改挂到另一个分组。分组改名（old→new）与删除分组（old→默认）共用它。
+     *
+     * ⚠️ 必须与 `playlist_groups` 的相应改动放在**同一个事务**里执行，否则中途失败会让歌单
+     * 指向一个不存在的分组（悬空）。事务由 `PlaylistGroupStore` 用 `withTransaction` 保证。
+     */
+    @Query(
+        "UPDATE user_playlists SET group_name = :newGroupName, updated_at = :updatedAt " +
+            "WHERE group_name = :oldGroupName"
+    )
+    suspend fun reassignGroup(oldGroupName: String, newGroupName: String, updatedAt: Long)
+
     @Query("DELETE FROM user_playlist_songs")
     suspend fun clearSongs()
 
