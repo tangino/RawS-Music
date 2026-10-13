@@ -1,5 +1,6 @@
 package com.rawsmusic.module.online.playback
 
+import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceMediaType
 import com.rawsmusic.core.common.source.RawSourceQuality
@@ -24,10 +25,49 @@ import com.rawsmusic.module.online.model.OnlineSongItem
  */
 object OnlineSourceMediaMapper {
 
-    /** 在线歌曲的稳定标识，用于 `song_attitude.song_key`，**必须与 OrBit 端逐字一致**才能跨端互认。 */
-    fun onlineSongKey(platform: OnlinePlatform, songId: String): String = "online://${platform.id}/$songId"
+    /** 在线曲目在 `user_playlist_songs.format` 里的标记；便于排查与导出时一眼认出在线曲。 */
+    const val ONLINE_ENTRY_FORMAT = "online"
+
+    /**
+     * 在线歌曲的稳定标识，用于 `song_attitude.song_key` 与歌单行，**必须与 OrBit 端逐字一致**才能跨端互认。
+     *
+     * 格式的**唯一定义**在 `core:common` 的 `onlineSongKey`（`UserPlaylist.kt`）。这里委托过去而不是
+     * 自己拼字符串 —— `:module:data` 的 `PlaylistStore` / `SongAttitudeRepository` 不能依赖本模块
+     * （依赖方向是 online → data），两边各拼一份迟早会漂移，导致同一首在线曲在歌单表与态度表里
+     * 算出两个 key。**不要**把这里改回字面量。
+     */
+    fun onlineSongKey(platform: OnlinePlatform, songId: String): String =
+        com.rawsmusic.core.common.model.onlineSongKey(platform.id, songId)
 
     fun onlineSongKey(item: OnlineSongItem): String = onlineSongKey(item.platform, item.id)
+
+    /**
+     * 在线歌曲 → 本地歌单行（P2-05b 约定的落库形态）。
+     *
+     * `key` 与 `path` 用**同一个** `online://` 串：OrBit 的 `isOnlineSong` 就是靠
+     * `path.startsWith("online://")` 判断的，沿用这条约定能让「是否在线曲」跟着行走，
+     * 也让从 OrBit 导出的歌单/备份能被识别。
+     *
+     * `id` 用负数虚拟 id（见 `generateVirtualSongId`），**不可能与本地曲的 MediaStore id 冲突**。
+     * `albumArtPath` 故意留空：在线封面是 http URL，塞进这个字段会被下游当作本地文件路径使用而出错。
+     */
+    fun toUserPlaylistSong(item: OnlineSongItem): UserPlaylistSong = UserPlaylistSong(
+        key = onlineSongKey(item),
+        id = com.rawsmusic.core.common.model.generateVirtualSongId(item.platform.id, item.id),
+        title = item.title,
+        artist = item.artist,
+        album = item.album,
+        albumId = 0L,
+        duration = item.durationMs,
+        path = onlineSongKey(item),
+        fileSize = 0L,
+        format = ONLINE_ENTRY_FORMAT,
+        sampleRate = 0,
+        bitRate = 0,
+        bitsPerSample = 0,
+        albumArtPath = "",
+        addedAt = System.currentTimeMillis(),
+    )
 
     /** 在线歌单的稳定标识，取值约定 `<platformId>_<remoteId>`（与 `online_playlist_favorites.playlist_key` 一致）。 */
     fun onlinePlaylistKey(platform: OnlinePlatform, playlistId: String): String = "${platform.id}_$playlistId"

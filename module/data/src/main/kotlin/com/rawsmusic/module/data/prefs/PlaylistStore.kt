@@ -8,6 +8,7 @@ import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
+import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.model.toUserPlaylistSong
@@ -39,6 +40,21 @@ data class PlaylistImportResult(
     val importedCount: Int,
     val missingCount: Int
 )
+
+/**
+ * 歌单的合并视图（P2-05b）。
+ *
+ * 本地曲与在线曲**播放路径不同**，所以刻意不合并成一个列表：本地曲可以直接进播放队列，
+ * 在线曲必须先经在线解析层（`OnlinePlaybackLauncher`）找出可播放地址。
+ * 混在一起会让调用方以为它们同质，从而把在线曲当成文件路径去用。
+ */
+data class PlaylistEntries(
+    val local: List<AudioFile>,
+    val online: List<UserPlaylistSong>,
+) {
+    val isEmpty: Boolean get() = local.isEmpty() && online.isEmpty()
+    val totalCount: Int get() = local.size + online.size
+}
 
 class PlaylistStore private constructor(private val context: Context) {
 
@@ -225,6 +241,30 @@ class PlaylistStore private constructor(private val context: Context) {
                 ?: stored.toAudioFile().takeIf { File(it.path).exists() }
         }
     }
+
+    /**
+     * 一个歌单里的**在线曲目**（P2-05b）。
+     *
+     * 为什么不把它们塞进 [resolveSongs]：那个函数返回 `List<AudioFile>`，而在线的曲目既不在曲库、
+     * 也没有本地文件，它的第三层回退 `File(it.path).exists()` **必然落空** → 在线曲会被静默丢弃。
+     * 改它的返回类型会波及全仓 16 处调用，回归面太大，所以这里给一个**并列的**访问器，
+     * 由调用方决定怎么合并两条路。
+     */
+    fun onlineSongsOf(playlist: UserPlaylist?): List<UserPlaylistSong> =
+        playlist?.songs?.filter { it.isOnlineEntry() }.orEmpty()
+
+    /**
+     * 歌单的合并视图：本地曲（可直接交给播放器 / 虚拟列表）与在线曲（必须走在线解析层）。
+     *
+     * ⚠️ **歌单详情页应当用这个而不是 [resolveSongs]**，否则在线曲目根本不显示。
+     */
+    fun playlistEntries(
+        playlist: UserPlaylist?,
+        librarySongs: List<AudioFile>,
+    ): PlaylistEntries = PlaylistEntries(
+        local = resolveSongs(playlist, librarySongs),
+        online = onlineSongsOf(playlist),
+    )
 
     suspend fun importTextPlaylist(uri: Uri, librarySongs: List<AudioFile>): PlaylistImportResult =
         withContext(Dispatchers.IO) {
