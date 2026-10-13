@@ -1,8 +1,10 @@
 package com.rawsmusic.module.online.sync
 
 import android.content.Context
+import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.AppPreferences
+import com.rawsmusic.module.data.prefs.PlaylistGroupOpResult
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
 import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.repository.SongAttitudeRepository
@@ -18,6 +20,16 @@ data class CloudPlaylistPayload(
     /** 系统歌单里承载的喜欢 / 不喜欢条目数，便于「上传了多少」的提示。 */
     val favoriteCount: Int,
     val dislikedCount: Int,
+)
+
+/** 还原结果，用于给用户「还原了多少」的明确反馈。 */
+data class CloudRestoreReport(
+    val playlistsWritten: Int,
+    val groupsCreated: Int,
+    val favoritesApplied: Int,
+    val dislikedApplied: Int,
+    val onlineFavoritesApplied: Int,
+    val updatedAt: Long,
 )
 
 /**
@@ -114,6 +126,153 @@ object CloudPlaylistSyncService {
                 "在线收藏 ${payload.onlineFavoriteCount}、JSON ${payload.playlistsJson.length} 字节",
         )
         return payload
+    }
+
+    /**
+     * 从云端下载并**落回本地**。
+     *
+     * ## 合并语义在服务端，客户端只负责「把云端结果落回本地」
+     *
+     * `mode=merge` 的合并是**服务端**做的，restore 拿到的已经是合并后的结果。
+     * 所以客户端这边只需要幂等地写入：普通歌单按**同名**合并（`importResolvedPlaylist` 已保证
+     * 按 key 去重），重复还原不会产生重复行。
+     *
+     * ## 三个必须处理的契约细节
+     *
+     * 1. **「我喜欢的音乐」/「不喜欢的音乐」不能当成普通歌单建** —— 它们是契约用来承载
+     *    like/dislike 的载体（契约里没有独立表或接口）。认名字跳过，改走 `song_attitude`
+     *    与既有 `favorites` 系统歌单。否则会建出两个与伪歌单重名、语义又不同的真歌单。
+     * 2. **态度从「所有歌单里的所有歌」的 `isFavorite`/`isDisliked` 标记读**，而不是只读那两个
+     *    系统歌单 —— 同一首歌可能出现在普通歌单里也带标记，全都认才幂等。
+     * 3. **`groups_json` 里的「系统」不建成分组** —— 它是契约内部标记，RawS 把系统歌单建模成
+     *    伪卡而不是分组行；建出来只会得到一个永远空的分组。
+     *
+     * ⚠️ 本地曲的 `song_key` 必须让 core 去算（`path|…` 前缀），不能拿 `path` 顶替 ——
+     * 见 [CloudPlaylistJson.localSongKeyOf]。
+     */
+    suspend fun restore(context: Context): CloudSyncResult<CloudRestoreReport> = try {
+        when (val downloaded = CloudSyncClient.restorePlaylists(context)) {
+            is CloudSyncResult.Failure -> downloaded
+            is CloudSyncResult.Success -> CloudSyncResult.Success(
+                applyBackup(context, downloaded.data),
+                downloaded.message,
+            )
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Throwable) {
+        AppLogger.e(TAG, "还原云端歌单失败", error)
+        CloudSyncResult.Failure(error.message.orEmpty().ifBlank { "还原失败" })
+    }
+
+    private suspend fun applyBackup(
+        context: Context,
+        backup: CloudPlaylistBackup,
+    ): CloudRestoreReport {
+        val store = PlaylistStore.getInstance(context)
+        store.awaitBackupReady()
+        PlaylistGroupStore.refresh(context)
+        SongAttitudeRepository.refresh(context)
+        OnlinePlaylistFavoriteStore.refresh(context)
+
+        val downloaded = CloudPlaylistJson.parsePlaylists(backup.playlistsJson)
+
+        // ① 先建分组：后面「把歌单移到分组」才有落点。
+        val wantedGroups = CloudPlaylistJson.parseGroups(backup.groupsJson)
+            .map { it.trim() }
+            .filter {
+                it.isNotEmpty() &&
+                    it != CloudPlaylistJson.SYSTEM_GROUP_NAME &&
+                    it != CloudPlaylistJson.DEFAULT_GROUP_NAME
+            }
+            .distinct()
+        var groupsCreated = 0
+        wantedGroups.forEach { name ->
+            // 已存在会返回 DuplicateName，不是错误，静默跳过。
+            if (PlaylistGroupStore.create(context, name) == PlaylistGroupOpResult.Success) {
+                groupsCreated++
+            }
+        }
+
+        // ② 普通歌单（跳过两个系统歌单）。
+        var playlistsWritten = 0
+        downloaded
+            .filter { CloudPlaylistJson.systemKindOf(it) == null && it.name.isNotBlank() }
+            .forEach { dto ->
+                val onlineRows = dto.songs.mapNotNull(CloudPlaylistJson::toOnlineSongRow)
+                val localSongs = dto.songs
+                    .filterNot(CloudPlaylistJson::isOnlineSong)
+                    .filter { it.path.isNotBlank() }
+                    .map(CloudPlaylistJson::toAudioFile)
+                val imported = store.importResolvedPlaylist(
+                    name = dto.name,
+                    localSongs = localSongs,
+                    onlineSongs = onlineRows,
+                )
+                if (imported != null) {
+                    playlistsWritten++
+                    val group = dto.groupName.trim()
+                    if (group.isNotEmpty() &&
+                        group != CloudPlaylistJson.DEFAULT_GROUP_NAME &&
+                        group != CloudPlaylistJson.SYSTEM_GROUP_NAME
+                    ) {
+                        PlaylistGroupStore.movePlaylist(context, imported.id, group)
+                    }
+                }
+            }
+
+        // ③ 态度：从**所有**歌单里的所有歌读标记，保证幂等。
+        val allSongs = downloaded.flatMap { it.songs }
+            .distinctBy { CloudPlaylistJson.localSongKeyOf(it) }
+
+        val favoriteLocal = allSongs
+            .filter { it.isFavorite && !CloudPlaylistJson.isOnlineSong(it) && it.path.isNotBlank() }
+            .map(CloudPlaylistJson::toAudioFile)
+        if (favoriteLocal.isNotEmpty()) {
+            // 本地曲的「喜欢」走既有 favorites 系统歌单（D14），不加到 song_attitude。
+            store.addSongsToPlaylist(FAVORITES_PLAYLIST_ID, favoriteLocal)
+        }
+        val favoriteOnlineKeys = allSongs
+            .filter { it.isFavorite && CloudPlaylistJson.isOnlineSong(it) }
+            .map(CloudPlaylistJson::localSongKeyOf)
+        if (favoriteOnlineKeys.isNotEmpty()) {
+            SongAttitudeRepository.setOnlineFavorites(context, favoriteOnlineKeys, true)
+        }
+
+        val dislikedKeys = allSongs
+            .filter { it.isDisliked }
+            .map(CloudPlaylistJson::localSongKeyOf)
+            .filter { it.isNotBlank() }
+        // setDisliked 没有批量版，只能逐个；数量级是用户手动点过的量，可接受。
+        dislikedKeys.forEach { key ->
+            SongAttitudeRepository.setDisliked(context, key, true)
+        }
+
+        // ④ 在线歌单收藏。
+        var onlineFavoritesApplied = 0
+        CloudPlaylistJson.parseOnlineFavorites(backup.onlineFavoritesJson).forEach { dto ->
+            val playlist = CloudPlaylistJson.toOnlinePlaylist(dto) ?: return@forEach
+            val group = dto.customGroup.trim()
+                .ifEmpty { CloudPlaylistJson.DEFAULT_GROUP_NAME }
+            OnlinePlaylistFavoriteStore.add(context, playlist, group)
+            onlineFavoritesApplied++
+        }
+
+        val report = CloudRestoreReport(
+            playlistsWritten = playlistsWritten,
+            groupsCreated = groupsCreated,
+            favoritesApplied = favoriteLocal.size + favoriteOnlineKeys.size,
+            dislikedApplied = dislikedKeys.size,
+            onlineFavoritesApplied = onlineFavoritesApplied,
+            updatedAt = backup.updatedAt,
+        )
+        AppLogger.i(
+            TAG,
+            "云端还原完成：歌单 ${report.playlistsWritten}、新建分组 ${report.groupsCreated}、" +
+                "喜欢 ${report.favoritesApplied}、不喜欢 ${report.dislikedApplied}、" +
+                "在线收藏 ${report.onlineFavoritesApplied}",
+        )
+        return report
     }
 
     /**

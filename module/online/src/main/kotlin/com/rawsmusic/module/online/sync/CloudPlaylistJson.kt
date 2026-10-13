@@ -2,11 +2,16 @@ package com.rawsmusic.module.online.sync
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.common.model.ONLINE_SONG_KEY_PREFIX
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.model.isOnlineEntry
+import com.rawsmusic.core.common.model.onlineUserPlaylistSong
+import com.rawsmusic.core.common.model.toUserPlaylistSong
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.model.OnlinePlaylist
 
 // ============================================================================
 // 云端 JSON 契约的 DTO 与序列化
@@ -226,6 +231,120 @@ object CloudPlaylistJson {
             .filter { it.isNotEmpty() && it != DEFAULT_GROUP_NAME && it != SYSTEM_GROUP_NAME }
             .distinct()
         return gson.toJson(normalized + SYSTEM_GROUP_NAME)
+    }
+
+    // ---- 解析（还原方向） ----
+
+    /** 契约里的两个系统歌单。识别靠**名字**（契约没有独立字段区分它们）。 */
+    enum class SystemPlaylistKind { FAVORITE, DISLIKED }
+
+    /**
+     * 判断云端歌单是不是「喜欢 / 不喜欢」这两个系统歌单。
+     *
+     * 契约里它们只是名字特殊的普通歌单，**必须**认出来并改走 `song_attitude` / `favorites`，
+     * 否则会在本地建出两个和伪歌单重名、语义又不同的真实歌单。
+     *
+     * 名字对得上就认，**不看 `groupName`** —— 名字是跨端锚点，而分组名在 `overwrite` 模式下
+     * 可能被用户改成别的。
+     */
+    fun systemKindOf(playlist: CloudPlaylistDto): SystemPlaylistKind? = when (playlist.name) {
+        SYSTEM_PLAYLIST_FAVORITE -> SystemPlaylistKind.FAVORITE
+        SYSTEM_PLAYLIST_DISLIKED -> SystemPlaylistKind.DISLIKED
+        else -> null
+    }
+
+    /** 解析 `playlistsJson`。空串或 `null` 返回空列表（云端可能还没写过这段）。 */
+    fun parsePlaylists(json: String?): List<CloudPlaylistDto> {
+        if (json.isNullOrBlank()) return emptyList()
+        return gson.fromJson(json, Array<CloudPlaylistDto>::class.java)?.toList().orEmpty()
+    }
+
+    /** 解析 `onlineFavoritesJson`。 */
+    fun parseOnlineFavorites(json: String?): List<CloudOnlineFavoriteDto> {
+        if (json.isNullOrBlank()) return emptyList()
+        return gson.fromJson(json, Array<CloudOnlineFavoriteDto>::class.java)?.toList().orEmpty()
+    }
+
+    /** 解析 `groupsJson`（就是一个字符串数组）。 */
+    fun parseGroups(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        return gson.fromJson(json, Array<String>::class.java)?.toList().orEmpty()
+    }
+
+    /**
+     * 云端的一首**本地**歌 → [AudioFile]，交给 `PlaylistStore` 去转行。
+     *
+     * ⚠️ `id` 故意留 0：云端的歌曲 id 是**别的设备**上的 MediaStore id，搬到本机会指错歌。
+     * 歌单行的去重与匹配都走 `key`（由 `path` 经 `playlistIdentityKey()` 算出），不依赖 id。
+     */
+    fun toAudioFile(song: CloudSongDto): AudioFile = AudioFile(
+        id = 0L,
+        path = song.path,
+        title = song.title,
+        artist = song.artist,
+        album = song.album,
+        duration = song.durationMs,
+        albumArtPath = song.albumArtUri,
+    )
+
+    /**
+     * 云端的一首**在线**歌 → 本地在线行；`path` 不是 `online://` 串时返回 null。
+     *
+     * 行的落库形态统一由 core 的 `onlineUserPlaylistSong` 定义（见 `P2-05b`）。
+     */
+    fun toOnlineSongRow(song: CloudSongDto): UserPlaylistSong? {
+        val parts = onlinePartsOf(song.path) ?: return null
+        return onlineUserPlaylistSong(
+            platformId = parts.first,
+            songId = parts.second,
+            title = song.title,
+            artist = song.artist,
+            album = song.album,
+            durationMs = song.durationMs,
+        )
+    }
+
+    /** 该歌曲是否应作为**在线行**落库（`path` 是 `online://` 串）。 */
+    fun isOnlineSong(song: CloudSongDto): Boolean = onlinePartsOf(song.path) != null
+
+    /**
+     * 云端一首歌在**本地**的 `song_key`（用于 `song_attitude`）。
+     *
+     * ⚠️ 两类歌的 key 规则**不同**，很容易写错：
+     * - **在线曲**：key 就是那个 `online://` 串本身
+     * - **本地曲**：key 是 `playlistIdentityKey()`，形如 `path|<归一化路径>`（**带前缀**）
+     *
+     * 所以本地曲必须经过 `toUserPlaylistSong()` 让 core 去算 —— 直接拿 `path` 当 key 的话，
+     * `song_attitude` 里会存一条永远不会被匹配到的记录（而且看不出错）。
+     */
+    fun localSongKeyOf(song: CloudSongDto): String =
+        if (isOnlineSong(song)) song.path else toAudioFile(song).toUserPlaylistSong().key
+
+    /** 云端在线收藏 → [OnlinePlaylist]（供 `OnlinePlaylistFavoriteStore.add` 使用）。 */
+    fun toOnlinePlaylist(dto: CloudOnlineFavoriteDto): OnlinePlaylist? {
+        val platform = platformFromWireName(dto.platform) ?: return null
+        return OnlinePlaylist(
+            id = dto.id,
+            platform = platform,
+            title = dto.title,
+            coverUrl = dto.coverUrl,
+            playCount = 0L,
+            trackCount = dto.trackCount,
+            creatorName = dto.creatorName,
+            creatorAvatarUrl = dto.creatorAvatarUrl,
+            description = dto.description,
+        )
+    }
+
+    /** 从 `online://<platformId>/<songId>` 取两段；不是在线串返回 null。 */
+    fun onlinePartsOf(path: String): Pair<String, String>? {
+        if (!path.startsWith(ONLINE_SONG_KEY_PREFIX)) return null
+        val rest = path.removePrefix(ONLINE_SONG_KEY_PREFIX)
+        // 按第一个斜杠切：songId 本身可能含 `/`。
+        val platformId = rest.substringBefore('/', "")
+        val songId = rest.substringAfter('/', "")
+        if (platformId.isBlank() || songId.isBlank()) return null
+        return platformId to songId
     }
 
     // ---- 私有工具 ----
