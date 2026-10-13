@@ -24,6 +24,7 @@ class SettingsActivity : BaseSettingsActivity() {
                 onNavigateToAlbumArt = { navigateToSettings(AlbumArtActivity::class.java) },
                 onNavigateToHdr = { navigateToSettings(HdrSettingsActivity::class.java) },
                 onWebDavBackup = { navigateToSettings(WebDavBackupActivity::class.java) },
+                onNavigateToPlatformAccount = { navigateToSettings(PlatformAccountActivity::class.java) },
                 onNavigateToLogViewer = { navigateToSettings(LogViewerActivity::class.java) },
                 onNavigateToAbout = { navigateToSettings(AboutActivity::class.java) },
                 onNavigateToScanSettings = { navigateToSettings(ScanSettingsActivity::class.java) }

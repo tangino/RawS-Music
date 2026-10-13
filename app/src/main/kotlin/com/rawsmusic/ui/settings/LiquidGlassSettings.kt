@@ -280,6 +280,7 @@ fun LiquidGlassSettingsScreen(
     onNavigateToGlobalFont: () -> Unit,
     onNavigateToAlbumArt: () -> Unit,
     onWebDavBackup: () -> Unit,
+    onNavigateToPlatformAccount: () -> Unit,
     onNavigateToLogViewer: () -> Unit,
     onNavigateToAbout: () -> Unit = {},
     onNavigateToScanSettings: () -> Unit = {},
@@ -343,6 +344,7 @@ fun LiquidGlassSettingsScreen(
     val interfaceSectionTitle = stringResource(R.string.settings_section_interface_display)
     val lyricsSectionTitle = stringResource(R.string.settings_section_lyrics_extensions)
     val librarySectionTitle = stringResource(R.string.settings_section_library_data)
+    val onlineMusicSectionTitle = stringResource(R.string.platform_account_section_title)
     val diagnosticsSectionTitle = stringResource(R.string.settings_section_help_diagnostics)
 
     val openChildSettings: (Class<*>) -> Unit = { activityClass ->
@@ -512,6 +514,19 @@ fun LiquidGlassSettingsScreen(
                     iconRes = R.drawable.ic_settings_cloud_backup,
                     tone = SettingsRootIconTone.Backup,
                     onClick = onWebDavBackup
+                )
+            )
+        ),
+        SettingsRootSection(
+            title = onlineMusicSectionTitle,
+            items = listOf(
+                SettingsRootItem(
+                    title = stringResource(R.string.platform_account_entry_title),
+                    summary = stringResource(R.string.platform_account_entry_summary),
+                    keywords = stringResource(R.string.platform_account_entry_keywords),
+                    iconRes = com.rawsmusic.core.ui.R.drawable.ic_side_rail_online,
+                    tone = SettingsRootIconTone.PlatformAccount,
+                    onClick = onNavigateToPlatformAccount
                 )
             )
         ),
@@ -2153,6 +2168,7 @@ private enum class SettingsRootIconTone(
     Lyrics(Color(0xFFB4546F), Color(0xFFE29AAF)),
     Scan(Color(0xFF3F8363), Color(0xFF7DC39D)),
     Backup(Color(0xFF3D759F), Color(0xFF7EB4D8)),
+    PlatformAccount(Color(0xFF2F6FA8), Color(0xFF83B4E2)),
     Log(Color(0xFF64758C), Color(0xFFA7B5C7)),
     About(Color(0xFF6E7180), Color(0xFFB3B5C0));
 
@@ -2173,6 +2189,7 @@ private enum class SettingsRootIconTone(
         Lyrics -> LyricSettingsActivity::class.java
         Scan -> ScanSettingsActivity::class.java
         Backup -> WebDavBackupActivity::class.java
+        PlatformAccount -> PlatformAccountActivity::class.java
         Log -> LogViewerActivity::class.java
         About -> AboutActivity::class.java
     }
