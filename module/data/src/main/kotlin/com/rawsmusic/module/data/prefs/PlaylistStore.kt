@@ -56,6 +56,9 @@ data class PlaylistEntries(
     val totalCount: Int get() = local.size + online.size
 }
 
+/** 导入时没有可用名字的兜底歌单名。与 `importTextPlaylist` 里既有的兜底保持一致。 */
+private const val DEFAULT_IMPORT_PLAYLIST_NAME = "Imported playlist"
+
 class PlaylistStore private constructor(private val context: Context) {
 
     companion object {
@@ -266,6 +269,87 @@ class PlaylistStore private constructor(private val context: Context) {
         online = onlineSongsOf(playlist),
     )
 
+    /**
+     * 把一批候选路径匹配到曲库（纯文本 / M3U8 / 链接导入共用）。
+     *
+     * 三层回退：① path 归一化后精确命中 → ② 曲库路径以候选结尾（吸收 Android 的
+     * `primary/` / `storage/emulated/0/` 前缀差异）→ ③ 同文件名且在曲库里唯一。
+     *
+     * 这是从 [importTextPlaylist] 里**原样提取**出来的，逻辑一字未改，只是让其它导入路径
+     * （M3U8 / 链接）也能复用，避免第 N 份抄本各自漂移。
+     */
+    fun matchLibrarySongs(
+        candidates: Collection<String>,
+        librarySongs: List<AudioFile>,
+    ): List<AudioFile> {
+        if (candidates.isEmpty() || librarySongs.isEmpty()) return emptyList()
+        val exact = buildMap<String, AudioFile> {
+            librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
+        }
+        val byFileName = librarySongs.groupBy { it.path.substringAfterLast('/').lowercase() }
+        return candidates.mapNotNull { requested ->
+            requested.pathCandidates().firstNotNullOfOrNull(exact::get)
+                ?: requested.pathCandidates().firstNotNullOfOrNull { candidate ->
+                    librarySongs.firstOrNull { song ->
+                        song.path.normalizedPath().endsWith("/${candidate.trimStart('/')}")
+                    }
+                }
+                ?: byFileName[requested.substringAfterLast('/').lowercase()]?.singleOrNull()
+        }.distinctBy { it.playlistIdentityKey() }
+    }
+
+    /**
+     * 用**调用方已经解析好**的条目导入/合并一个歌单（M3U8 / JSON / 链接导入走它）。
+     *
+     * 与 [importTextPlaylist] 的分工：那个只按**路径**匹配本地曲，且 `#` 开头的行被整个跳过
+     * （`#EXTINF` 里的歌名/歌手白丢）；这个接收调用方自己匹配好的本地曲与**在线行**，
+     * 因此支持元数据匹配与在线曲目。
+     *
+     * 合并语义与既有导入保持一致：按**同名**歌单合并（忽略收藏歌单），按 `key` 去重 ——
+     * 重复导入同一首不会产生重复行。
+     *
+     * @param onlineSongs 用 `UserPlaylistSong` 形态传入的在线条目（构造见 `P2-05b`：
+     *   `key`/`path` = `online://<platformId>/<songId>`、`id` = `generateVirtualSongId(...)`）。
+     * @return 最终写入的歌单；若合并后无任何变化则返回既有歌单。
+     */
+    suspend fun importResolvedPlaylist(
+        name: String,
+        localSongs: List<AudioFile>,
+        onlineSongs: List<UserPlaylistSong> = emptyList(),
+    ): UserPlaylist? = withDatabase {
+        mutationMutex.withLock {
+            val baseName = name.trim().ifBlank { DEFAULT_IMPORT_PLAYLIST_NAME }
+            val now = System.currentTimeMillis()
+            val existing = _playlists.value.firstOrNull {
+                !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
+            }
+            val existingKeys = existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf()
+            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
+                .filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && existing != null) return@withLock existing
+
+            val importedSongs = existing.orEmptySongs() + incoming
+            val imported = UserPlaylist(
+                id = existing?.id ?: "playlist-${UUID.randomUUID()}",
+                name = existing?.name ?: baseName,
+                songs = importedSongs,
+                createdAt = existing?.createdAt ?: now,
+                updatedAt = now,
+            )
+            dao.upsertPlaylist(
+                imported.toEntity(existing?.let(_playlists.value::indexOf) ?: _playlists.value.size),
+            )
+            if (existing != null) dao.deleteSongsForPlaylist(existing.id)
+            dao.insertSongs(imported.songs.mapIndexed { index, song -> song.toEntity(imported.id, index) })
+            _playlists.value = if (existing == null) {
+                _playlists.value + imported
+            } else {
+                _playlists.value.map { if (it.id == existing.id) imported else it }
+            }
+            imported
+        }
+    }
+
     suspend fun importTextPlaylist(uri: Uri, librarySongs: List<AudioFile>): PlaylistImportResult =
         withContext(Dispatchers.IO) {
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -276,19 +360,7 @@ class PlaylistStore private constructor(private val context: Context) {
                 .distinctBy { it.normalizedPath() }
                 .toList()
 
-            val exact = buildMap<String, AudioFile> {
-                librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
-            }
-            val byFileName = librarySongs.groupBy { it.path.substringAfterLast('/').lowercase() }
-            val matched = requestedPaths.mapNotNull { requested ->
-                requested.pathCandidates().firstNotNullOfOrNull(exact::get)
-                    ?: requested.pathCandidates().firstNotNullOfOrNull { candidate ->
-                        librarySongs.firstOrNull { song ->
-                            song.path.normalizedPath().endsWith("/${candidate.trimStart('/')}")
-                        }
-                    }
-                    ?: byFileName[requested.substringAfterLast('/').lowercase()]?.singleOrNull()
-            }.distinctBy { it.playlistIdentityKey() }
+            val matched = matchLibrarySongs(requestedPaths, librarySongs)
 
             withDatabase {
                 mutationMutex.withLock {
