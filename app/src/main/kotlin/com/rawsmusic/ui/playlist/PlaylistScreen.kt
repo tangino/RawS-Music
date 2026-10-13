@@ -138,7 +138,15 @@ fun PlaylistScreen(
             attitudePlaylistView(context, playlistStore, librarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys),
         )
     }
-    val displayedPlaylists = remember(attitudePlaylists, playlists) { attitudePlaylists + playlists }
+    // ⚠️ 必须过滤掉真实的 favorites 系统歌单：`PlaylistStore.playlists` 里**本来就含**它
+    // （id = "favorites"、名「我喜欢的音乐」，由 createFavoritesPlaylist 创建），而上面的伪卡
+    // 指向的是**同一个**底层歌单。不过滤的话用户会看到两张「喜欢」卡（伪卡在顶部 + 真实卡落在
+    // 「默认」分区），点进去内容还一模一样。
+    // 注意伪卡的 id 是 "attitude:favorites"，`isFavorites` 判的是 id == "favorites"，所以
+    // 这个 filterNot 不会误伤伪卡。过滤只影响**界面列表**，存储、WebDAV 备份与云同步都不受影响。
+    val displayedPlaylists = remember(attitudePlaylists, playlists) {
+        attitudePlaylists + playlists.filterNot { it.isFavorites }
+    }
     val attitudeSongCounts = remember(favoriteKeyCount, dislikedKeys) {
         mapOf(
             ATTITUDE_FAVORITES_PLAYLIST_ID to favoriteKeyCount,
