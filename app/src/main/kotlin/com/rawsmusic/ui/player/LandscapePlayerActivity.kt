@@ -124,6 +124,9 @@ import com.rawsmusic.core.ui.widget.player.resolveLandscapeFullCoverTransitionFr
 import com.rawsmusic.core.ui.widget.player.resolveLandscapeLaunchSourceBounds
 import com.rawsmusic.core.ui.widget.player.ReusablePlayerTimelineProgress
 import com.rawsmusic.core.ui.widget.player.LyricMoreSheetContent
+import com.rawsmusic.core.ui.widget.player.LyricMoreArtworkState
+import com.rawsmusic.core.ui.widget.player.LyricMoreDisplayConfig
+import com.rawsmusic.core.ui.widget.player.LyricMoreToolsConfig
 import com.rawsmusic.core.ui.widget.player.LyricTextPosition
 import com.rawsmusic.core.ui.widget.player.LocalAudioVisualizerParticleColorMode
 import com.rawsmusic.core.ui.widget.player.SharedRealtimeVisualizerOverlay
@@ -1257,70 +1260,71 @@ private fun LandscapePlayerScreen(
             },
         ) { artworkAlpha, onArtworkBoundsChanged ->
             LyricMoreSheetContent(
-                currentSong = currentSong,
-                onAddSongToPlaylist = addSongToPlaylist,
-                coverPath = artworkKey,
-                artworkTransitionState = artworkState,
-                displayTranslation = displayTranslation,
-                displayRoma = displayRoma,
-                blurEnabled = blurEnabled,
-                relativeLineProgressEnabled = relativeLineProgressEnabled,
-                highlightAllEnabled = highlightAll,
-                fontSizeSp = lyricFontSizeSp,
-                textPosition = lyricTextPosition,
-                onTranslationToggle = {
-                    LyriconProviderManager.setDisplayTranslation(!displayTranslation)
-                },
-                onRomaToggle = {
-                    LyriconProviderManager.setDisplayRoma(!displayRoma)
-                },
-                onBlurEnabledChange = {
-                    blurEnabled = it
-                    AppPreferences.UI.lyricBlurEnabled = it
-                },
-                onRelativeLineProgressEnabledChange = {
-                    relativeLineProgressEnabled = it
-                    AppPreferences.UI.lyricRelativeLineProgressEnabled = it
-                },
-                onHighlightAllEnabledChange = {
-                    highlightAll = it
-                    AppPreferences.UI.lyricHighlightAllEnabled = it
-                },
-                onFontSizeChange = {
-                    lyricFontSizeSp = it
-                    AppPreferences.UI.lyricFontSizeSp = it
-                },
-                onTextPositionChange = {
-                    lyricTextPosition = it
-                    AppPreferences.UI.lyricTextPosition = it.value
-                },
-                progressStyleValue = progressStyleValue,
-                onProgressStyleValueChange = { value ->
-                    PlayerProgressPreferences.progressStyleValue = value
-                },
-                landscapeLockEnabled = landscapeLocked,
-                onLandscapeLockEnabledChange = { enabled ->
-                    landscapeLocked = enabled
-                    AppPreferences.UI.landscapePlayerLocked = enabled
-                },
-                onModifyAlbumArt = null,
-                onSearchLyrico = null,
-                onOpenInLyrico = null,
-                onAiTimingPreview = null,
-                onOpenExternalTimingEditor = null,
-                audioVisualizerEnabled = audioVisualizerEnabled,
-                onAudioVisualizerEnabledChange = { enabled ->
-                    audioVisualizerEnabled = enabled
-                    AppPreferences.UI.isAudioVisualizerEnabled = enabled
-                },
-                audioVisualizerStyleOverride = audioVisualizerStyle,
-                onAudioVisualizerStyleChangeOverride = { style ->
-                    audioVisualizerStyle = style
-                    AppPreferences.UI.audioVisualizerStyle = style.value
-                },
-                artworkAlpha = artworkAlpha,
-                onArtworkBoundsChanged = onArtworkBoundsChanged,
-                twoColumnAcrylicLayout = true,
+                artwork = LyricMoreArtworkState(
+                    currentSong = currentSong,
+                    onAddSongToPlaylist = addSongToPlaylist,
+                    coverPath = artworkKey,
+                    artworkTransitionState = artworkState,
+                    artworkAlpha = artworkAlpha,
+                    onArtworkBoundsChanged = onArtworkBoundsChanged,
+                ),
+                display = LyricMoreDisplayConfig(
+                    displayTranslation = displayTranslation,
+                    displayRoma = displayRoma,
+                    blurEnabled = blurEnabled,
+                    relativeLineProgressEnabled = relativeLineProgressEnabled,
+                    highlightAllEnabled = highlightAll,
+                    fontSizeSp = lyricFontSizeSp,
+                    textPosition = lyricTextPosition,
+                    onTranslationToggle = {
+                        LyriconProviderManager.setDisplayTranslation(!displayTranslation)
+                    },
+                    onRomaToggle = {
+                        LyriconProviderManager.setDisplayRoma(!displayRoma)
+                    },
+                    onBlurEnabledChange = {
+                        blurEnabled = it
+                        AppPreferences.UI.lyricBlurEnabled = it
+                    },
+                    onRelativeLineProgressEnabledChange = {
+                        relativeLineProgressEnabled = it
+                        AppPreferences.UI.lyricRelativeLineProgressEnabled = it
+                    },
+                    onHighlightAllEnabledChange = {
+                        highlightAll = it
+                        AppPreferences.UI.lyricHighlightAllEnabled = it
+                    },
+                    onFontSizeChange = {
+                        lyricFontSizeSp = it
+                        AppPreferences.UI.lyricFontSizeSp = it
+                    },
+                    onTextPositionChange = {
+                        lyricTextPosition = it
+                        AppPreferences.UI.lyricTextPosition = it.value
+                    },
+                    progressStyleValue = progressStyleValue,
+                    onProgressStyleValueChange = { value ->
+                        PlayerProgressPreferences.progressStyleValue = value
+                    },
+                    landscapeLockEnabled = landscapeLocked,
+                    onLandscapeLockEnabledChange = { enabled ->
+                        landscapeLocked = enabled
+                        AppPreferences.UI.landscapePlayerLocked = enabled
+                    },
+                    twoColumnAcrylicLayout = true,
+                ),
+                tools = LyricMoreToolsConfig(
+                    audioVisualizerEnabled = audioVisualizerEnabled,
+                    onAudioVisualizerEnabledChange = { enabled ->
+                        audioVisualizerEnabled = enabled
+                        AppPreferences.UI.isAudioVisualizerEnabled = enabled
+                    },
+                    audioVisualizerStyleOverride = audioVisualizerStyle,
+                    onAudioVisualizerStyleChangeOverride = { style ->
+                        audioVisualizerStyle = style
+                        AppPreferences.UI.audioVisualizerStyle = style.value
+                    },
+                ),
             )
         }
     }

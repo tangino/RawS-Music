@@ -676,33 +676,6 @@ fun ComposePlayerContainer(
     BackHandler(enabled = inlineQueueVisible) {
         dismissInlineQueue()
     }
-    var isVisualizerMaximized by remember {
-        mutableStateOf(AppPreferences.UI.Visualizer.isMaximized)
-    }
-    val context = LocalContext.current
-    DisposableEffect(context) {
-        val receiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-                if (intent?.action == "com.rawsmusic.action.AUDIO_VISUALIZER_SETTING_CHANGED") {
-                    isVisualizerMaximized = AppPreferences.UI.Visualizer.isMaximized
-                }
-            }
-        }
-        val filter = android.content.IntentFilter("com.rawsmusic.action.AUDIO_VISUALIZER_SETTING_CHANGED")
-        androidx.core.content.ContextCompat.registerReceiver(
-            context,
-            receiver,
-            filter,
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        onDispose {
-            context.unregisterReceiver(receiver)
-        }
-    }
-    BackHandler(enabled = isVisualizerMaximized) {
-        isVisualizerMaximized = false
-        AppPreferences.UI.Visualizer.isMaximized = false
-    }
 
     CompositionLocalProvider(
         LocalPlayerPlaylistAction provides onAddSongToPlaylist,
@@ -929,65 +902,14 @@ fun ComposePlayerContainer(
     }
     }
 
-    AnimatedVisibility(
-        visible = isVisualizerMaximized && audioVisualizerEnabled,
-        enter = fadeIn(tween(300)),
-        exit = fadeOut(tween(250)),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(999f)
-                .background(Color(0xF00A0A0C))
-                .clickable(
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    indication = null,
-                ) {
-                    isVisualizerMaximized = false
-                    AppPreferences.UI.Visualizer.isMaximized = false
-                }
-        ) {
-            SharedRealtimeVisualizerOverlay(
-                style = audioVisualizerStyle,
-                spectrum = audioSpectrum,
-                spectrumState = audioSpectrumState,
-                visible = isVisualizerMaximized && audioVisualizerEnabled,
-                isPlaying = isPlaying,
-                modifier = Modifier.fillMaxSize(),
-            )
-            androidx.compose.foundation.layout.Column(
-                modifier = Modifier
-                    .align(androidx.compose.ui.Alignment.TopCenter)
-                    .padding(top = 54.dp, start = 24.dp, end = 24.dp),
-                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
-            ) {
-                if (currentSong != null) {
-                    top.yukonga.miuix.kmp.basic.Text(
-                        text = currentSong.title,
-                        color = Color.White.copy(alpha = 0.92f),
-                        fontSize = 18.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                        maxLines = 1,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    top.yukonga.miuix.kmp.basic.Text(
-                        text = currentSong.artist,
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                top.yukonga.miuix.kmp.basic.Text(
-                    text = androidx.compose.ui.res.stringResource(
-                        com.rawsmusic.core.ui.R.string.visualizer_maximized_tap_exit_hint
-                    ),
-                    color = Color.White.copy(alpha = 0.38f),
-                    fontSize = 11.sp,
-                )
-            }
-        }
-    }
+    com.rawsmusic.core.ui.widget.player.FullscreenVisualizerOverlay(
+        audioVisualizerEnabled = audioVisualizerEnabled,
+        audioVisualizerStyle = audioVisualizerStyle,
+        audioSpectrum = audioSpectrum,
+        audioSpectrumState = audioSpectrumState,
+        isPlaying = isPlaying,
+        currentSong = currentSong,
+    )
 
     OriginalArtworkViewerDialog(
         show = artworkViewerVisible,
@@ -1448,6 +1370,61 @@ private fun StandardComposePlayerContainer(
             CompositionLocalProvider(
                 LocalUiFrameAnimationActive provides !prewarmMainOnly,
             ) {
+            val standardPlaybackControls = StandardPlayerPlaybackControls(
+                previousIconRes = previousIconRes,
+                playIconRes = playIconRes,
+                pauseIconRes = pauseIconRes,
+                nextIconRes = nextIconRes,
+                playModeIconRes = playModeIconRes,
+                moreIconRes = moreIconRes,
+                audioQualityIconRes = audioQualityIconRes,
+                audioInfoText = audioInfoText,
+                audioInfoPlaybackChainText = audioInfoPlaybackChainText,
+                smartTransitionVisible = smartTransitionVisible,
+                seekGestureActiveState = timelineSeekGestureActive,
+                onSeekStart = playerSeekStart,
+                onSeekStop = playerSeekStop,
+                onPrevious = onPrevious,
+                onPlayPause = onPlayPause,
+                onNext = onNext,
+                onPlayMode = onPlayMode,
+                onPlayModeLongPress = onPlayModeLongPress,
+                onMore = onMore,
+                onOpenMetadata = onOpenMetadata,
+                onOpenAudioEffects = onOpenAudioEffects,
+                onOpenSpectrumAnalysis = onOpenSpectrumAnalysis,
+                onPlaybackSpeedChange = onPlaybackSpeedChange,
+            )
+            val standardAiParams = StandardPlayerAiParams(
+                realtimeSeparationEnabled = realtimeSeparationEnabled,
+                realtimeSeparationPreparing = realtimeSeparationPreparing,
+                realtimeSeparationStem = realtimeSeparationStem,
+                realtimeSeparationStrength = realtimeSeparationStrength,
+                realtimeSeparationStatus = realtimeSeparationStatus,
+                aiPerformanceState = aiPerformanceState,
+                onAiPerformanceModeChange = onAiPerformanceModeChange,
+                onAiPerformanceInstrumentChange = onAiPerformanceInstrumentChange,
+                onAiPerformanceCancel = onAiPerformanceCancel,
+                onAiPerformanceImportMelodyModel = onAiPerformanceImportMelodyModel,
+                onAiPerformanceImportInstrumentPack = onAiPerformanceImportInstrumentPack,
+                onRealtimeSeparationEnabledChange = onRealtimeSeparationEnabledChange,
+                onRealtimeSeparationStemChange = onRealtimeSeparationStemChange,
+                onRealtimeSeparationStrengthChange = onRealtimeSeparationStrengthChange,
+            )
+            val standardLyricControls = StandardPlayerLyricControls(
+                lyricSong = lyricSong,
+                lyricPositionMs = lyricPositionMs,
+                lyricPositionState = lyricPositionState,
+                displayTranslation = displayTranslation,
+                displayRoma = displayRoma,
+                onLyricSeek = onLyricSeek,
+                onLyricTranslationToggle = onLyricTranslationToggle,
+                onLyricRomaToggle = onLyricRomaToggle,
+                onSearchLyrico = onSearchLyrico,
+                onOpenInLyrico = onOpenInLyrico,
+                onAiTimingPreview = onAiTimingPreview,
+                onOpenExternalTimingEditor = onOpenExternalTimingEditor,
+            )
             StandardPlayerLyricStack(
                 currentScene = (controllerScene ?: scene.toControllerScene()).inlineQueueHostScene(),
                 fromScene = from,
@@ -1472,48 +1449,8 @@ private fun StandardComposePlayerContainer(
                 audioVisualizerForeground = audioVisualizerForeground,
                 onAudioVisualizerDismiss = onAudioVisualizerDismiss,
                 onAudioVisualizerEnabledChange = onAudioVisualizerEnabledChange,
-                lyricSong = lyricSong,
-                lyricPositionMs = lyricPositionMs,
-                lyricPositionState = lyricPositionState,
-                displayTranslation = displayTranslation,
-                displayRoma = displayRoma,
-                previousIconRes = previousIconRes,
-                playIconRes = playIconRes,
-                pauseIconRes = pauseIconRes,
-                nextIconRes = nextIconRes,
-                playModeIconRes = playModeIconRes,
-                moreIconRes = moreIconRes,
-                audioQualityIconRes = audioQualityIconRes,
-                audioInfoText = audioInfoText,
-            audioInfoPlaybackChainText = audioInfoPlaybackChainText,
-                smartTransitionVisible = smartTransitionVisible,
-                seekGestureActiveState = timelineSeekGestureActive,
-                onSeekStart = playerSeekStart,
-                onSeekStop = playerSeekStop,
-                onPrevious = onPrevious,
-                onPlayPause = onPlayPause,
-                onNext = onNext,
-                onPlayMode = onPlayMode,
-                onPlayModeLongPress = onPlayModeLongPress,
-                onMore = onMore,
-                onOpenMetadata = onOpenMetadata,
-                onOpenAudioEffects = onOpenAudioEffects,
-                onOpenSpectrumAnalysis = onOpenSpectrumAnalysis,
-                onPlaybackSpeedChange = onPlaybackSpeedChange,
-                realtimeSeparationEnabled = realtimeSeparationEnabled,
-                realtimeSeparationPreparing = realtimeSeparationPreparing,
-                realtimeSeparationStem = realtimeSeparationStem,
-                realtimeSeparationStrength = realtimeSeparationStrength,
-                realtimeSeparationStatus = realtimeSeparationStatus,
-                aiPerformanceState = aiPerformanceState,
-                onAiPerformanceModeChange = onAiPerformanceModeChange,
-                onAiPerformanceInstrumentChange = onAiPerformanceInstrumentChange,
-                onAiPerformanceCancel = onAiPerformanceCancel,
-                onAiPerformanceImportMelodyModel = onAiPerformanceImportMelodyModel,
-                onAiPerformanceImportInstrumentPack = onAiPerformanceImportInstrumentPack,
-                onRealtimeSeparationEnabledChange = onRealtimeSeparationEnabledChange,
-                onRealtimeSeparationStemChange = onRealtimeSeparationStemChange,
-                onRealtimeSeparationStrengthChange = onRealtimeSeparationStrengthChange,
+                playbackControls = standardPlaybackControls,
+                aiParams = standardAiParams,
                 onPlayerStyleChange = onPlayerStyleChange,
                 onOpenLandscapePlayer = onOpenLandscapePlayer,
                 onLyricModifyAlbumArt = onLyricModifyAlbumArt,
@@ -1540,13 +1477,7 @@ private fun StandardComposePlayerContainer(
                 onQueueSongClick = onQueueSongClick,
                 onClearPriorityQueue = onClearPriorityQueue,
                 onToggleQueue = onToggleInlineQueue,
-                onLyricSeek = onLyricSeek,
-                onLyricTranslationToggle = onLyricTranslationToggle,
-                onLyricRomaToggle = onLyricRomaToggle,
-                onSearchLyrico = onSearchLyrico,
-                onOpenInLyrico = onOpenInLyrico,
-                onAiTimingPreview = onAiTimingPreview,
-                onOpenExternalTimingEditor = onOpenExternalTimingEditor,
+                lyricControls = standardLyricControls,
                 onClosePlayer = onClosePlayer,
                 onBackToPlayer = onBackToPlayer,
                 sourceCoverTarget = sourceCoverTarget,
@@ -1755,43 +1686,8 @@ private fun StandardPlayerLyricStack(
     audioVisualizerForeground: Boolean,
     onAudioVisualizerDismiss: () -> Unit,
     onAudioVisualizerEnabledChange: (Boolean) -> Unit,
-    previousIconRes: Int,
-    playIconRes: Int,
-    pauseIconRes: Int,
-    nextIconRes: Int,
-    playModeIconRes: Int,
-    moreIconRes: Int,
-    audioQualityIconRes: Int,
-    audioInfoText: String,
-    audioInfoPlaybackChainText: String,
-    smartTransitionVisible: Boolean,
-    seekGestureActiveState: State<Boolean>,
-    onSeekStart: () -> Unit,
-    onSeekStop: (Float) -> Unit,
-    onPrevious: () -> Unit,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
-    onPlayMode: () -> Unit,
-    onPlayModeLongPress: () -> Unit,
-    onMore: () -> Unit,
-    onOpenMetadata: () -> Unit,
-    onOpenAudioEffects: () -> Unit,
-    onOpenSpectrumAnalysis: () -> Unit,
-    onPlaybackSpeedChange: (Float) -> Unit,
-    realtimeSeparationEnabled: Boolean,
-    realtimeSeparationPreparing: Boolean,
-    realtimeSeparationStem: Int,
-    realtimeSeparationStrength: Float,
-    realtimeSeparationStatus: String,
-    aiPerformanceState: com.rawsmusic.core.ui.widget.player.PlayerAiPerformanceUiState,
-    onAiPerformanceModeChange: (com.rawsmusic.core.ui.widget.player.PlayerAiPerformanceMode) -> Unit,
-    onAiPerformanceInstrumentChange: (String) -> Unit,
-    onAiPerformanceCancel: () -> Unit,
-    onAiPerformanceImportMelodyModel: (String) -> Unit,
-    onAiPerformanceImportInstrumentPack: (String) -> Unit,
-    onRealtimeSeparationEnabledChange: (Boolean) -> Unit,
-    onRealtimeSeparationStemChange: (Int) -> Unit,
-    onRealtimeSeparationStrengthChange: (Float) -> Unit,
+    playbackControls: StandardPlayerPlaybackControls,
+    aiParams: StandardPlayerAiParams,
     onPlayerStyleChange: (Boolean) -> Unit,
     onOpenLandscapePlayer: () -> Unit,
     onLyricModifyAlbumArt: () -> Unit,
@@ -1818,18 +1714,7 @@ private fun StandardPlayerLyricStack(
     onQueueSongClick: (AudioFile, Int) -> Unit,
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
-    lyricSong: Song?,
-    lyricPositionMs: Long,
-    lyricPositionState: State<Long>?,
-    displayTranslation: Boolean,
-    displayRoma: Boolean,
-    onLyricSeek: (Long) -> Unit,
-    onLyricTranslationToggle: () -> Unit,
-    onLyricRomaToggle: () -> Unit,
-    onSearchLyrico: () -> Unit,
-    onOpenInLyrico: () -> Unit,
-    onAiTimingPreview: () -> Unit,
-    onOpenExternalTimingEditor: (LyricTimingEditorTarget) -> Unit,
+    lyricControls: StandardPlayerLyricControls,
     onClosePlayer: () -> Unit,
     onBackToPlayer: () -> Unit,
     sourceCoverTarget: CoverTransitionTarget?,
@@ -2284,7 +2169,7 @@ private fun StandardPlayerLyricStack(
                             // abandon capture before evaluating touchSlop once the child has started
                             // seeking. This prevents small vertical drift while scrubbing from
                             // collapsing the PLAYER sheet.
-                            if (axis == 0 && seekGestureActiveState.value) {
+                            if (axis == 0 && playbackControls.seekGestureActiveState.value) {
                                 axis = 2
                                 continue
                             }
@@ -2425,7 +2310,7 @@ private fun StandardPlayerLyricStack(
                         !latestPlayerLyricUpTransition &&
                         !latestPlayerLyricUpQueueVisible &&
                         !latestPlayerLyricUpSceneGestureSuspended &&
-                        !seekGestureActiveState.value &&
+                        !playbackControls.seekGestureActiveState.value &&
                         (
                             latestPlayerLyricArtworkHitRect?.contains(start.x, start.y) == true ||
                                 latestPlayerLyricTitleHitRect?.contains(start.x, start.y) == true
@@ -2451,7 +2336,7 @@ private fun StandardPlayerLyricStack(
                         val dx = change.position.x - start.x
                         val dy = change.position.y - start.y
                         if (axis == 0 && (
-                                seekGestureActiveState.value ||
+                                playbackControls.seekGestureActiveState.value ||
                                     latestPlayerLyricUpQueueVisible ||
                                     latestPlayerLyricUpSceneGestureSuspended ||
                                     latestPlayerLyricUpTransition ||
@@ -2752,44 +2637,44 @@ private fun StandardPlayerLyricStack(
                 audioVisualizerForeground = audioVisualizerForeground,
                 onAudioVisualizerDismiss = onAudioVisualizerDismiss,
                 onAudioVisualizerEnabledChange = onAudioVisualizerEnabledChange,
-                lyricSong = lyricSong,
-                lyricPositionMs = lyricPositionMs,
-                lyricPositionState = lyricPositionState,
-                displayTranslation = displayTranslation,
-                displayRoma = displayRoma,
-                previousIconRes = previousIconRes,
-                playIconRes = playIconRes,
-                pauseIconRes = pauseIconRes,
-                nextIconRes = nextIconRes,
-                playModeIconRes = playModeIconRes,
-                moreIconRes = moreIconRes,
-                audioQualityIconRes = audioQualityIconRes,
-                onSeekStart = onSeekStart,
-                onSeekStop = onSeekStop,
-                onPrevious = onPrevious,
-                onPlayPause = onPlayPause,
-                onNext = onNext,
-                onPlayMode = onPlayMode,
-                onPlayModeLongPress = onPlayModeLongPress,
-                onMore = onMore,
-                onOpenMetadata = onOpenMetadata,
-                onOpenAudioEffects = onOpenAudioEffects,
-                onOpenSpectrumAnalysis = onOpenSpectrumAnalysis,
-                onPlaybackSpeedChange = onPlaybackSpeedChange,
-                realtimeSeparationEnabled = realtimeSeparationEnabled,
-                realtimeSeparationPreparing = realtimeSeparationPreparing,
-                realtimeSeparationStem = realtimeSeparationStem,
-                realtimeSeparationStrength = realtimeSeparationStrength,
-                realtimeSeparationStatus = realtimeSeparationStatus,
-                aiPerformanceState = aiPerformanceState,
-                onAiPerformanceModeChange = onAiPerformanceModeChange,
-                onAiPerformanceInstrumentChange = onAiPerformanceInstrumentChange,
-                onAiPerformanceCancel = onAiPerformanceCancel,
-                onAiPerformanceImportMelodyModel = onAiPerformanceImportMelodyModel,
-                onAiPerformanceImportInstrumentPack = onAiPerformanceImportInstrumentPack,
-                onRealtimeSeparationEnabledChange = onRealtimeSeparationEnabledChange,
-                onRealtimeSeparationStemChange = onRealtimeSeparationStemChange,
-                onRealtimeSeparationStrengthChange = onRealtimeSeparationStrengthChange,
+                lyricSong = lyricControls.lyricSong,
+                lyricPositionMs = lyricControls.lyricPositionMs,
+                lyricPositionState = lyricControls.lyricPositionState,
+                displayTranslation = lyricControls.displayTranslation,
+                displayRoma = lyricControls.displayRoma,
+                previousIconRes = playbackControls.previousIconRes,
+                playIconRes = playbackControls.playIconRes,
+                pauseIconRes = playbackControls.pauseIconRes,
+                nextIconRes = playbackControls.nextIconRes,
+                playModeIconRes = playbackControls.playModeIconRes,
+                moreIconRes = playbackControls.moreIconRes,
+                audioQualityIconRes = playbackControls.audioQualityIconRes,
+                onSeekStart = playbackControls.onSeekStart,
+                onSeekStop = playbackControls.onSeekStop,
+                onPrevious = playbackControls.onPrevious,
+                onPlayPause = playbackControls.onPlayPause,
+                onNext = playbackControls.onNext,
+                onPlayMode = playbackControls.onPlayMode,
+                onPlayModeLongPress = playbackControls.onPlayModeLongPress,
+                onMore = playbackControls.onMore,
+                onOpenMetadata = playbackControls.onOpenMetadata,
+                onOpenAudioEffects = playbackControls.onOpenAudioEffects,
+                onOpenSpectrumAnalysis = playbackControls.onOpenSpectrumAnalysis,
+                onPlaybackSpeedChange = playbackControls.onPlaybackSpeedChange,
+                realtimeSeparationEnabled = aiParams.realtimeSeparationEnabled,
+                realtimeSeparationPreparing = aiParams.realtimeSeparationPreparing,
+                realtimeSeparationStem = aiParams.realtimeSeparationStem,
+                realtimeSeparationStrength = aiParams.realtimeSeparationStrength,
+                realtimeSeparationStatus = aiParams.realtimeSeparationStatus,
+                aiPerformanceState = aiParams.aiPerformanceState,
+                onAiPerformanceModeChange = aiParams.onAiPerformanceModeChange,
+                onAiPerformanceInstrumentChange = aiParams.onAiPerformanceInstrumentChange,
+                onAiPerformanceCancel = aiParams.onAiPerformanceCancel,
+                onAiPerformanceImportMelodyModel = aiParams.onAiPerformanceImportMelodyModel,
+                onAiPerformanceImportInstrumentPack = aiParams.onAiPerformanceImportInstrumentPack,
+                onRealtimeSeparationEnabledChange = aiParams.onRealtimeSeparationEnabledChange,
+                onRealtimeSeparationStemChange = aiParams.onRealtimeSeparationStemChange,
+                onRealtimeSeparationStrengthChange = aiParams.onRealtimeSeparationStrengthChange,
                 isImmersiveEnabled = false,
                 artworkCornerRadiusDp = standardPlayerArtworkCornerRadiusDp,
                 onPlayerStyleChange = onPlayerStyleChange,
@@ -2801,10 +2686,10 @@ private fun StandardPlayerLyricStack(
                 onInlineLyricSeek = if (usesInlinePlayerLyrics(
                     context.resources.configuration.smallestScreenWidthDp,
                     windowLayoutProfile.windowWidth.value, windowLayoutProfile.windowHeight.value,
-                )) onLyricSeek else null,
+                )) lyricControls.onLyricSeek else null,
                 inlineLyricActions = com.rawsmusic.core.ui.widget.player.InlinePlayerLyricActions(
-                    onLyricTranslationToggle, onLyricRomaToggle, onLyricModifyAlbumArt,
-                    onSearchLyrico, onOpenInLyrico, onAiTimingPreview, onOpenExternalTimingEditor,
+                    lyricControls.onLyricTranslationToggle, lyricControls.onLyricRomaToggle, onLyricModifyAlbumArt,
+                    lyricControls.onSearchLyrico, lyricControls.onOpenInLyrico, lyricControls.onAiTimingPreview, lyricControls.onOpenExternalTimingEditor,
                 ),
                 onArtworkLongPress = onArtworkLongPress,
                 onClosePlayer = onClosePlayer,
@@ -2851,9 +2736,9 @@ private fun StandardPlayerLyricStack(
                 },
                 showAlbumArt = !mainArtworkOwnerActive && !artworkOverlayOwnsEndpoints,
                 renderBackdrop = false,
-                audioInfoText = audioInfoText,
-            audioInfoPlaybackChainText = audioInfoPlaybackChainText,
-                smartTransitionVisible = smartTransitionVisible,
+                audioInfoText = playbackControls.audioInfoText,
+                audioInfoPlaybackChainText = playbackControls.audioInfoPlaybackChainText,
+                smartTransitionVisible = playbackControls.smartTransitionVisible,
                 onAudioQualityLongPress = onAudioQualityLongPress,
                 queueVisible = queueVisible,
                 queueSongs = queueSongs,
@@ -2933,29 +2818,29 @@ private fun StandardPlayerLyricStack(
                 // commits, the live clock is restored and the follow engine performs at most one
                 // post-transition catch-up instead of competing with every animation frame.
                 val frozenFullLyricPositionMs = remember(currentSong?.path, session?.id) {
-                    lyricPositionMs
+                    lyricControls.lyricPositionMs
                 }
-                val fullLyricPositionMs = if (fullLyricSceneAwake) lyricPositionMs
+                val fullLyricPositionMs = if (fullLyricSceneAwake) lyricControls.lyricPositionMs
                 else frozenFullLyricPositionMs
 
                 LyricPage(
                     currentSong = currentSong,
                     coverPath = coverPath,
-                    song = lyricSong,
+                    song = lyricControls.lyricSong,
                     positionMs = fullLyricPositionMs,
                     isPlaying = isPlaying && fullLyricSceneAwake,
-                displayTranslation = displayTranslation,
-                displayRoma = displayRoma,
-                moreIconRes = moreIconRes,
-                onSeek = onLyricSeek,
-                onPlayPause = onPlayPause,
-                onTranslationToggle = onLyricTranslationToggle,
-                onRomaToggle = onLyricRomaToggle,
+                displayTranslation = lyricControls.displayTranslation,
+                displayRoma = lyricControls.displayRoma,
+                moreIconRes = playbackControls.moreIconRes,
+                onSeek = lyricControls.onLyricSeek,
+                onPlayPause = playbackControls.onPlayPause,
+                onTranslationToggle = lyricControls.onLyricTranslationToggle,
+                onRomaToggle = lyricControls.onLyricRomaToggle,
                 onModifyAlbumArt = onLyricModifyAlbumArt,
-                onSearchLyrico = onSearchLyrico,
-                onOpenInLyrico = onOpenInLyrico,
-                onAiTimingPreview = onAiTimingPreview,
-                onOpenExternalTimingEditor = onOpenExternalTimingEditor,
+                onSearchLyrico = lyricControls.onSearchLyrico,
+                onOpenInLyrico = lyricControls.onOpenInLyrico,
+                onAiTimingPreview = lyricControls.onAiTimingPreview,
+                onOpenExternalTimingEditor = lyricControls.onOpenExternalTimingEditor,
                 audioVisualizerEnabled = audioVisualizerEnabled,
                 onAudioVisualizerEnabledChange = onAudioVisualizerEnabledChange,
                 onModalVisibleChange = onModalVisibleChange,
@@ -3253,3 +3138,64 @@ private fun PlayerSceneController.Scene.toPlayerScene(): PlayerScene = when (thi
     PlayerSceneController.Scene.QUEUE -> PlayerScene.QUEUE
     PlayerSceneController.Scene.ALBUM_DETAIL -> PlayerScene.ALBUM_DETAIL
 }
+
+@androidx.compose.runtime.Immutable
+private class StandardPlayerPlaybackControls(
+    val previousIconRes: Int,
+    val playIconRes: Int,
+    val pauseIconRes: Int,
+    val nextIconRes: Int,
+    val playModeIconRes: Int,
+    val moreIconRes: Int,
+    val audioQualityIconRes: Int,
+    val audioInfoText: String,
+    val audioInfoPlaybackChainText: String,
+    val smartTransitionVisible: Boolean,
+    val seekGestureActiveState: State<Boolean>,
+    val onSeekStart: () -> Unit,
+    val onSeekStop: (Float) -> Unit,
+    val onPrevious: () -> Unit,
+    val onPlayPause: () -> Unit,
+    val onNext: () -> Unit,
+    val onPlayMode: () -> Unit,
+    val onPlayModeLongPress: () -> Unit,
+    val onMore: () -> Unit,
+    val onOpenMetadata: () -> Unit,
+    val onOpenAudioEffects: () -> Unit,
+    val onOpenSpectrumAnalysis: () -> Unit,
+    val onPlaybackSpeedChange: (Float) -> Unit,
+)
+
+@androidx.compose.runtime.Immutable
+private class StandardPlayerAiParams(
+    val realtimeSeparationEnabled: Boolean,
+    val realtimeSeparationPreparing: Boolean,
+    val realtimeSeparationStem: Int,
+    val realtimeSeparationStrength: Float,
+    val realtimeSeparationStatus: String,
+    val aiPerformanceState: com.rawsmusic.core.ui.widget.player.PlayerAiPerformanceUiState,
+    val onAiPerformanceModeChange: (com.rawsmusic.core.ui.widget.player.PlayerAiPerformanceMode) -> Unit,
+    val onAiPerformanceInstrumentChange: (String) -> Unit,
+    val onAiPerformanceCancel: () -> Unit,
+    val onAiPerformanceImportMelodyModel: (String) -> Unit,
+    val onAiPerformanceImportInstrumentPack: (String) -> Unit,
+    val onRealtimeSeparationEnabledChange: (Boolean) -> Unit,
+    val onRealtimeSeparationStemChange: (Int) -> Unit,
+    val onRealtimeSeparationStrengthChange: (Float) -> Unit,
+)
+
+@androidx.compose.runtime.Immutable
+private class StandardPlayerLyricControls(
+    val lyricSong: Song?,
+    val lyricPositionMs: Long,
+    val lyricPositionState: State<Long>?,
+    val displayTranslation: Boolean,
+    val displayRoma: Boolean,
+    val onLyricSeek: (Long) -> Unit,
+    val onLyricTranslationToggle: () -> Unit,
+    val onLyricRomaToggle: () -> Unit,
+    val onSearchLyrico: () -> Unit,
+    val onOpenInLyrico: () -> Unit,
+    val onAiTimingPreview: () -> Unit,
+    val onOpenExternalTimingEditor: (LyricTimingEditorTarget) -> Unit,
+)

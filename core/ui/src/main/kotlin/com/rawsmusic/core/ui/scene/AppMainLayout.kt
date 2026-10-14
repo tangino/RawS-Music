@@ -843,7 +843,9 @@ private fun NavScene.supportsRawFlowBackground(): Boolean {
         NavScene.YEAR_DETAIL,
         NavScene.COMPOSER_DETAIL,
         NavScene.SEARCH,
-        NavScene.SOURCE_IMPORT -> true
+        NavScene.SOURCE_IMPORT,
+        NavScene.ONLINE_MUSIC,
+        NavScene.ONLINE_PLAYLIST_DETAIL -> true
         else -> false
     }
 }

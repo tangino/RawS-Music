@@ -148,7 +148,6 @@ internal fun OnlinePlaylistDetailPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.background)
             .rawStableStatusBarsPadding(),
     ) {
         SmallTopAppBar(

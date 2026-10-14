@@ -67,7 +67,6 @@ fun OnlineMusicPortalPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.background)
             .rawStableStatusBarsPadding(),
     ) {
         SmallTopAppBar(
@@ -93,8 +92,7 @@ fun OnlineMusicPortalPage(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .padding(bottom = LocalBottomChromeInsets.current.contentBottom),
+                .fillMaxWidth(),
         ) {
             OnlinePortalBody(selectedTab, onOpenPlaylist)
         }

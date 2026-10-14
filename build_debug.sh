@@ -99,12 +99,31 @@ if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
     adopt_jdk_if_21 "$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
 fi
 
+if [ -z "${JAVA_HOME:-}" ] && command -v brew >/dev/null 2>&1; then
+    _brew_jdk_21="$(brew --prefix openjdk@21 2>/dev/null || true)"
+    if [ -n "$_brew_jdk_21" ]; then
+        adopt_jdk_if_21 "$_brew_jdk_21/libexec/openjdk.jdk/Contents/Home"
+    fi
+    if [ -z "${JAVA_HOME:-}" ]; then
+        _brew_jdk="$(brew --prefix openjdk 2>/dev/null || true)"
+        if [ -n "$_brew_jdk" ]; then
+            adopt_jdk_if_21 "$_brew_jdk/libexec/openjdk.jdk/Contents/Home"
+        fi
+    fi
+fi
+
 for candidate in \
     "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
     "$HOME/.sdkman/candidates/java/21"* \
     /usr/lib/jvm/java-21-openjdk* \
     /usr/lib/jvm/temurin-21-jdk* \
-    /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+    /usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+    /usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home \
+    /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+    /opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home \
+    /Library/Java/JavaVirtualMachines/openjdk-21*.jdk/Contents/Home \
+    /Library/Java/JavaVirtualMachines/temurin-21*.jdk/Contents/Home \
+    /Library/Java/JavaVirtualMachines/zulu-21*.jdk/Contents/Home
 do
     [ -z "${JAVA_HOME:-}" ] || break
     adopt_jdk_if_21 "$candidate"
@@ -133,6 +152,10 @@ fi
 if [ -n "${ANDROID_HOME:-}" ]; then
     export ANDROID_HOME
     export ANDROID_SDK_ROOT="$ANDROID_HOME"
+    # Android 37 预览版/部分 SDK 版本安装目录为 android-37.0，建立软链接以兼容 AGP
+    if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -e "$ANDROID_HOME/platforms/android-37" ]; then
+        ln -s "android-37.0" "$ANDROID_HOME/platforms/android-37" 2>/dev/null || true
+    fi
 fi
 
 # ---------------------------------------------------------------- 构建
@@ -145,7 +168,7 @@ if [ "$NO_DAEMON" -eq 1 ]; then
 fi
 
 echo "============================================================"
-echo " RawS-Music 构建（$VARIANT_LABEL）"
+echo " RawS-Music 构建（${VARIANT_LABEL}）"
 echo "  工程目录 : $SCRIPT_DIR"
 echo "  JAVA_HOME: ${JAVA_HOME:-<未设置，交由 Gradle 自行决定>}"
 echo "  SDK      : ${ANDROID_HOME:-<未设置，将由 local.properties 提供>}"
@@ -226,7 +249,7 @@ fi
 
 echo
 echo "============================================================"
-echo "✅ 构建成功（$VARIANT_LABEL）"
+echo "✅ 构建成功（${VARIANT_LABEL}）"
 if [ -n "$APK" ]; then
     echo "  APK  : $SCRIPT_DIR/$APK"
     echo "  大小 : $(du -h "$APK" | cut -f1)"

@@ -740,84 +740,95 @@ fun LyricMoreOverlayDialog(
         targetBottomFraction = 0.83f,
     ) { artworkAlpha, onArtworkBoundsChanged ->
         LyricMoreSheetContent(
-            currentSong = currentSong,
-            coverPath = coverPath,
-            artworkTransitionState = artworkTransitionState,
-            displayTranslation = displayTranslation,
-            displayRoma = displayRoma,
-            blurEnabled = blurEnabled,
-            relativeLineProgressEnabled = relativeLineProgressEnabled,
-            highlightAllEnabled = highlightAllEnabled,
-            fontSizeSp = fontSizeSp,
-            textPosition = textPosition,
-            onTranslationToggle = onTranslationToggle,
-            onRomaToggle = onRomaToggle,
-            onBlurEnabledChange = onBlurEnabledChange,
-            onRelativeLineProgressEnabledChange = onRelativeLineProgressEnabledChange,
-            onHighlightAllEnabledChange = onHighlightAllEnabledChange,
-            onFontSizeChange = onFontSizeChange,
-            onTextPositionChange = onTextPositionChange,
-            progressStyleValue = progressStyleValue,
-            onProgressStyleValueChange = onProgressStyleValueChange,
-            landscapeLockEnabled = landscapeLockEnabled,
-            onLandscapeLockEnabledChange = onLandscapeLockEnabledChange,
-            onModifyAlbumArt = onModifyAlbumArt,
-            onSearchLyrico = onSearchLyrico,
-            onOpenInLyrico = onOpenInLyrico,
-            onAiTimingPreview = onAiTimingPreview,
-            onOpenExternalTimingEditor = onOpenExternalTimingEditor,
-            audioVisualizerEnabled = audioVisualizerEnabled,
-            onAudioVisualizerEnabledChange = onAudioVisualizerEnabledChange,
-            artworkAlpha = artworkAlpha,
-            onArtworkBoundsChanged = onArtworkBoundsChanged,
-            twoColumnAcrylicLayout = true,
-            onLyricVideo = onLyricVideo,
-            onLyricPoster = onLyricPoster,
+            artwork = LyricMoreArtworkState(
+                currentSong = currentSong,
+                coverPath = coverPath,
+                artworkTransitionState = artworkTransitionState,
+                artworkAlpha = artworkAlpha,
+                onArtworkBoundsChanged = onArtworkBoundsChanged,
+            ),
+            display = LyricMoreDisplayConfig(
+                displayTranslation = displayTranslation,
+                displayRoma = displayRoma,
+                blurEnabled = blurEnabled,
+                relativeLineProgressEnabled = relativeLineProgressEnabled,
+                highlightAllEnabled = highlightAllEnabled,
+                fontSizeSp = fontSizeSp,
+                textPosition = textPosition,
+                onTranslationToggle = onTranslationToggle,
+                onRomaToggle = onRomaToggle,
+                onBlurEnabledChange = onBlurEnabledChange,
+                onRelativeLineProgressEnabledChange = onRelativeLineProgressEnabledChange,
+                onHighlightAllEnabledChange = onHighlightAllEnabledChange,
+                onFontSizeChange = onFontSizeChange,
+                onTextPositionChange = onTextPositionChange,
+                progressStyleValue = progressStyleValue,
+                onProgressStyleValueChange = onProgressStyleValueChange,
+                landscapeLockEnabled = landscapeLockEnabled,
+                onLandscapeLockEnabledChange = onLandscapeLockEnabledChange,
+                twoColumnAcrylicLayout = true,
+            ),
+            tools = LyricMoreToolsConfig(
+                onModifyAlbumArt = onModifyAlbumArt,
+                onSearchLyrico = onSearchLyrico,
+                onOpenInLyrico = onOpenInLyrico,
+                onAiTimingPreview = onAiTimingPreview,
+                onOpenExternalTimingEditor = onOpenExternalTimingEditor,
+                audioVisualizerEnabled = audioVisualizerEnabled,
+                onAudioVisualizerEnabledChange = onAudioVisualizerEnabledChange,
+                onLyricVideo = onLyricVideo,
+                onLyricPoster = onLyricPoster,
+            ),
         )
     }
 }
 
 @Composable
 fun LyricMoreSheetContent(
-    currentSong: AudioFile?,
-    onAddSongToPlaylist: ((AudioFile) -> Unit)? = null,
-    coverPath: String?,
-    artworkTransitionState: PlaybackArtworkTransitionState? = null,
-    displayTranslation: Boolean,
-    displayRoma: Boolean,
-    blurEnabled: Boolean,
-    relativeLineProgressEnabled: Boolean = false,
-    highlightAllEnabled: Boolean,
-    fontSizeSp: Int,
-    textPosition: LyricTextPosition,
-    onTranslationToggle: () -> Unit,
-    onRomaToggle: () -> Unit,
-    onBlurEnabledChange: (Boolean) -> Unit,
-    onRelativeLineProgressEnabledChange: (Boolean) -> Unit = {},
-    onHighlightAllEnabledChange: (Boolean) -> Unit,
-    onFontSizeChange: (Int) -> Unit,
-    onTextPositionChange: (LyricTextPosition) -> Unit,
-    progressStyleValue: Int?,
-    onProgressStyleValueChange: ((Int) -> Unit)?,
-    landscapeLockEnabled: Boolean?,
-    onLandscapeLockEnabledChange: ((Boolean) -> Unit)?,
-    onModifyAlbumArt: (() -> Unit)?,
-    onSearchLyrico: (() -> Unit)?,
-    onOpenInLyrico: (() -> Unit)?,
-    onAiTimingPreview: (() -> Unit)?,
-    onOpenExternalTimingEditor: ((LyricTimingEditorTarget) -> Unit)?,
-    audioVisualizerEnabled: Boolean? = null,
-    onAudioVisualizerEnabledChange: ((Boolean) -> Unit)? = null,
-    audioVisualizerStyleOverride: AudioVisualizerStyle? = null,
-    onAudioVisualizerStyleChangeOverride: ((AudioVisualizerStyle) -> Unit)? = null,
-    artworkAlpha: Float = 1f,
-    onArtworkBoundsChanged: (Rect) -> Unit = {},
-    twoColumnAcrylicLayout: Boolean = true,
-    onLyricVideo: (() -> Unit)? = null,
-    onLyricPoster: (() -> Unit)? = null,
-    embedded: Boolean = false,
-    fontSizeTitle: String? = null,
+    artwork: LyricMoreArtworkState,
+    display: LyricMoreDisplayConfig,
+    tools: LyricMoreToolsConfig,
 ) {
+    val currentSong = artwork.currentSong
+    val onAddSongToPlaylist = artwork.onAddSongToPlaylist
+    val coverPath = artwork.coverPath
+    val artworkTransitionState = artwork.artworkTransitionState
+    val artworkAlpha = artwork.artworkAlpha
+    val onArtworkBoundsChanged = artwork.onArtworkBoundsChanged
+
+    val displayTranslation = display.displayTranslation
+    val displayRoma = display.displayRoma
+    val blurEnabled = display.blurEnabled
+    val relativeLineProgressEnabled = display.relativeLineProgressEnabled
+    val highlightAllEnabled = display.highlightAllEnabled
+    val fontSizeSp = display.fontSizeSp
+    val textPosition = display.textPosition
+    val progressStyleValue = display.progressStyleValue
+    val landscapeLockEnabled = display.landscapeLockEnabled
+    val twoColumnAcrylicLayout = display.twoColumnAcrylicLayout
+    val embedded = display.embedded
+    val fontSizeTitle = display.fontSizeTitle
+    val onTranslationToggle = display.onTranslationToggle
+    val onRomaToggle = display.onRomaToggle
+    val onBlurEnabledChange = display.onBlurEnabledChange
+    val onRelativeLineProgressEnabledChange = display.onRelativeLineProgressEnabledChange
+    val onHighlightAllEnabledChange = display.onHighlightAllEnabledChange
+    val onFontSizeChange = display.onFontSizeChange
+    val onTextPositionChange = display.onTextPositionChange
+    val onProgressStyleValueChange = display.onProgressStyleValueChange
+    val onLandscapeLockEnabledChange = display.onLandscapeLockEnabledChange
+
+    val onModifyAlbumArt = tools.onModifyAlbumArt
+    val onSearchLyrico = tools.onSearchLyrico
+    val onOpenInLyrico = tools.onOpenInLyrico
+    val onAiTimingPreview = tools.onAiTimingPreview
+    val onOpenExternalTimingEditor = tools.onOpenExternalTimingEditor
+    val audioVisualizerEnabled = tools.audioVisualizerEnabled
+    val onAudioVisualizerEnabledChange = tools.onAudioVisualizerEnabledChange
+    val audioVisualizerStyleOverride = tools.audioVisualizerStyleOverride
+    val onAudioVisualizerStyleChangeOverride = tools.onAudioVisualizerStyleChangeOverride
+    val onLyricVideo = tools.onLyricVideo
+    val onLyricPoster = tools.onLyricPoster
     val scheme = MiuixTheme.colorScheme
     val isDark = scheme.background.luminance() < 0.5f
     val sheetColor = if (isDark) scheme.background else scheme.surface
