@@ -88,6 +88,38 @@ data class CloudPlaylistBackup(
     val updatedAt: Long,
 )
 
+private data class SourceBackupResponse(
+    @SerializedName("success") val success: Boolean = false,
+    @SerializedName("message") val message: String = "",
+    @SerializedName("username") val username: String = "",
+    @SerializedName("count") val count: Int = 0,
+    @SerializedName("updatedAt") val updatedAt: Long = 0L,
+    @SerializedName("error") val error: String = "",
+)
+
+private data class SourceRestoreData(
+    @SerializedName("user_id") val userId: String = "",
+    @SerializedName("sources_json") val sourcesJson: String = "",
+    @SerializedName("source_count") val sourceCount: Int = 0,
+    @SerializedName("created_at") val createdAt: Long = 0L,
+    @SerializedName("updated_at") val updatedAt: Long = 0L,
+)
+
+private data class SourceRestoreResponse(
+    @SerializedName("success") val success: Boolean = false,
+    @SerializedName("username") val username: String = "",
+    @SerializedName("data") val data: SourceRestoreData? = null,
+    @SerializedName("message") val message: String = "",
+    @SerializedName("error") val error: String = "",
+)
+
+/** 云端取回的音源备份。 */
+data class CloudSourceBackup(
+    val sourcesJson: String,
+    val sourceCount: Int,
+    val updatedAt: Long,
+)
+
 /**
  * 云同步 HTTP 客户端（歌单部分）。
  *
@@ -326,6 +358,97 @@ object CloudSyncClient {
                 }
             },
             fallbackError = "清空失败",
+        )
+    }
+
+    // ------------------------------------------------------------ 音源（洛雪 / LX）
+
+    /**
+     * 上传音源备份。服务端语义是**全量覆盖**（没有 `mode` 参数，与歌单不同）。
+     *
+     * ⚠️ 服务端对 `sourcesJson` 的 `JSON.parse` 同样**未做保护**，非法 JSON 直接 500 ——
+     * 序列化一律走 [CloudSourceJson]，不要手拼。
+     */
+    suspend fun backupSources(
+        context: Context,
+        sourcesJson: String,
+    ): CloudSyncResult<Int> {
+        val config = resolveConfig() ?: return notConfigured()
+        return post(
+            path = "/api/user/sources/backup",
+            body = mapOf(
+                "username" to config.username,
+                "password" to config.password,
+                "sourcesJson" to sourcesJson,
+            ),
+            decode = { json ->
+                val parsed = gson.fromJson(json, SourceBackupResponse::class.java)
+                if (parsed.success) {
+                    CloudSyncResult.Success(parsed.count, parsed.message)
+                } else {
+                    preferredFailure(parsed.error, parsed.message) { "音源上传失败" }
+                }
+            },
+            fallbackError = "音源上传失败",
+        )
+    }
+
+    /**
+     * 下载音源备份。
+     *
+     * ⚠️ 与歌单一样，**无备份时服务端返回 404**，这里映射成「云端还没有音源备份」而不是错误。
+     */
+    suspend fun restoreSources(context: Context): CloudSyncResult<CloudSourceBackup> {
+        val config = resolveConfig() ?: return notConfigured()
+        return post(
+            path = "/api/user/sources/restore",
+            body = mapOf(
+                "username" to config.username,
+                "password" to config.password,
+            ),
+            decode = { json ->
+                val parsed = gson.fromJson(json, SourceRestoreResponse::class.java)
+                val data = parsed.data
+                if (parsed.success && data != null) {
+                    CloudSyncResult.Success(
+                        CloudSourceBackup(
+                            sourcesJson = data.sourcesJson,
+                            sourceCount = data.sourceCount,
+                            updatedAt = data.updatedAt,
+                        ),
+                    )
+                } else {
+                    preferredFailure(parsed.error, parsed.message) { "音源下载失败" }
+                }
+            },
+            fallbackError = "音源下载失败",
+            codeOverrides = mapOf(404 to "云端还没有音源备份"),
+        )
+    }
+
+    /**
+     * 删除音源备份。
+     *
+     * 与 [deletePlaylists] 不同：这个路由**没有**「不传参数就清空」的陷阱
+     * （服务端就是删掉该账号的整条音源备份），所以不需要额外护栏。
+     */
+    suspend fun deleteSourceBackup(context: Context): CloudSyncResult<Unit> {
+        val config = resolveConfig() ?: return notConfigured()
+        return post(
+            path = "/api/user/sources/delete",
+            body = mapOf(
+                "username" to config.username,
+                "password" to config.password,
+            ),
+            decode = { json ->
+                val parsed = gson.fromJson(json, CountResponse::class.java)
+                if (parsed.success) {
+                    CloudSyncResult.Success(Unit, parsed.message)
+                } else {
+                    preferredFailure(parsed.error, parsed.message) { "音源备份删除失败" }
+                }
+            },
+            fallbackError = "音源备份删除失败",
         )
     }
 
