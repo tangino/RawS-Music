@@ -11,6 +11,7 @@ import java.net.URI
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 import java.util.zip.InflaterInputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,6 +95,45 @@ object LxSourcePluginStore {
             )
         }.getOrElse { error ->
             LxSourceInstallResult.Failure(error.message ?: "远程 LX 音源导入失败")
+        }
+    }
+
+    /**
+     * 用**已经在内存里的脚本文本**安装音源。
+     *
+     * 为什么需要这个入口：云端同步还原拿到的正是内存里的脚本文本 —— 既不是 `content://` URI
+     * （[installFromUri]），也不是一个可下载的地址（[installFromUrl]）。此前两者都没有覆盖这种形态，
+     * 所以还原只能靠「写临时文件 + FileProvider 拼 URI」绕路，那会让音源注册状态与实际文件不一致。
+     * 这里直接把文本交给 [installScript]，与另外两个入口**走完全同一条落盘/注册路径**
+     * （按 sha256 内容寻址、写入 `filesDir/<PLUGIN_DIR>/<sha256>.js`、解析元数据、发布 StateFlow）。
+     *
+     * ⚠️ **务必传入原始的 `sourceUrl`**：[installScript] 用 `sourceId(sourceUrl, sha256)` 算 id，
+     * 同源同内容才能得到**同一个 id**（跨设备还原后与本地原本安装的是同一个音源，而不是新增一份）。
+     *
+     * ⚠️ **`enabled` 不会被还原**：`installScript` 对新装的一律给 `enabled = true`（既有行为的继承）。
+     * 云端若记录的是「已停用」，调用方需要在安装成功后自行 `setEnabled(id, false)`。
+     *
+     * 注：两个既有入口用的是 `runCatching`（历史写法，会吞掉 `CancellationException`）；
+     * 这个新入口按工程约定显式 rethrow，**不要把这里的写法反过来去"统一"既有那两个**。
+     */
+    suspend fun installFromScript(
+        context: Context,
+        script: String,
+        sourceUrl: String = "",
+        origin: MusicSourceOrigin = MusicSourceOrigin.RemoteUrl,
+    ): LxSourceInstallResult = withContext(Dispatchers.IO) {
+        try {
+            installScript(
+                context = context,
+                script = script,
+                origin = origin,
+                sourceUrl = sourceUrl,
+            )
+        } catch (cancelled: CancellationException) {
+            // 取消必须原样抛出，不能伪装成「安装失败」。
+            throw cancelled
+        } catch (error: Throwable) {
+            LxSourceInstallResult.Failure(error.message ?: "LX 音源安装失败")
         }
     }
 
