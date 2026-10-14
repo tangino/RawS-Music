@@ -70,6 +70,13 @@ enum class NavScene(
 
         val topLevel = setOf(SONGS, FOLDERS, FOLDER_HIERARCHY, ALBUMS, ARTISTS, PLAYLISTS, QUEUE, RECENTLY_ADDED, WEBDAV)
 
+        /**
+         * 可供用户放进底部导航的场景（设置「底部导航栏」里那个选择器的数据源，
+         * 见 `customizableBottomNavigationScenes` / `resolveBottomNavigationScenes`）。
+         *
+         * ⚠️ 往这里加条目**不会**改变任何现有用户的底栏：用户的选择是按 `tag` 存储的，
+         * 只有主动去选择器里勾选才会出现。默认底栏另见 `defaultBottomNavigationScenes`。
+         */
         val bottomNavigationEntries = listOf(
             HOME,
             SONGS,
@@ -82,6 +89,9 @@ enum class NavScene(
             GENRE,
             AUDIO_EFFECTS,
             SEARCH,
+            // 在线音乐此前**只**挂在侧栏，而侧栏要求关掉底部导航才启用（见 AppMainLayout 的
+            // sideRailEnabled），默认配置下等于没有入口。放进这里后用户可在设置里把它加到底栏。
+            ONLINE_MUSIC,
             SETTINGS,
         )
 

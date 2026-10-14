@@ -60,6 +60,9 @@ fun NavScene.bottomNavigationLabel(): String = when (this) {
     NavScene.AUDIO_EFFECTS -> stringResource(R.string.bottom_nav_effects)
     NavScene.SEARCH -> stringResource(R.string.bottom_nav_search)
     NavScene.SETTINGS -> stringResource(R.string.bottom_nav_settings)
+    // 不写这一行的话会落到 `else -> label`，而 NavScene 的 label 是枚举里硬编码的中文，
+    // 英文环境下会显示中文。
+    NavScene.ONLINE_MUSIC -> stringResource(R.string.nav_scene_online_music)
     else -> label
 }
 
@@ -74,6 +77,8 @@ private fun NavScene.customBottomNavigationIconResOrNull(): Int? = when (this) {
     NavScene.QUEUE -> R.drawable.ic_nav_custom_queue
     NavScene.RECENTLY_ADDED -> R.drawable.ic_nav_custom_recent
     NavScene.GENRE -> R.drawable.ic_nav_custom_genre
+    // 复用侧栏那枚图标，避免和 SONGS 一样退化成通用的音乐符号（`miuixBottomNavigationIcon` 的 else 分支）。
+    NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
     else -> null
 }
 
