@@ -766,10 +766,24 @@ object AppPreferences {
             get() = kv.decodeBool("ui_audio_visualizer_enabled", true)
             set(value) { kv.encode("ui_audio_visualizer_enabled", value) }
 
-        /** 音频可视化样式：0=频谱，1=粒子，2=粒子拖尾，3=脉冲环，4=能量丝带，5=涟漪。 */
+        /**
+         * 音频可视化样式。取值对应 `AudioVisualizerStyle` 的 `value`：
+         * 0=频谱，1=粒子，2=粒子拖尾，3=脉冲环，4=能量丝带，5=涟漪，6..13=移植新增的 8 种形态。
+         *
+         * ⚠️ **这里刻意不做 `coerceIn` 夹取**（原先写的是 `.coerceIn(0, 5)`）。原因：
+         * - `:module:data` **看不到** `core:ui` 的 `AudioVisualizerStyle`（依赖方向是 core:ui → module:data），
+         *   所以任何写在这里的上界都只能是一个**手抄的常数**。
+         * - 那个常数一旦跟不上枚举，就会把新形态的值**静默夹回旧范围** ——
+         *   用户选了 6..13 会被存成 5，表现为「新形态完全没反应」，而且**不报错、不崩溃**，极难定位。
+         *   P4 追加 8 种形态时，这个夹取正是会让整块功能失效的那个坑。
+         * - 合法性由消费方 `AudioVisualizerStyle.from(value)` 兜底：它找不到就回落到 `Spectrum`，
+         *   所以即使存储里是脏值也不会出问题。
+         *
+         * → **以后新增可视化形态时，不要再往这里加范围夹取**，直接追加枚举值即可。
+         */
         var audioVisualizerStyle: Int
-            get() = kv.decodeInt("ui_audio_visualizer_style", 0).coerceIn(0, 5)
-            set(value) { kv.encode("ui_audio_visualizer_style", value.coerceIn(0, 5)) }
+            get() = kv.decodeInt("ui_audio_visualizer_style", 0)
+            set(value) { kv.encode("ui_audio_visualizer_style", value) }
 
         /** 可视化节奏马达：仅在播放页实时可视化运行时响应高能量/瞬态。 */
         var audioVisualizerHapticsEnabled: Boolean
