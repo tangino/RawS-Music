@@ -912,82 +912,37 @@ fun LyricMoreSheetContent(
     val visualizerStyleChange =
         onAudioVisualizerStyleChangeOverride ?: LocalAudioVisualizerStyleChange.current
     val visualizerOffLabel = stringResource(R.string.player_more_visualizer_off)
-    val visualizerSpectrumLabel = stringResource(R.string.player_more_visualizer_spectrum)
-    val visualizerParticleLabel = stringResource(R.string.player_more_visualizer_particle)
-    val visualizerParticleTrailsLabel = stringResource(R.string.player_more_visualizer_particle_trails)
-    val visualizerPulseRingsLabel = stringResource(R.string.player_more_visualizer_pulse_rings)
-    val visualizerEnergyRibbonLabel = stringResource(R.string.player_more_visualizer_energy_ribbon)
-    val visualizerRippleLabel = stringResource(R.string.player_more_visualizer_ripple)
     val visualizerEnabledChange = onAudioVisualizerEnabledChange
     val visualizerEntry = if (audioVisualizerEnabled != null && visualizerEnabledChange != null) {
         DropdownEntry(
-            items = listOf(
-                DropdownItem(
-                    text = visualizerOffLabel,
-                    selected = !audioVisualizerEnabled,
-                    onClick = { visualizerEnabledChange(false) },
-                ),
-                DropdownItem(
-                    text = visualizerSpectrumLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.Spectrum,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.Spectrum)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-                DropdownItem(
-                    text = visualizerParticleLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.Particle,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.Particle)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-                DropdownItem(
-                    text = visualizerParticleTrailsLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.ParticleTrails,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.ParticleTrails)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-                DropdownItem(
-                    text = visualizerPulseRingsLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.PulseRings,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.PulseRings)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-                DropdownItem(
-                    text = visualizerEnergyRibbonLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.EnergyRibbon,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.EnergyRibbon)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-                DropdownItem(
-                    text = visualizerRippleLabel,
-                    selected = audioVisualizerEnabled && visualizerStyle == AudioVisualizerStyle.Ripple,
-                    onClick = {
-                        visualizerStyleChange(AudioVisualizerStyle.Ripple)
-                        if (!audioVisualizerEnabled) visualizerEnabledChange(true)
-                    },
-                ),
-            ),
+            items = buildList {
+                add(
+                    DropdownItem(
+                        text = visualizerOffLabel,
+                        selected = !audioVisualizerEnabled,
+                        onClick = { visualizerEnabledChange(false) },
+                    )
+                )
+                AudioVisualizerStyle.entries.forEach { entryStyle ->
+                    add(
+                        DropdownItem(
+                            text = stringResource(entryStyle.titleRes),
+                            selected = audioVisualizerEnabled && visualizerStyle == entryStyle,
+                            onClick = {
+                                visualizerStyleChange(entryStyle)
+                                if (!audioVisualizerEnabled) visualizerEnabledChange(true)
+                            },
+                        )
+                    )
+                }
+            }
         )
     } else {
         null
     }
     val visualizerSummary = when {
         audioVisualizerEnabled != true -> visualizerOffLabel
-        visualizerStyle == AudioVisualizerStyle.Particle -> visualizerParticleLabel
-        visualizerStyle == AudioVisualizerStyle.ParticleTrails -> visualizerParticleTrailsLabel
-        visualizerStyle == AudioVisualizerStyle.PulseRings -> visualizerPulseRingsLabel
-        visualizerStyle == AudioVisualizerStyle.EnergyRibbon -> visualizerEnergyRibbonLabel
-        visualizerStyle == AudioVisualizerStyle.Ripple -> visualizerRippleLabel
-        else -> visualizerSpectrumLabel
+        else -> stringResource(visualizerStyle.titleRes)
     }
     val externalTimingEntry = DropdownEntry(
         items = listOf(

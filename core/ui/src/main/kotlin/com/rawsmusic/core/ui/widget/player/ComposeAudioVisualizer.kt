@@ -41,6 +41,10 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+import androidx.annotation.StringRes
+import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.widget.player.gl.*
+
 private const val MONO_BAND_COUNT = 112
 private const val PARTICLE_COUNT = 280
 private const val PARTICLE_TRAIL_HISTORY = 4
@@ -51,7 +55,40 @@ enum class AudioVisualizerStyle(val value: Int) {
     ParticleTrails(2),
     PulseRings(3),
     EnergyRibbon(4),
-    Ripple(5);
+    Ripple(5),
+    BarsWithPeaks(6),
+    AuroraMountain(7),
+    MirroredBars(8),
+    TimeTunnel(9),
+    Octgrams(10),
+    SoundCity(11),
+    FractalGalaxy(12),
+    QuantumVortex(13);
+
+    @get:StringRes
+    val titleRes: Int
+        get() = when (this) {
+            Spectrum -> R.string.player_more_visualizer_spectrum
+            Particle -> R.string.player_more_visualizer_particle
+            ParticleTrails -> R.string.player_more_visualizer_particle_trails
+            PulseRings -> R.string.player_more_visualizer_pulse_rings
+            EnergyRibbon -> R.string.player_more_visualizer_energy_ribbon
+            Ripple -> R.string.player_more_visualizer_ripple
+            BarsWithPeaks -> R.string.player_more_visualizer_bars_with_peaks
+            AuroraMountain -> R.string.player_more_visualizer_aurora_mountain
+            MirroredBars -> R.string.player_more_visualizer_mirrored_bars
+            TimeTunnel -> R.string.player_more_visualizer_time_tunnel
+            Octgrams -> R.string.player_more_visualizer_octgrams
+            SoundCity -> R.string.player_more_visualizer_sound_city
+            FractalGalaxy -> R.string.player_more_visualizer_fractal_galaxy
+            QuantumVortex -> R.string.player_more_visualizer_quantum_vortex
+        }
+
+    val isGlStyle: Boolean
+        get() = when (this) {
+            TimeTunnel, Octgrams, SoundCity, FractalGalaxy, QuantumVortex -> true
+            else -> false
+        }
 
     companion object {
         fun from(value: Int): AudioVisualizerStyle =
@@ -1133,6 +1170,62 @@ fun SharedRealtimeVisualizerOverlay(
             spectrum = spectrum,
             spectrumState = spectrumState,
             visible = visible && style == AudioVisualizerStyle.Ripple,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        BarsWithPeaksSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.BarsWithPeaks,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        AuroraMountainSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.AuroraMountain,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        MirroredBarsSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.MirroredBars,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        TimeTunnelSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.TimeTunnel,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        OctgramsSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.Octgrams,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        SoundCitySpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.SoundCity,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        FractalGalaxySpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.FractalGalaxy,
+            isPlaying = isPlaying,
+            modifier = Modifier.matchParentSize(),
+        )
+        QuantumVortexSpectrumOverlay(
+            spectrum = spectrum,
+            spectrumState = spectrumState,
+            visible = visible && style == AudioVisualizerStyle.QuantumVortex,
             isPlaying = isPlaying,
             modifier = Modifier.matchParentSize(),
         )

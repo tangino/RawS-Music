@@ -3968,77 +3968,30 @@ private fun ImmersiveVisualizerSettingsCard(
     val style = LocalAudioVisualizerStyle.current
     val onStyleChange = LocalAudioVisualizerStyleChange.current
     val offLabel = stringResource(R.string.player_more_visualizer_off)
-    val spectrumLabel = stringResource(R.string.player_more_visualizer_spectrum)
-    val particleLabel = stringResource(R.string.player_more_visualizer_particle)
-    val particleTrailsLabel = stringResource(R.string.player_more_visualizer_particle_trails)
-    val pulseRingsLabel = stringResource(R.string.player_more_visualizer_pulse_rings)
-    val energyRibbonLabel = stringResource(R.string.player_more_visualizer_energy_ribbon)
-    val rippleLabel = stringResource(R.string.player_more_visualizer_ripple)
-    val selectedLabel = when {
-        !enabled -> offLabel
-        style == AudioVisualizerStyle.Particle -> particleLabel
-        style == AudioVisualizerStyle.ParticleTrails -> particleTrailsLabel
-        style == AudioVisualizerStyle.PulseRings -> pulseRingsLabel
-        style == AudioVisualizerStyle.EnergyRibbon -> energyRibbonLabel
-        style == AudioVisualizerStyle.Ripple -> rippleLabel
-        else -> spectrumLabel
-    }
+    val selectedLabel = if (!enabled) offLabel else stringResource(style.titleRes)
+
     val entry = DropdownEntry(
-        items = listOf(
-            DropdownItem(
-                text = offLabel,
-                selected = !enabled,
-                onClick = { onEnabledChange(false) },
-            ),
-            DropdownItem(
-                text = spectrumLabel,
-                selected = enabled && style == AudioVisualizerStyle.Spectrum,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.Spectrum)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-            DropdownItem(
-                text = particleLabel,
-                selected = enabled && style == AudioVisualizerStyle.Particle,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.Particle)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-            DropdownItem(
-                text = particleTrailsLabel,
-                selected = enabled && style == AudioVisualizerStyle.ParticleTrails,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.ParticleTrails)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-            DropdownItem(
-                text = pulseRingsLabel,
-                selected = enabled && style == AudioVisualizerStyle.PulseRings,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.PulseRings)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-            DropdownItem(
-                text = energyRibbonLabel,
-                selected = enabled && style == AudioVisualizerStyle.EnergyRibbon,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.EnergyRibbon)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-            DropdownItem(
-                text = rippleLabel,
-                selected = enabled && style == AudioVisualizerStyle.Ripple,
-                onClick = {
-                    onStyleChange(AudioVisualizerStyle.Ripple)
-                    if (!enabled) onEnabledChange(true)
-                },
-            ),
-        ),
+        items = buildList {
+            add(
+                DropdownItem(
+                    text = offLabel,
+                    selected = !enabled,
+                    onClick = { onEnabledChange(false) },
+                )
+            )
+            AudioVisualizerStyle.entries.forEach { entryStyle ->
+                add(
+                    DropdownItem(
+                        text = stringResource(entryStyle.titleRes),
+                        selected = enabled && style == entryStyle,
+                        onClick = {
+                            onStyleChange(entryStyle)
+                            if (!enabled) onEnabledChange(true)
+                        },
+                    )
+                )
+            }
+        }
     )
     Column(
         modifier = Modifier

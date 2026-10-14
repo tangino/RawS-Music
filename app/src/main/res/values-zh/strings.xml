@@ -363,6 +363,23 @@
     <string name="settings_player_visualizer_particle_color_desc">选择背景型可视化效果的配色；虹色会按低频到高频映射不同色相。</string>
     <string name="settings_player_visualizer_particle_color_white">白色</string>
     <string name="settings_player_visualizer_particle_color_rainbow">虹色</string>
+    <string name="settings_visualizer_parameters_title">频谱高级参数</string>
+    <string name="settings_visualizer_parameters_summary">调整频谱配色方案、柱宽、边框以及下落动画</string>
+    <string name="settings_visualizer_preview_title">实时预览</string>
+    <string name="settings_visualizer_color_scheme_title">配色方案</string>
+    <string name="settings_visualizer_single_color">单色模式</string>
+    <string name="settings_visualizer_single_color_summary">频谱使用单一颜色渲染，而非双色渐变</string>
+    <string name="settings_visualizer_bar_width">柱子宽度</string>
+    <string name="settings_visualizer_bar_alpha">柱子不透明度</string>
+    <string name="settings_visualizer_border_width">描边宽度</string>
+    <string name="settings_visualizer_border_alpha">描边不透明度</string>
+    <string name="settings_visualizer_border_only">仅显示描边</string>
+    <string name="settings_visualizer_border_only_summary">仅绘制柱子外边框线，不填充内部颜色</string>
+    <string name="settings_visualizer_peak_decay">峰值衰减动画</string>
+    <string name="settings_visualizer_peak_decay_summary">在柱顶显示随重力缓慢下落的峰值指示块</string>
+    <string name="settings_visualizer_maximized_title">全屏大频谱模式</string>
+    <string name="settings_visualizer_maximized_summary">在播放界面中以全屏沉浸方式展示可视化</string>
+    <string name="settings_visualizer_maximized_tap_exit_hint">点击任意区域退出全屏大频谱</string>
     <string name="settings_audio_info_capsule_section">音频信息胶囊</string>
     <string name="settings_audio_info_capsule_visible">显示音频信息胶囊</string>
     <string name="settings_audio_info_capsule_visible_summary">关闭后完整隐藏胶囊并收回播放界面占位；点击循环和长按卡片行为保持不变。</string>
@@ -2586,6 +2603,16 @@
     <string name="cloud_sync_state_restoring">正在还原…</string>
     <string name="cloud_sync_state_clearing">正在清空…</string>
     <string name="cloud_sync_action_cancel">取消</string>
+    <string name="cloud_sync_section_sources">音源同步</string>
+    <string name="cloud_sync_action_source_upload">备份音源</string>
+    <string name="cloud_sync_action_source_restore">还原音源</string>
+    <string name="cloud_sync_source_uploaded">已备份 %1$d 个音源</string>
+    <string name="cloud_sync_source_upload_failed">音源备份失败：%1$s</string>
+    <string name="cloud_sync_source_restored">已还原 %1$d 个音源</string>
+    <string name="cloud_sync_source_restore_failed">音源还原失败：%1$s</string>
+    <string name="cloud_sync_source_empty">云端尚无音源备份</string>
+    <string name="cloud_sync_state_source_uploading">正在备份音源…</string>
+    <string name="cloud_sync_state_source_restoring">正在还原音源…</string>
 
     <!-- 歌单导入导出 -->
     <string name="playlist_export_title">导出歌单</string>

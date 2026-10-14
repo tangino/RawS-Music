@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import com.rawsmusic.core.ui.widget.player.LocalPlayerPlaylistAction
@@ -101,6 +104,8 @@ import com.rawsmusic.module.data.prefs.PersonalizationPreferences
 import com.rawsmusic.module.data.prefs.PlayerProgressPreferences
 import io.github.proify.lyricon.lyric.model.Song
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.clickable
+import com.rawsmusic.module.data.prefs.AppPreferences
 
 // The ordinary player should keep its own artwork visible while returning to the main page.
 // The list-to-player shared handoff made the default artwork disappear during the gesture.
@@ -671,6 +676,33 @@ fun ComposePlayerContainer(
     BackHandler(enabled = inlineQueueVisible) {
         dismissInlineQueue()
     }
+    var isVisualizerMaximized by remember {
+        mutableStateOf(AppPreferences.UI.Visualizer.isMaximized)
+    }
+    val context = LocalContext.current
+    DisposableEffect(context) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                if (intent?.action == "com.rawsmusic.action.AUDIO_VISUALIZER_SETTING_CHANGED") {
+                    isVisualizerMaximized = AppPreferences.UI.Visualizer.isMaximized
+                }
+            }
+        }
+        val filter = android.content.IntentFilter("com.rawsmusic.action.AUDIO_VISUALIZER_SETTING_CHANGED")
+        androidx.core.content.ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+    BackHandler(enabled = isVisualizerMaximized) {
+        isVisualizerMaximized = false
+        AppPreferences.UI.Visualizer.isMaximized = false
+    }
 
     CompositionLocalProvider(
         LocalPlayerPlaylistAction provides onAddSongToPlaylist,
@@ -895,6 +927,66 @@ fun ComposePlayerContainer(
             modifier = modifier
         )
     }
+    }
+
+    AnimatedVisibility(
+        visible = isVisualizerMaximized && audioVisualizerEnabled,
+        enter = fadeIn(tween(300)),
+        exit = fadeOut(tween(250)),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(999f)
+                .background(Color(0xF00A0A0C))
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                ) {
+                    isVisualizerMaximized = false
+                    AppPreferences.UI.Visualizer.isMaximized = false
+                }
+        ) {
+            SharedRealtimeVisualizerOverlay(
+                style = audioVisualizerStyle,
+                spectrum = audioSpectrum,
+                spectrumState = audioSpectrumState,
+                visible = isVisualizerMaximized && audioVisualizerEnabled,
+                isPlaying = isPlaying,
+                modifier = Modifier.fillMaxSize(),
+            )
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.TopCenter)
+                    .padding(top = 54.dp, start = 24.dp, end = 24.dp),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+            ) {
+                if (currentSong != null) {
+                    top.yukonga.miuix.kmp.basic.Text(
+                        text = currentSong.title,
+                        color = Color.White.copy(alpha = 0.92f),
+                        fontSize = 18.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    top.yukonga.miuix.kmp.basic.Text(
+                        text = currentSong.artist,
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                top.yukonga.miuix.kmp.basic.Text(
+                    text = androidx.compose.ui.res.stringResource(
+                        com.rawsmusic.core.ui.R.string.visualizer_maximized_tap_exit_hint
+                    ),
+                    color = Color.White.copy(alpha = 0.38f),
+                    fontSize = 11.sp,
+                )
+            }
+        }
     }
 
     OriginalArtworkViewerDialog(

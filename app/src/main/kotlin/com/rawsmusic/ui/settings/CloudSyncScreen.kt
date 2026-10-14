@@ -27,6 +27,7 @@ import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
 import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.module.online.sync.CloudPlaylistSyncService
+import com.rawsmusic.module.online.sync.CloudSourceSyncService
 import com.rawsmusic.module.online.sync.CloudSyncClient
 import com.rawsmusic.module.online.sync.CloudSyncResult
 import java.text.DateFormat
@@ -315,6 +316,95 @@ fun CloudSyncScreen(onBack: () -> Unit) {
             }
         }
 
+        SectionHeader(stringResource(R.string.cloud_sync_section_sources))
+        SettingsCard {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        resultMessage = ""
+                        running = CloudSyncTask.SOURCE_UPLOAD
+                        scope.launch {
+                            try {
+                                when (val result = CloudSourceSyncService.upload(context)) {
+                                    is CloudSyncResult.Success -> {
+                                        refreshTimestamps()
+                                        resultMessage = context.getString(
+                                            R.string.cloud_sync_source_uploaded,
+                                            result.data.uploaded,
+                                        )
+                                        AppNoticeBus.post(resultMessage, icon = AppNoticeIcon.INFO)
+                                    }
+                                    is CloudSyncResult.Failure -> {
+                                        AppLogger.e(TAG, "上传音源备份失败：${result.message}")
+                                        resultMessage = context.getString(
+                                            R.string.cloud_sync_source_upload_failed,
+                                            result.message,
+                                        )
+                                        AppNoticeBus.error(resultMessage)
+                                    }
+                                }
+                            } finally {
+                                running = null
+                            }
+                        }
+                    },
+                    enabled = !busy && configured,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.cloud_sync_action_source_upload))
+                }
+                Button(
+                    onClick = {
+                        resultMessage = ""
+                        running = CloudSyncTask.SOURCE_RESTORE
+                        scope.launch {
+                            try {
+                                when (val result = CloudSourceSyncService.restore(context)) {
+                                    is CloudSyncResult.Success -> {
+                                        refreshTimestamps()
+                                        resultMessage = context.getString(
+                                            R.string.cloud_sync_source_restored,
+                                            result.data.installed,
+                                        )
+                                        AppNoticeBus.post(resultMessage, icon = AppNoticeIcon.INFO)
+                                    }
+                                    is CloudSyncResult.Failure -> {
+                                        if (result.code == HTTP_NOT_FOUND) {
+                                            resultMessage = context.getString(R.string.cloud_sync_source_empty)
+                                            AppNoticeBus.post(resultMessage, icon = AppNoticeIcon.INFO)
+                                        } else {
+                                            AppLogger.e(TAG, "下载音源备份失败：${result.message}")
+                                            resultMessage = context.getString(
+                                                R.string.cloud_sync_source_restore_failed,
+                                                result.message,
+                                            )
+                                            AppNoticeBus.error(resultMessage)
+                                        }
+                                    }
+                                }
+                            } finally {
+                                running = null
+                            }
+                        }
+                    },
+                    enabled = !busy && configured,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.cloud_sync_action_source_restore))
+                }
+            }
+            when (running) {
+                CloudSyncTask.SOURCE_UPLOAD ->
+                    CloudSyncProgressRow(context.getString(R.string.cloud_sync_state_source_uploading))
+                CloudSyncTask.SOURCE_RESTORE ->
+                    CloudSyncProgressRow(context.getString(R.string.cloud_sync_state_source_restoring))
+                else -> Unit
+            }
+        }
+
         SectionHeader(stringResource(R.string.cloud_sync_section_status))
         SettingsCard {
             Text(
@@ -395,7 +485,7 @@ fun CloudSyncScreen(onBack: () -> Unit) {
 }
 
 /** 页面正在跑的耗时动作；`null` 表示空闲。用它统一禁用按钮并显示进度。 */
-private enum class CloudSyncTask { SAVE, UPLOAD, RESTORE, CLEAR }
+private enum class CloudSyncTask { SAVE, UPLOAD, RESTORE, SOURCE_UPLOAD, SOURCE_RESTORE, CLEAR }
 
 /** 契约里 `restore` 在「云端无备份」时返回的状态码（见 `CloudSyncClient.restorePlaylists`）。 */
 private const val HTTP_NOT_FOUND = 404

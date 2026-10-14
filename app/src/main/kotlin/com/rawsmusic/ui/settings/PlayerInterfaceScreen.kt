@@ -21,6 +21,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.withFrameNanos
+import com.rawsmusic.core.ui.widget.player.AudioVisualizerStyle
+import com.rawsmusic.core.ui.widget.player.VisualizerColorScheme
+import com.rawsmusic.core.ui.widget.player.SharedRealtimeVisualizerOverlay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +86,15 @@ fun LiquidGlassPlayerInterfaceScreen(
     var audioVisualizerParticleColorMode by remember {
         mutableStateOf(AppPreferences.UI.audioVisualizerParticleColorMode)
     }
+    var visualizerColorSchemeId by remember { mutableStateOf(AppPreferences.UI.Visualizer.colorSchemeId) }
+    var visualizerSingleColor by remember { mutableStateOf(AppPreferences.UI.Visualizer.singleColor) }
+    var visualizerBarWidth by remember { mutableFloatStateOf(AppPreferences.UI.Visualizer.barWidthDp) }
+    var visualizerBarAlpha by remember { mutableFloatStateOf(AppPreferences.UI.Visualizer.barAlpha) }
+    var visualizerBorderWidth by remember { mutableFloatStateOf(AppPreferences.UI.Visualizer.borderWidthDp) }
+    var visualizerBorderAlpha by remember { mutableFloatStateOf(AppPreferences.UI.Visualizer.borderAlpha) }
+    var visualizerBorderOnly by remember { mutableStateOf(AppPreferences.UI.Visualizer.borderOnly) }
+    var visualizerPeakDecay by remember { mutableStateOf(AppPreferences.UI.Visualizer.peakDecayEnabled) }
+    var visualizerMaximized by remember { mutableStateOf(AppPreferences.UI.Visualizer.isMaximized) }
     var statusBarHidden by remember { mutableStateOf(AppPreferences.UI.isStatusBarHidden) }
     var miniCoverEnabled by remember { mutableStateOf(AppPreferences.UI.isMiniCoverEnabled) }
     var playPageMemoryEnabled by remember { mutableStateOf(AppPreferences.UI.isPlayPageMemoryEnabled) }
@@ -210,6 +230,29 @@ fun LiquidGlassPlayerInterfaceScreen(
                 onClick = { persistAudioVisualizerParticleColorMode(1) },
             ),
         ),
+    )
+
+    fun notifyVisualizerChanged() {
+        android.content.Intent("com.rawsmusic.action.AUDIO_VISUALIZER_SETTING_CHANGED").also {
+            it.setPackage(context.packageName)
+            context.sendBroadcast(it)
+        }
+    }
+
+    val visualizerColorSchemes = remember { VisualizerColorScheme.entries }
+    val visualizerColorSchemeLabels = visualizerColorSchemes.associate { it.id to stringResource(it.titleRes) }
+    val visualizerColorSchemeEntry = DropdownEntry(
+        items = visualizerColorSchemes.map { scheme ->
+            DropdownItem(
+                text = visualizerColorSchemeLabels[scheme.id] ?: scheme.id,
+                selected = visualizerColorSchemeId == scheme.id,
+                onClick = {
+                    visualizerColorSchemeId = scheme.id
+                    AppPreferences.UI.Visualizer.colorSchemeId = scheme.id
+                    notifyVisualizerChanged()
+                },
+            )
+        },
     )
 
     val hiResCornerLabels = mapOf(
@@ -493,6 +536,110 @@ fun LiquidGlassPlayerInterfaceScreen(
                 title = stringResource(R.string.settings_player_visualizer_haptics),
                 description = stringResource(R.string.settings_player_visualizer_haptics_desc),
             )
+            if (audioVisualizerEnabled) {
+                VisualizerPreviewCard(
+                    style = AudioVisualizerStyle.from(AppPreferences.UI.audioVisualizerStyle),
+                    colorSchemeId = visualizerColorSchemeId,
+                    singleColor = visualizerSingleColor,
+                    barWidthDp = visualizerBarWidth,
+                    borderWidthDp = visualizerBorderWidth,
+                    borderOnly = visualizerBorderOnly,
+                    peakDecay = visualizerPeakDecay,
+                )
+                SettingsInfoEntry(
+                    title = stringResource(R.string.settings_visualizer_preview_title),
+                    description = stringResource(R.string.settings_visualizer_parameters_summary),
+                )
+                RawWindowDropdownPreference(
+                    entry = visualizerColorSchemeEntry,
+                    title = stringResource(R.string.settings_visualizer_color_scheme_title),
+                    summary = visualizerColorSchemeLabels[visualizerColorSchemeId] ?: visualizerColorSchemeId,
+                    showValue = true,
+                    maxHeight = 260.dp,
+                    collapseOnSelection = true,
+                )
+                SwitchRow(
+                    stringResource(R.string.settings_visualizer_single_color),
+                    visualizerSingleColor,
+                ) { checked ->
+                    visualizerSingleColor = checked
+                    AppPreferences.UI.Visualizer.singleColor = checked
+                    notifyVisualizerChanged()
+                }
+                SettingsInfoEntry(
+                    title = stringResource(R.string.settings_visualizer_single_color),
+                    description = stringResource(R.string.settings_visualizer_single_color_summary),
+                )
+                VisualizerSliderRow(
+                    title = stringResource(R.string.settings_visualizer_bar_width),
+                    value = visualizerBarWidth,
+                    valueRange = 2.0f..14.0f,
+                    valueDisplay = "%.1f dp".format(visualizerBarWidth),
+                    onValueChange = {
+                        visualizerBarWidth = it
+                        AppPreferences.UI.Visualizer.barWidthDp = it
+                        notifyVisualizerChanged()
+                    },
+                )
+                VisualizerSliderRow(
+                    title = stringResource(R.string.settings_visualizer_bar_alpha),
+                    value = visualizerBarAlpha,
+                    valueRange = 0.10f..1.0f,
+                    valueDisplay = "${(visualizerBarAlpha * 100).toInt()}%",
+                    onValueChange = {
+                        visualizerBarAlpha = it
+                        AppPreferences.UI.Visualizer.barAlpha = it
+                        notifyVisualizerChanged()
+                    },
+                )
+                VisualizerSliderRow(
+                    title = stringResource(R.string.settings_visualizer_border_width),
+                    value = visualizerBorderWidth,
+                    valueRange = 0.0f..4.0f,
+                    valueDisplay = if (visualizerBorderWidth <= 0.05f) "0 dp" else "%.1f dp".format(visualizerBorderWidth),
+                    onValueChange = {
+                        visualizerBorderWidth = it
+                        AppPreferences.UI.Visualizer.borderWidthDp = it
+                        notifyVisualizerChanged()
+                    },
+                )
+                SwitchRow(
+                    stringResource(R.string.settings_visualizer_border_only),
+                    visualizerBorderOnly,
+                ) { checked ->
+                    visualizerBorderOnly = checked
+                    AppPreferences.UI.Visualizer.borderOnly = checked
+                    notifyVisualizerChanged()
+                }
+                SettingsInfoEntry(
+                    title = stringResource(R.string.settings_visualizer_border_only),
+                    description = stringResource(R.string.settings_visualizer_border_only_summary),
+                )
+                SwitchRow(
+                    stringResource(R.string.settings_visualizer_peak_decay),
+                    visualizerPeakDecay,
+                ) { checked ->
+                    visualizerPeakDecay = checked
+                    AppPreferences.UI.Visualizer.peakDecayEnabled = checked
+                    notifyVisualizerChanged()
+                }
+                SettingsInfoEntry(
+                    title = stringResource(R.string.settings_visualizer_peak_decay),
+                    description = stringResource(R.string.settings_visualizer_peak_decay_summary),
+                )
+                SwitchRow(
+                    stringResource(R.string.settings_visualizer_maximized_title),
+                    visualizerMaximized,
+                ) { checked ->
+                    visualizerMaximized = checked
+                    AppPreferences.UI.Visualizer.isMaximized = checked
+                    notifyVisualizerChanged()
+                }
+                SettingsInfoEntry(
+                    title = stringResource(R.string.settings_visualizer_maximized_title),
+                    description = stringResource(R.string.settings_visualizer_maximized_summary),
+                )
+            }
             RawWindowDropdownPreference(
                 entry = playerTitleAlignmentEntry,
                 title = stringResource(R.string.settings_player_title_alignment),
@@ -758,3 +905,88 @@ private fun PlayerHiResBadgeSizeSlider(
         )
     }
 }
+
+@Composable
+private fun VisualizerSliderRow(
+    title: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    valueDisplay: String,
+    onValueChange: (Float) -> Unit,
+) {
+    val safeValue = value.coerceIn(valueRange.start, valueRange.endInclusive)
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = valueDisplay,
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        Slider(
+            value = safeValue,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun VisualizerPreviewCard(
+    style: AudioVisualizerStyle,
+    colorSchemeId: String,
+    singleColor: Boolean,
+    barWidthDp: Float,
+    borderWidthDp: Float,
+    borderOnly: Boolean,
+    peakDecay: Boolean,
+) {
+    var frameTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos {
+                frameTick++
+            }
+        }
+    }
+    val sampleSpectrum = remember(frameTick) {
+        val t = frameTick * 0.04f
+        FloatArray(112) { i ->
+            val w1 = kotlin.math.sin(i * 0.14f + t) * 0.35f
+            val w2 = kotlin.math.cos(i * 0.07f - t * 0.6f) * 0.25f
+            (0.38f + w1 + w2).toFloat().coerceIn(0.06f, 0.94f)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(110.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF141416)),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        SharedRealtimeVisualizerOverlay(
+            style = style,
+            spectrum = sampleSpectrum,
+            visible = true,
+            isPlaying = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(110.dp),
+        )
+    }
+}
+

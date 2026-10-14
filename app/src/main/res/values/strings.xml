@@ -363,6 +363,23 @@
     <string name="settings_player_visualizer_particle_color_desc">Choose the palette used by background visualizer effects. Rainbow maps low to high frequencies across a hue spectrum.</string>
     <string name="settings_player_visualizer_particle_color_white">White</string>
     <string name="settings_player_visualizer_particle_color_rainbow">Rainbow</string>
+    <string name="settings_visualizer_parameters_title">Visualizer Parameters</string>
+    <string name="settings_visualizer_parameters_summary">Adjust spectrum colors, dimensions, borders, and animations</string>
+    <string name="settings_visualizer_preview_title">Realtime Preview</string>
+    <string name="settings_visualizer_color_scheme_title">Color Scheme</string>
+    <string name="settings_visualizer_single_color">Single Color Mode</string>
+    <string name="settings_visualizer_single_color_summary">Render the spectrum using a uniform color instead of a gradient</string>
+    <string name="settings_visualizer_bar_width">Bar Width</string>
+    <string name="settings_visualizer_bar_alpha">Bar Opacity</string>
+    <string name="settings_visualizer_border_width">Border Width</string>
+    <string name="settings_visualizer_border_alpha">Border Opacity</string>
+    <string name="settings_visualizer_border_only">Wireframe Only</string>
+    <string name="settings_visualizer_border_only_summary">Render bar outlines without inner fill</string>
+    <string name="settings_visualizer_peak_decay">Peak Decay</string>
+    <string name="settings_visualizer_peak_decay_summary">Show falling peak indicators on top of spectrum bars</string>
+    <string name="settings_visualizer_maximized_title">Fullscreen Visualizer</string>
+    <string name="settings_visualizer_maximized_summary">Expand visualizer to full screen in the player page</string>
+    <string name="settings_visualizer_maximized_tap_exit_hint">Tap anywhere to exit fullscreen</string>
     <string name="settings_audio_info_capsule_section">Audio information capsule</string>
     <string name="settings_audio_info_capsule_visible">Show audio information capsule</string>
     <string name="settings_audio_info_capsule_visible_summary">Hide the capsule completely without reserving playback-screen spacing. Tap and long-press behavior stays unchanged.</string>
@@ -2609,6 +2626,16 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="cloud_sync_state_restoring">Restoring…</string>
     <string name="cloud_sync_state_clearing">Clearing…</string>
     <string name="cloud_sync_action_cancel">Cancel</string>
+    <string name="cloud_sync_section_sources">Music Sources</string>
+    <string name="cloud_sync_action_source_upload">Upload Sources</string>
+    <string name="cloud_sync_action_source_restore">Download Sources</string>
+    <string name="cloud_sync_source_uploaded">Uploaded %1$d sources</string>
+    <string name="cloud_sync_source_upload_failed">Source upload failed: %1$s</string>
+    <string name="cloud_sync_source_restored">Restored %1$d sources</string>
+    <string name="cloud_sync_source_restore_failed">Source restore failed: %1$s</string>
+    <string name="cloud_sync_source_empty">No source backup in the cloud yet</string>
+    <string name="cloud_sync_state_source_uploading">Uploading sources…</string>
+    <string name="cloud_sync_state_source_restoring">Restoring sources…</string>
 
     <!-- Playlist Transfer (Export / Import) -->
     <string name="playlist_export_title">Export Playlist</string>
