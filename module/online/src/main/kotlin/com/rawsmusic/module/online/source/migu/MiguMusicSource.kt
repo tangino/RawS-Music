@@ -45,6 +45,17 @@ class MiguMusicSource(
         JSONObject(bodyStr)
     }
 
+    private fun parseMiguIsVip(sObj: JSONObject): Boolean {
+        val vipType = sObj.optString("vipType", "")
+        val vipFlag = sObj.optString("vipFlag", "")
+        val chargeAuditions = sObj.optString("chargeAuditions", "")
+        val chargeType = sObj.optInt("chargeType", 0)
+        val feeType = sObj.optInt("feeType", 0)
+        val price = sObj.optInt("price", 0)
+        return vipType == "1" || vipType == "2" || sObj.optInt("vipType", 0) > 0 ||
+                vipFlag == "1" || chargeAuditions == "1" || chargeType > 0 || feeType > 0 || price > 0
+    }
+
     override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
         listOf(
             OnlinePlaylistTag("全部", "全部", "默认"),
@@ -147,7 +158,9 @@ class MiguMusicSource(
                             creatorName = metaObj.optString("ownerName").ifEmpty { creatorName }
                             creatorAvatarUrl = metaObj.optString("ownerPic").takeIf { it.isNotBlank() }
                             val imgObj = metaObj.optJSONObject("imgItem")
-                            coverUrl = imgObj?.optString("img") ?: metaObj.optString("originalImgUrl")
+                            val rawCover = imgObj?.optString("img")
+                                ?: metaObj.optString("originalImgUrl").ifEmpty { metaObj.optString("pic") }
+                            coverUrl = formatMiguImg(rawCover)
 
                             val opNumObj = metaObj.optJSONObject("opNumItem")
                             playCount = opNumObj?.optString("playNum")?.toLongOrNull()
@@ -203,9 +216,7 @@ class MiguMusicSource(
                                         album = album,
                                         durationMs = durationMs,
                                         coverUrl = songCover,
-                                        isVip = sObj.optInt("vipType", 0) > 0 ||
-                                                sObj.optString("vipFlag") == "1" ||
-                                                sObj.optString("chargeAuditions") == "1"
+                                        isVip = parseMiguIsVip(sObj)
                                     )
                                 )
                             }
@@ -218,11 +229,12 @@ class MiguMusicSource(
                     }
 
                     if (songs.isNotEmpty()) {
+                        val finalCover = coverUrl.ifEmpty { songs.firstOrNull { !it.coverUrl.isNullOrEmpty() }?.coverUrl ?: "" }
                         val playlist = OnlinePlaylist(
                             id = playlistId,
                             platform = platform,
                             title = title,
-                            coverUrl = coverUrl.ifEmpty { songs.firstOrNull()?.coverUrl ?: "" },
+                            coverUrl = finalCover,
                             playCount = if (playCount > 0) playCount else 100000L,
                             trackCount = if (expectedTotalCount > 0) expectedTotalCount else songs.size,
                             creatorName = creatorName,
@@ -288,7 +300,7 @@ class MiguMusicSource(
                             albumId = albumId.takeIf { it.isNotBlank() && it != "0" },
                             durationMs = durationMs,
                             coverUrl = cover,
-                            isVip = obj.optString("vipType") == "1" || obj.optString("chargeAuditions") == "1"
+                            isVip = parseMiguIsVip(obj)
                         )
                     )
                 }
@@ -474,7 +486,11 @@ class MiguMusicSource(
                 val obj = listArr.optJSONObject(i) ?: continue
                 val id = obj.optString("id").ifEmpty { obj.optString("musicListId") }
                 val title = obj.optString("name").ifEmpty { obj.optString("title") }
-                val cover = obj.optString("musicListPicUrl").ifEmpty { obj.optString("img") }
+                val rawCover = obj.optString("musicListPicUrl")
+                    .ifEmpty { obj.optString("img") }
+                    .ifEmpty { obj.optString("pic") }
+                    .ifEmpty { obj.optString("cover") }
+                val cover = formatMiguImg(rawCover)
                 val playCount = obj.optString("playNum").toLongOrNull()
                     ?: obj.optLong("playNum", 0L)
                 val trackCount = obj.optString("musicNum").toIntOrNull()
@@ -564,7 +580,7 @@ class MiguMusicSource(
                         albumId = albumId,
                         durationMs = durationMs,
                         coverUrl = songCover,
-                        isVip = obj.optString("vipType") == "1"
+                        isVip = parseMiguIsVip(obj)
                     )
                 )
             }

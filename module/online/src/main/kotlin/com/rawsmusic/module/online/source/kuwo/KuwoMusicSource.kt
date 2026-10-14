@@ -56,6 +56,29 @@ class KuwoMusicSource(
         }
     }
 
+    private fun parseKuwoIsVip(sObj: JSONObject): Boolean {
+        val pay = sObj.optString("pay", "")
+        if (pay.isNotEmpty() && pay != "0" && pay != "false") return true
+        if (sObj.optInt("is_listen_fee", 0) == 1) return true
+        if (sObj.optInt("feeType", 0) > 0) return true
+        if (sObj.optInt("isvip", sObj.optInt("is_vip", 0)) == 1) return true
+        val payInfo = sObj.optJSONObject("payInfo")
+        if (payInfo != null) {
+            val listen = payInfo.optInt("listen", 0)
+            val fee = payInfo.optInt("fee", 0)
+            if (listen > 0 || fee > 0) return true
+        }
+        return false
+    }
+
+    private fun formatKuwoImg(url: String): String {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.startsWith("//")) return "https:$trimmed"
+        if (trimmed.startsWith("http://")) return "https://${trimmed.removePrefix("http://")}"
+        return trimmed
+    }
+
     override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
         listOf(
             OnlinePlaylistTag("全部", "全部", "默认"),
@@ -101,7 +124,7 @@ class KuwoMusicSource(
                     val obj = dataArr.optJSONObject(i) ?: continue
                     val id = obj.optString("id")
                     val title = obj.optString("name")
-                    val cover = obj.optString("img").ifEmpty { obj.optString("pic") }
+                    val cover = formatKuwoImg(obj.optString("img").ifEmpty { obj.optString("pic").ifEmpty { obj.optString("hts_pic") } })
                     val playCount = obj.optLong("listencnt", obj.optLong("total", 0L))
                     val trackCount = obj.optInt("total", 0)
 
@@ -218,7 +241,7 @@ class KuwoMusicSource(
 
                     if (currentPage == 0) {
                         title = root.optString("title").ifEmpty { root.optString("name").ifEmpty { title } }
-                        coverUrl = root.optString("pic").ifEmpty { root.optString("hts_pic") }
+                        coverUrl = formatKuwoImg(root.optString("pic").ifEmpty { root.optString("hts_pic").ifEmpty { root.optString("img") } })
                         creatorName = root.optString("uname").ifEmpty { root.optString("nickname").ifEmpty { creatorName } }
                         playCount = root.optLong("playnum", root.optLong("playcnt", 0L))
                         description = root.optString("info").ifEmpty { root.optString("intro") }
@@ -239,7 +262,8 @@ class KuwoMusicSource(
                         val artist = sObj.optString("artist").ifEmpty { sObj.optString("singer") }
                         val album = sObj.optString("album")
                         val duration = sObj.optLong("duration", sObj.optLong("song_duration", 0L)) * 1000L
-                        val pic = sObj.optString("pic").ifEmpty { sObj.optString("pic120") }.ifEmpty { sObj.optString("albumpic") }
+                        val rawPic = sObj.optString("pic").ifEmpty { sObj.optString("pic120") }.ifEmpty { sObj.optString("albumpic") }
+                        val pic = formatKuwoImg(rawPic)
 
                         if (id.isNotEmpty() && name.isNotEmpty() && songs.none { it.id == id }) {
                             songs.add(
@@ -251,7 +275,7 @@ class KuwoMusicSource(
                                     album = album.ifEmpty { "单曲" },
                                     durationMs = duration,
                                     coverUrl = pic.ifEmpty { coverUrl },
-                                    isVip = sObj.optString("pay").isNotEmpty() && sObj.optString("pay") != "0"
+                                    isVip = parseKuwoIsVip(sObj)
                                 )
                             )
                         }
@@ -355,7 +379,7 @@ class KuwoMusicSource(
                             albumId = albumId.takeIf { it.isNotBlank() && it != "0" },
                             durationMs = duration,
                             coverUrl = pic,
-                            isVip = obj.optString("pay").isNotEmpty() && obj.optString("pay") != "0"
+                            isVip = parseKuwoIsVip(obj)
                         )
                     )
                 }
@@ -408,7 +432,7 @@ class KuwoMusicSource(
                                 album = album.ifEmpty { "热歌" },
                                 durationMs = duration,
                                 coverUrl = coverUrl,
-                                isVip = sObj.optString("pay").isNotEmpty() && sObj.optString("pay") != "0"
+                                isVip = parseKuwoIsVip(sObj)
                             )
                         )
                     }
@@ -533,7 +557,7 @@ class KuwoMusicSource(
                         albumId = albumId,
                         durationMs = duration,
                         coverUrl = pic,
-                        isVip = obj.optString("pay").isNotEmpty() && obj.optString("pay") != "0"
+                        isVip = parseKuwoIsVip(obj)
                     )
                 )
             }

@@ -2160,7 +2160,8 @@ object BitmapProvider {
                 aspectPolicy = aspectPolicy,
             ) ?: when {
                 decodeKey.startsWith("https://", ignoreCase = true) ||
-                    decodeKey.startsWith("http://", ignoreCase = true) -> {
+                    decodeKey.startsWith("http://", ignoreCase = true) ||
+                    decodeKey.startsWith("//") -> {
                     if (ArtworkSourceSelectionPolicy.isAudioArtworkKey(decodeKey)) {
                         decodeRemoteAudioArtwork(
                             storageKey = storageKey,
@@ -2341,19 +2342,57 @@ object BitmapProvider {
         if (!sourceFile.isFile || sourceFile.length() <= 0L) {
             val temp = File(sourceDir, "${sourceFile.name}.tmp-${Thread.currentThread().id}")
             val downloaded = runCatching {
-                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 8_000
-                    readTimeout = 12_000
-                    instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "RawSMusic")
+                var currentUrl = if (url.startsWith("//")) "https:$url" else url
+                var redirects = 0
+                var connection: HttpURLConnection? = null
+                var code = 0
+                while (redirects < 5) {
+                    val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 10_000
+                        readTimeout = 15_000
+                        instanceFollowRedirects = false // 手动处理跨协议与CDN跳转
+                        setRequestProperty(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                        )
+                        setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                        if (currentUrl.contains("qq.com") || currentUrl.contains("gtimg.cn")) {
+                            setRequestProperty("Referer", "https://y.qq.com/")
+                        } else if (currentUrl.contains("163.com") || currentUrl.contains("126.net")) {
+                            setRequestProperty("Referer", "https://music.163.com/")
+                        } else if (currentUrl.contains("kugou.com")) {
+                            setRequestProperty("Referer", "http://m.kugou.com/")
+                        } else if (currentUrl.contains("kuwo.cn")) {
+                            setRequestProperty("Referer", "http://www.kuwo.cn/")
+                        } else if (currentUrl.contains("migu.cn")) {
+                            setRequestProperty("Referer", "https://m.music.migu.cn/")
+                        }
+                    }
+                    code = conn.responseCode
+                    if (code in 300..399) {
+                        val location = conn.getHeaderField("Location")
+                        conn.disconnect()
+                        if (location.isNullOrBlank()) break
+                        currentUrl = if (location.startsWith("//")) {
+                            "https:$location"
+                        } else if (location.startsWith("http")) {
+                            location
+                        } else {
+                            URL(URL(currentUrl), location).toString()
+                        }
+                        redirects++
+                        continue
+                    }
+                    connection = conn
+                    break
                 }
+                val finalConn = connection ?: return@runCatching false
                 try {
-                    val code = connection.responseCode
                     if (code !in 200..299) return@runCatching false
-                    val declaredLength = connection.contentLengthLong
+                    val declaredLength = finalConn.contentLengthLong
                     if (declaredLength > REMOTE_SOURCE_MAX_BYTES) return@runCatching false
                     var copied = 0L
-                    connection.inputStream.use { input ->
+                    finalConn.inputStream.use { input ->
                         temp.outputStream().buffered().use { output ->
                             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                             while (true) {
@@ -2369,7 +2408,7 @@ object BitmapProvider {
                     if (!temp.renameTo(sourceFile) && !sourceFile.isFile) return@runCatching false
                     true
                 } finally {
-                    connection.disconnect()
+                    finalConn.disconnect()
                     if (temp.exists() && sourceFile.exists()) temp.delete()
                 }
             }.getOrElse {

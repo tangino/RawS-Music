@@ -196,8 +196,24 @@ fun AppMainLayout(
             }
     }
     val configuredTabTags by PersonalizationPreferences.bottomNavigationSceneTags.collectAsState()
-    val tabScenes = remember(configuredTabTags) {
-        resolveBottomNavigationScenes(configuredTabTags)
+    val isOnlineMusicActive by remember {
+        derivedStateOf {
+            navState.currentScene == NavScene.ONLINE_MUSIC ||
+                navState.currentScene == NavScene.ONLINE_PLAYLIST_DETAIL
+        }
+    }
+    LaunchedEffect(isOnlineMusicActive) {
+        if (!isOnlineMusicActive) {
+            OnlinePortalTabManager.dismiss()
+        }
+    }
+    val tabScenes = remember(configuredTabTags, isOnlineMusicActive) {
+        val configured = resolveBottomNavigationScenes(configuredTabTags)
+        if (isOnlineMusicActive && NavScene.ONLINE_MUSIC !in configured) {
+            configured + NavScene.ONLINE_MUSIC
+        } else {
+            configured
+        }
     }
 
     val selectedTabIndex by remember(tabScenes) {
@@ -668,6 +684,15 @@ fun AppMainLayout(
                                     } else if (targetScene == NavScene.AUDIO_EFFECTS) {
                                         onAudioEffectsClick?.invoke()
                                             ?: navState.navigateFromBottomNavigation(targetScene)
+                                    } else if (targetScene == NavScene.ONLINE_MUSIC) {
+                                        if (navState.currentScene == NavScene.ONLINE_MUSIC) {
+                                            OnlinePortalTabManager.toggleExpanded()
+                                        } else if (navState.currentScene == NavScene.ONLINE_PLAYLIST_DETAIL) {
+                                            navState.navigateFromBottomNavigation(targetScene)
+                                            OnlinePortalTabManager.isExpanded = true
+                                        } else {
+                                            navState.navigateFromBottomNavigation(targetScene)
+                                        }
                                     } else if (navState.currentScene.bottomNavigationRoot() != targetScene) {
                                         navState.navigateFromBottomNavigation(targetScene)
                                     }
@@ -737,6 +762,19 @@ fun AppMainLayout(
                                         .graphicsLayer {
                                             alpha = bottomChromeVisibilityAlpha.value.coerceIn(0f, 1f)
                                         },
+                                )
+
+                                OnlineMusicPortalExpandMenu(
+                                    visible = isOnlineMusicActive && OnlinePortalTabManager.isExpanded,
+                                    currentTab = OnlinePortalTabManager.currentTab,
+                                    onSelectTab = { tab ->
+                                        OnlinePortalTabManager.selectTab(tab)
+                                    },
+                                    onDismiss = {
+                                        OnlinePortalTabManager.dismiss()
+                                    },
+                                    bottomOffset = bottomChromeEnvironment.insets.contentBottom,
+                                    modifier = Modifier.align(Alignment.BottomCenter),
                                 )
 
                             MiniPlayerQueueDialog(

@@ -33,7 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.ui.R
-import com.rawsmusic.core.ui.systemui.rawStableNavigationBarsPadding
+import com.rawsmusic.core.ui.scene.LocalBottomChromeInsets
+import com.rawsmusic.core.ui.scene.OnlinePortalTab
+import com.rawsmusic.core.ui.scene.OnlinePortalTabManager
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
@@ -45,28 +47,10 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 
 /**
- * 在线音乐门户的四个板块。
+ * 在线音乐门户。
  *
- * 这是**新功能**，用自定义枚举而非复用音源的 `SourcePortalTab`（那是音源专用枚举）。
- */
-internal enum class OnlinePortalTab(
-    @StringRes val labelRes: Int,
-    @DrawableRes val iconRes: Int,
-) {
-    Plaza(R.string.online_tab_plaza, R.drawable.ic_online_plaza),
-    Artists(R.string.online_tab_artists, R.drawable.ic_online_artist),
-    Search(R.string.online_tab_search, R.drawable.ic_online_search),
-    Favorites(R.string.online_tab_favorites, R.drawable.ic_online_favorite),
-}
-
-/**
- * 在线音乐门户（P1-13 只做外壳：标题栏 + 平台切换 + 二级 tab）。
- *
- * **与 `SourceImportPage` 的有意差异**：那个门户背后是一整套音源专用机制
- * （`SourcePortalChrome` / `SourcePortalTab` / `SourcePortalNavigationState` /
- * `SourcePortalPredictiveBack` / 路由转场，合计 1000+ 行）。这里只复用通用能力，
- * 用自定义 tab 枚举 + `rememberSaveable` 承载选中态，避免为第二个门户复制整套专用机制。
- * 若后续确实需要 tab 级转场与预测性返回的同等打磨，应把该机制泛化而不是复制。
+ * 底部导航已接入全局 BottomChrome 动态选项与向上展开菜单，
+ * 避免页面内部底栏与主程序底栏产生重叠覆盖。
  */
 @Composable
 fun OnlineMusicPortalPage(
@@ -78,7 +62,7 @@ fun OnlineMusicPortalPage(
     val repository = OnlineMusicRepository.getInstance()
     val currentPlatform by repository.currentPlatform.collectAsState()
 
-    var selectedTab by rememberSaveable { mutableStateOf(OnlinePortalTab.Plaza) }
+    val selectedTab = OnlinePortalTabManager.currentTab
 
     Column(
         modifier = modifier
@@ -109,19 +93,11 @@ fun OnlineMusicPortalPage(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .padding(bottom = LocalBottomChromeInsets.current.contentBottom),
         ) {
             OnlinePortalBody(selectedTab, onOpenPlaylist)
         }
-
-        OnlinePortalBottomBar(
-            selectedTab = selectedTab,
-            onSelect = { selectedTab = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .rawStableNavigationBarsPadding(),
-        )
     }
 }
 
@@ -174,55 +150,5 @@ private fun OnlinePortalBody(
         OnlinePortalTab.Artists -> OnlineArtistTab(modifier = Modifier.fillMaxSize())
         OnlinePortalTab.Search -> OnlineSearchTab(modifier = Modifier.fillMaxSize())
         OnlinePortalTab.Favorites -> OnlineFavoritesTab(modifier = Modifier.fillMaxSize())
-    }
-}
-
-/**
- * 二级 tab 栏。
- *
- * 用与 `SourcePortalBottomNavigation` 无毛玻璃分支一致的做法（圆角胶囊 + 选中态底色），
- * 因为着色规则相同、且不依赖 Backdrop。
- */
-@Composable
-private fun OnlinePortalBottomBar(
-    selectedTab: OnlinePortalTab,
-    onSelect: (OnlinePortalTab) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = themeColors()
-    Row(
-        modifier = modifier
-            .height(64.dp)
-            .clip(RoundedCornerShape(32.dp))
-            .background(colors.surface)
-            .padding(4.dp),
-    ) {
-        OnlinePortalTab.entries.forEach { tab ->
-            val isSelected = tab == selectedTab
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable { onSelect(tab) },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    painter = painterResource(tab.iconRes),
-                    contentDescription = stringResource(tab.labelRes),
-                    tint = if (isSelected) colors.primary else colors.onSurface,
-                    modifier = Modifier.size(21.dp),
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = stringResource(tab.labelRes),
-                    color = if (isSelected) colors.primary else colors.onSurface,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
     }
 }

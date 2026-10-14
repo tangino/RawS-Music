@@ -2,6 +2,7 @@ package com.rawsmusic.core.ui.scene.pages
 
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,6 +59,8 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Folder
+import top.yukonga.miuix.kmp.icon.extended.Music
 
 private const val ARGUMENT_SEPARATOR = "|"
 
@@ -237,15 +240,30 @@ private fun OnlineDetailHeader(
     val colors = themeColors()
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            BitmapImage(
-                key = playlist.coverUrl,
-                contentDescription = playlist.title,
+            Box(
                 modifier = Modifier
                     .size(112.dp)
-                    .clip(RoundedCornerShape(14.dp)),
-                targetWidth = 256,
-                targetHeight = 256,
-            )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.surface),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (playlist.coverUrl.isNotBlank()) {
+                    BitmapImage(
+                        key = playlist.coverUrl,
+                        contentDescription = playlist.title,
+                        modifier = Modifier.fillMaxSize(),
+                        targetWidth = 256,
+                        targetHeight = 256,
+                    )
+                } else {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Folder,
+                        contentDescription = null,
+                        tint = colors.secondaryText.copy(alpha = 0.5f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -324,19 +342,72 @@ private fun OnlineDetailSongRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = index.toString(),
+            text = index.toString().padStart(2, '0'),
             color = colors.secondaryText,
             fontSize = 12.sp,
-            modifier = Modifier.width(24.dp),
+            modifier = Modifier.width(26.dp),
         )
+        Spacer(Modifier.width(4.dp))
+        val cover = song.coverUrl
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!cover.isNullOrBlank()) {
+                BitmapImage(
+                    key = cover,
+                    contentDescription = song.title,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                    targetWidth = 128,
+                    targetHeight = 128,
+                )
+            } else {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Music,
+                    contentDescription = null,
+                    tint = colors.secondaryText.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = song.title,
-                color = colors.onSurface,
-                fontSize = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = song.title,
+                    color = colors.onSurface,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (song.isVip) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = Color(0xFFFF5252).copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .border(
+                                width = 0.8.dp,
+                                color = Color(0xFFFF5252),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "VIP",
+                            color = Color(0xFFFF5252),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(2.dp))
             Text(
                 text = listOf(song.artist, song.album)

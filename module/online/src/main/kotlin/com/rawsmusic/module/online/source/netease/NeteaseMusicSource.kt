@@ -160,10 +160,7 @@ class NeteaseMusicSource(
             val item = listArr.optJSONObject(i) ?: continue
             val id = item.optLong("id").toString()
             val name = item.optString("name")
-            var cover = item.optString("coverImgUrl")
-            if (cover.isNotEmpty() && !cover.contains("?param=")) {
-                cover = "$cover?param=300y300"
-            }
+            val cover = formatNeteaseImg(item.optString("coverImgUrl"), 300)
             val updateFreq = item.optString("updateFrequency")
             val tracks = item.optJSONArray("tracks")
             val previews = mutableListOf<String>()
@@ -199,15 +196,12 @@ class NeteaseMusicSource(
 
         val id = playlistObj.optLong("id").toString()
         val title = playlistObj.optString("name")
-        var cover = playlistObj.optString("coverImgUrl")
-        if (cover.isNotEmpty() && !cover.contains("?param=")) {
-            cover = "$cover?param=500y500"
-        }
+        val cover = formatNeteaseImg(playlistObj.optString("coverImgUrl").ifEmpty { playlistObj.optString("picUrl") }, 500)
         val playCount = playlistObj.optLong("playCount")
         val trackCount = playlistObj.optInt("trackCount")
         val creatorObj = playlistObj.optJSONObject("creator")
         val creatorName = creatorObj?.optString("nickname")
-        val creatorAvatar = creatorObj?.optString("avatarUrl")
+        val creatorAvatar = formatNeteaseImg(creatorObj?.optString("avatarUrl") ?: "", 200).takeIf { it.isNotEmpty() }
         val desc = playlistObj.optString("description")
 
         val playlist = OnlinePlaylist(
@@ -262,7 +256,8 @@ class NeteaseMusicSource(
             emptyList()
         }
 
-        Pair(playlist, songs)
+        val finalCover = if (cover.isNotEmpty()) cover else songs.firstOrNull { !it.coverUrl.isNullOrEmpty() }?.coverUrl ?: ""
+        Pair(playlist.copy(coverUrl = finalCover), songs)
     }
 
     /**
@@ -304,8 +299,8 @@ class NeteaseMusicSource(
 
         val songName = trackObj.optString("name").ifEmpty { trackObj.optString("title") }
         val dt = trackObj.optLong("dt").let { if (it > 0) it else trackObj.optLong("duration") }
-        val fee = trackObj.optInt("fee") // 1: vip, 4: 购买专辑等
-        val isVip = fee == 1 || fee == 4
+        val fee = trackObj.optInt("fee") // 1: vip, 4: 购买专辑等, 8: 需付费/高品质VIP
+        val isVip = fee == 1 || fee == 4 || fee == 8 || trackObj.optInt("charge", 0) > 0
 
         // 艺术家: ar 或 artists
         val arArr = trackObj.optJSONArray("ar") ?: trackObj.optJSONArray("artists")
@@ -352,6 +347,21 @@ class NeteaseMusicSource(
         )
     }
 
+    private fun formatNeteaseImg(url: String, size: Int = 300): String {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return ""
+        val fullUrl = when {
+            trimmed.startsWith("//") -> "https:$trimmed"
+            trimmed.startsWith("http://") -> "https://" + trimmed.removePrefix("http://")
+            else -> trimmed
+        }
+        return if (!fullUrl.contains("?param=")) {
+            "$fullUrl?param=${size}y${size}"
+        } else {
+            fullUrl
+        }
+    }
+
     override suspend fun searchPlaylists(keyword: String, page: Int, pageSize: Int): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         val offset = (page - 1) * pageSize
         val formBody = FormBody.Builder()
@@ -371,10 +381,10 @@ class NeteaseMusicSource(
             val item = playlistsArr.optJSONObject(i) ?: continue
             val id = item.optLong("id").toString()
             val name = item.optString("name")
-            var cover = item.optString("coverImgUrl")
-            if (cover.isNotEmpty() && !cover.contains("?param=")) {
-                cover = "$cover?param=300y300"
-            }
+            val rawCover = item.optString("coverImgUrl")
+                .ifEmpty { item.optString("picUrl") }
+                .ifEmpty { item.optString("cover") }
+            val cover = formatNeteaseImg(rawCover, 300)
             val playCount = item.optLong("playCount")
             val trackCount = item.optInt("trackCount")
             val creatorObj = item.optJSONObject("creator")
@@ -664,7 +674,7 @@ class NeteaseMusicSource(
                             album = albumTitle,
                             durationMs = dt,
                             coverUrl = pic,
-                            isVip = fee == 1 || fee == 4
+                            isVip = fee == 1 || fee == 4 || fee == 8 || sObj.optInt("charge", 0) > 0
                         )
                     )
                 }
@@ -742,7 +752,7 @@ class NeteaseMusicSource(
                     album = albumTitle,
                     durationMs = dt,
                     coverUrl = pic,
-                    isVip = fee == 1 || fee == 4
+                    isVip = fee == 1 || fee == 4 || fee == 8 || sObj.optInt("charge", 0) > 0
                 )
             )
         }
@@ -856,7 +866,7 @@ class NeteaseMusicSource(
                         album = title,
                         durationMs = dt,
                         coverUrl = cover,
-                        isVip = fee == 1 || fee == 4
+                        isVip = fee == 1 || fee == 4 || fee == 8 || sObj.optInt("charge", 0) > 0
                     )
                 )
             }

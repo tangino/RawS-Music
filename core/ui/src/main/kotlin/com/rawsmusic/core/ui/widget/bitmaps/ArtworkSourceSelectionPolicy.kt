@@ -37,6 +37,14 @@ internal object ArtworkSourceSelectionPolicy {
 
     fun isAudioArtworkKey(key: String): Boolean {
         if (key.startsWith("audio://")) return true
+        val lower = key.lowercase()
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") ||
+            lower.endsWith(".webp") || lower.endsWith(".bmp") || lower.endsWith(".gif") ||
+            lower.contains(".jpg?") || lower.contains(".jpeg?") || lower.contains(".png?") ||
+            lower.contains(".webp?") || lower.contains("photo_new") || lower.contains("cover")
+        ) {
+            return false
+        }
         val raw = when {
             key.startsWith("file://") -> key.removePrefix("file://")
             else -> key

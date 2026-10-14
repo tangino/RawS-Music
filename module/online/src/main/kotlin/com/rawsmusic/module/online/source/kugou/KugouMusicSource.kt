@@ -58,6 +58,21 @@ class KugouMusicSource(
         JSONObject(bodyStr)
     }
 
+    private fun formatKugouImg(url: String): String {
+        var trimmed = url.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.contains("{size}")) {
+            trimmed = trimmed.replace("{size}", "400")
+        }
+        if (trimmed.startsWith("//")) {
+            return "https:$trimmed"
+        }
+        if (trimmed.startsWith("http://")) {
+            return "https://${trimmed.removePrefix("http://")}"
+        }
+        return trimmed
+    }
+
     override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
         try {
             val root = getApi("http://mobilecdnbj.kugou.com/api/v5/tag/list?pid=0&apiver=55&showtype=3")
@@ -126,10 +141,14 @@ class KugouMusicSource(
                 val obj = infoArr.optJSONObject(i) ?: continue
                 val id = obj.optString("specialid")
                 val title = obj.optString("specialname")
-                var coverUrl = obj.optString("imgurl")
-                if (coverUrl.contains("{size}")) {
-                    coverUrl = coverUrl.replace("{size}", "400")
+                val rawCover = obj.optString("imgurl").ifEmpty {
+                    obj.optString("pic").ifEmpty {
+                        obj.optString("image").ifEmpty {
+                            obj.optString("cover")
+                        }
+                    }
                 }
+                val coverUrl = formatKugouImg(rawCover)
                 val playCount = obj.optLong("playcount", 0L)
                 val trackCount = obj.optInt("songcount", 0)
                 val creatorName = obj.optString("nickname").ifEmpty { obj.optString("user_name").ifEmpty { "酷狗音乐" } }
@@ -437,7 +456,9 @@ class KugouMusicSource(
         val isVip = sObj.optInt("privilege", 0) > 0 ||
                 sObj.optInt("320privilege", 0) == 10 ||
                 sObj.optInt("pkg_price", 0) > 0 ||
-                sObj.optInt("pay_type", 0) > 0
+                sObj.optInt("pay_type", 0) > 0 ||
+                sObj.optInt("fee", 0) > 0 ||
+                sObj.optInt("is_vip", 0) == 1
 
         val albumId = sObj.optString("album_id").ifEmpty {
             sObj.optJSONObject("album_info")?.optString("album_id")?.ifEmpty {
@@ -538,7 +559,12 @@ class KugouMusicSource(
                     val singerName = sObj.optString("SingerName")
                     val albumName = sObj.optString("AlbumName")
                     val duration = sObj.optLong("Duration", 0L) * 1000L
-                    val isVip = sObj.optInt("Privilege", 0) > 0 || sObj.optInt("PayType", 0) > 0
+                    val isVip = sObj.optInt("Privilege", 0) > 0 ||
+                            sObj.optInt("PayType", 0) > 0 ||
+                            sObj.optInt("privilege", 0) > 0 ||
+                            sObj.optInt("pay_type", 0) > 0 ||
+                            sObj.optInt("fee", 0) > 0 ||
+                            sObj.optInt("is_vip", 0) == 1
 
                     var cover = sObj.optString("Image").ifEmpty {
                         sObj.optString("AlbumImage").ifEmpty {

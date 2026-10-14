@@ -60,6 +60,23 @@ class QQMusicSource(
         JSONObject(bodyStr)
     }
 
+    private fun parseQQIsVip(songObj: JSONObject): Boolean {
+        val payObj = songObj.optJSONObject("pay")
+        val payPlay = payObj?.optInt("pay_play", 0) ?: songObj.optInt("pay_play", songObj.optInt("payplay", 0))
+        val payMonth = payObj?.optInt("pay_month", 0) ?: songObj.optInt("pay_month", 0)
+        val fee = songObj.optInt("fee", 0)
+        val isVip = songObj.optInt("isvip", songObj.optInt("is_vip", 0))
+        return payPlay != 0 || payMonth != 0 || fee == 1 || isVip == 1
+    }
+
+    private fun formatQQImg(url: String): String {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.startsWith("//")) return "https:$trimmed"
+        if (trimmed.startsWith("http://")) return "https://${trimmed.removePrefix("http://")}"
+        return trimmed
+    }
+
     override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
         // QQ 音乐分类标签预设与兜底
         listOf(
@@ -109,7 +126,7 @@ class QQMusicSource(
             val item = listArr.optJSONObject(i) ?: continue
             val dissid = item.optString("dissid")
             val dissname = item.optString("dissname")
-            val imgurl = item.optString("imgurl")
+            val imgurl = formatQQImg(item.optString("imgurl").ifEmpty { item.optString("cover").ifEmpty { item.optString("pic") } })
             val listennum = item.optLong("listennum")
             val creatorObj = item.optJSONObject("creator")
             val creatorName = creatorObj?.optString("name")
@@ -227,11 +244,11 @@ class QQMusicSource(
 
             val dissid = cdObj.optString("disstid", cleanDissId)
             val dissname = cdObj.optString("dissname")
-            val logo = cdObj.optString("logo")
+            val logo = formatQQImg(cdObj.optString("logo"))
             val desc = cdObj.optString("desc")
             val visitnum = cdObj.optLong("visitnum")
             val nickname = cdObj.optString("nickname")
-            val headurl = cdObj.optString("headurl")
+            val headurl = formatQQImg(cdObj.optString("headurl"))
             val totalSongNum = cdObj.optInt("total_song_num")
 
             val playlist = OnlinePlaylist(
@@ -256,9 +273,7 @@ class QQMusicSource(
                 val interval = songObj.optLong("interval") * 1000 // 转换为毫秒
                 val albumMid = songObj.optString("albummid")
                 val albumName = songObj.optString("albumname")
-                val pay = songObj.optJSONObject("pay")
-                val payPlay = pay?.optInt("payplay") ?: 0
-                val isVip = payPlay != 0
+                val isVip = parseQQIsVip(songObj)
 
                 // 歌手列表
                 val singerArr = songObj.optJSONArray("singer")
@@ -293,7 +308,8 @@ class QQMusicSource(
                 )
             }
 
-            Pair(playlist, songs)
+            val finalCoverUrl = if (logo.isNotEmpty()) logo else songs.firstOrNull { !it.coverUrl.isNullOrEmpty() }?.coverUrl ?: ""
+            Pair(playlist.copy(coverUrl = finalCoverUrl), songs)
         } catch (e: Exception) {
             try {
                 getPlaylistDetailViaMusicU(cleanDissId)
@@ -353,7 +369,7 @@ class QQMusicSource(
         val dirinfo = dataObj.optJSONObject("dirinfo") ?: dataObj
 
         val title = dirinfo.optString("title").ifEmpty { dirinfo.optString("dissname") }.ifEmpty { "QQ 音乐精选歌单" }
-        val logo = dirinfo.optString("picurl").ifEmpty { dirinfo.optString("logo") }
+        val logo = formatQQImg(dirinfo.optString("picurl").ifEmpty { dirinfo.optString("logo") })
         val desc = dirinfo.optString("desc")
         val listenNum = dirinfo.optLong("listennum")
         val nickname = dirinfo.optString("nickname")
@@ -411,9 +427,7 @@ class QQMusicSource(
                 null
             }
 
-            val pay = songObj.optJSONObject("pay")
-            val payPlay = pay?.optInt("pay_play") ?: pay?.optInt("payplay") ?: 0
-            val isVip = payPlay != 0
+            val isVip = parseQQIsVip(songObj)
 
             songs.add(
                 OnlineSongItem(
@@ -429,7 +443,8 @@ class QQMusicSource(
             )
         }
 
-        Pair(playlist, songs)
+        val finalCoverUrl = if (logo.isNotEmpty()) logo else songs.firstOrNull { !it.coverUrl.isNullOrEmpty() }?.coverUrl ?: ""
+        Pair(playlist.copy(coverUrl = finalCoverUrl), songs)
     }
 
     private suspend fun getLeaderboardDetailInternal(topId: Int): Pair<OnlinePlaylist, List<OnlineSongItem>> = withContext(Dispatchers.IO) {
@@ -462,7 +477,7 @@ class QQMusicSource(
         val dataData = dataObj.optJSONObject("data") ?: dataObj
 
         val title = dataData.optString("title").ifEmpty { "QQ 音乐排行榜" }
-        val headPic = dataData.optString("headPicUrl").ifEmpty { dataData.optString("frontPicUrl") }
+        val headPic = formatQQImg(dataData.optString("headPicUrl").ifEmpty { dataData.optString("frontPicUrl") })
         val desc = dataData.optString("intro").ifEmpty { dataData.optString("period") }
         val totalNum = dataData.optInt("totalNum")
 
@@ -527,9 +542,7 @@ class QQMusicSource(
                 null
             }
 
-            val pay = songObj.optJSONObject("pay")
-            val payPlay = pay?.optInt("pay_play") ?: 0
-            val isVip = payPlay != 0
+            val isVip = parseQQIsVip(songObj)
 
             songs.add(
                 OnlineSongItem(
@@ -545,7 +558,8 @@ class QQMusicSource(
             )
         }
 
-        Pair(playlist, songs)
+        val finalCoverUrl = if (headPic.isNotEmpty()) headPic else songs.firstOrNull { !it.coverUrl.isNullOrEmpty() }?.coverUrl ?: ""
+        Pair(playlist.copy(coverUrl = finalCoverUrl), songs)
     }
 
     override suspend fun searchPlaylists(keyword: String, page: Int, pageSize: Int): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
@@ -683,8 +697,7 @@ class QQMusicSource(
                 }
 
                 val interval = sObj.optLong("interval", 0L) * 1000L
-                val payObj = sObj.optJSONObject("pay")
-                val isVip = payObj?.optInt("pay_play", 0) == 1 || sObj.optInt("pay_play", 0) == 1
+                val isVip = parseQQIsVip(sObj)
 
                 if (songMid.isNotEmpty() && songName.isNotEmpty()) {
                     list.add(
@@ -741,7 +754,7 @@ class QQMusicSource(
                                 }
                             }
                             val interval = sObj.optLong("interval", 0L) * 1000L
-                            val payplay = sObj.optInt("payplay", 0)
+                            val isVip = parseQQIsVip(sObj)
 
                             if (songMid.isNotEmpty() && songName.isNotEmpty()) {
                                 list.add(
@@ -754,7 +767,7 @@ class QQMusicSource(
                                         albumId = albumMid.takeIf { it.isNotBlank() && it != "00000000000000" && it != "0" },
                                         durationMs = interval,
                                         coverUrl = coverUrl,
-                                        isVip = payplay == 1
+                                        isVip = isVip
                                     )
                                 )
                             }
@@ -992,8 +1005,7 @@ class QQMusicSource(
                     avatarUrl
                 }
                 val interval = sObj.optLong("interval", 0L) * 1000L
-                val payObj = sObj.optJSONObject("pay")
-                val isVip = payObj?.optInt("pay_play", 0) == 1
+                val isVip = parseQQIsVip(sObj)
 
                 if (songMid.isNotEmpty() && songName.isNotEmpty()) {
                     songs.add(
@@ -1170,8 +1182,7 @@ class QQMusicSource(
                     "https://y.gtimg.cn/music/photo_new/T002R300x300M000$albumMid.jpg"
                 } else ""
                 val interval = sObj.optLong("interval", 0L) * 1000L
-                val payObj = sObj.optJSONObject("pay")
-                val isVip = payObj?.optInt("pay_play", 0) == 1
+                val isVip = parseQQIsVip(sObj)
 
                 if (songMid.isNotEmpty() && songName.isNotEmpty()) {
                     list.add(
@@ -1279,8 +1290,7 @@ class QQMusicSource(
                 }
             }
             val interval = sObj.optLong("interval", 0L) * 1000L
-            val payObj = sObj.optJSONObject("pay")
-            val isVip = payObj?.optInt("payplay", 0) == 1
+            val isVip = parseQQIsVip(sObj)
 
             if (songMid.isNotEmpty() && songName.isNotEmpty()) {
                 list.add(

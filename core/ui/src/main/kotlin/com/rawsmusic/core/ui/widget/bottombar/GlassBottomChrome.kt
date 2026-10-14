@@ -890,6 +890,8 @@ private fun GlassNavigationSurface(
                                 currentIndex = index
                                 selectorMotion.animateToValue(index.toFloat())
                                 onTabSelected(scene)
+                            } else {
+                                onTabSelected(scene)
                             }
                         },
                     contentAlignment = Alignment.Center,
