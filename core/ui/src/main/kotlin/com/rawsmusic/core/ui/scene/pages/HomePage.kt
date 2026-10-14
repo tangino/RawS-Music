@@ -1057,9 +1057,10 @@ private fun LibraryTile(
                 .clip(RoundedCornerShape(13.dp))
                 .background(pastelColorFor(scene.tag)),
         ) {
-            if (scene == NavScene.SOURCE_IMPORT) {
+            val fixedIconRes = scene.homeCardFixedIconResOrNull()
+            if (fixedIconRes != null) {
                 Image(
-                    painter = painterResource(R.drawable.ic_cloud),
+                    painter = painterResource(fixedIconRes),
                     contentDescription = null,
                     colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.94f)),
                     modifier = Modifier
@@ -1136,6 +1137,19 @@ private fun LibraryTile(
             )
         }
     }
+}
+
+/**
+ * 主界面卡片上要画的**固定图标**；返回 null 表示该卡片改用「关联歌曲的封面」。
+ *
+ * 为什么需要这个：卡片封面走的是 `song?.coverKey`，而这类**门户型场景**（音源导入、在线音乐）
+ * 没有「关联歌曲」的概念，`coverKey` 恒为空 → 不特判的话卡片上只剩底色和标题，看起来像坏了。
+ * 原来只写死了 `SOURCE_IMPORT`，这里收敛成一个映射，避免每加一个门户卡片就再插一个 if 分支。
+ */
+private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
+    NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
+    NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
+    else -> null
 }
 
 @Composable

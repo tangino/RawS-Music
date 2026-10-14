@@ -19,6 +19,10 @@ private const val HOME_CARD_SEPARATOR = "|"
 
 /** Categories shown in the Music Library section of HOME. */
 val HomeLibraryCardScenes: List<NavScene> = listOf(
+    // 在线音乐放在首位：它是本次移植的主打入口，且此前**默认配置下完全不可达**
+    // （唯一入口是侧栏，而侧栏要求关掉底部导航，见 AppMainLayout 的 sideRailEnabled）。
+    // 位置可由用户在「主界面卡片」编辑器里随意拖动，所以这里取「最显眼」而不是「最保守」。
+    NavScene.ONLINE_MUSIC,
     NavScene.SONGS,
     NavScene.FOLDERS,
     NavScene.FOLDER_HIERARCHY,
