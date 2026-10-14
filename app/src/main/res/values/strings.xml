@@ -2609,4 +2609,34 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="cloud_sync_state_restoring">Restoring…</string>
     <string name="cloud_sync_state_clearing">Clearing…</string>
     <string name="cloud_sync_action_cancel">Cancel</string>
+
+    <!-- Playlist Transfer (Export / Import) -->
+    <string name="playlist_export_title">Export Playlist</string>
+    <string name="playlist_export_action">Export Playlist</string>
+    <string name="playlist_export_format">Format</string>
+    <string name="playlist_export_format_m3u8">M3U8 Playlist (.m3u8)</string>
+    <string name="playlist_export_format_json">JSON Backup (.json)</string>
+    <string name="playlist_export_filename">File name</string>
+    <string name="playlist_export_save_download">Save to Downloads</string>
+    <string name="playlist_export_share">Share</string>
+    <string name="playlist_export_saving">Exporting…</string>
+    <string name="playlist_export_success">Playlist exported successfully</string>
+    <string name="playlist_export_failed">Failed to export playlist: %1$s</string>
+    <string name="playlist_import_title">Import Playlist</string>
+    <string name="playlist_import_action">Import Playlist</string>
+    <string name="playlist_import_tab_link_text">Link / Text</string>
+    <string name="playlist_import_tab_file">Local File</string>
+    <string name="playlist_import_link_text_hint">Paste playlist share link (NetEase, QQ, Kugou, etc.) or text playlist (one song per line)</string>
+    <string name="playlist_import_paste_clipboard">Paste</string>
+    <string name="playlist_import_select_file">Select File</string>
+    <string name="playlist_import_selected_file">Selected: %1$s</string>
+    <string name="playlist_import_parsed_preview">Parsed “%1$s” (~%2$d songs)</string>
+    <string name="playlist_import_parsing">Parsing file…</string>
+    <string name="playlist_import_parse_failed">Failed to parse file or no valid songs</string>
+    <string name="playlist_import_button">Import</string>
+    <string name="playlist_import_processing">Importing playlist…</string>
+    <string name="playlist_import_input_empty">Please enter a link or text</string>
+    <string name="playlist_import_result_detail">Imported “%1$s”: %2$d local, %3$d online</string>
+    <string name="playlist_import_online_success">Imported online playlist “%1$s” (%2$d songs)</string>
+    <string name="playlist_import_failed_with_reason">Import failed: %1$s</string>
 </resources>

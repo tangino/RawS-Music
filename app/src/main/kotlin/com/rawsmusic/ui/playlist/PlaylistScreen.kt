@@ -119,6 +119,7 @@ fun PlaylistScreen(
     val colors = themeColors()
     var createDialog by remember { mutableStateOf(false) }
     var creatingPlaylist by remember { mutableStateOf(false) }
+    var importDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<UserPlaylist?>(null) }
     var deleteTarget by remember { mutableStateOf<UserPlaylist?>(null) }
     var clearDislikesConfirm by remember { mutableStateOf(false) }
@@ -245,19 +246,7 @@ fun PlaylistScreen(
         statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_playlists, playlists.size, playlists.sumOf { it.songs.size }),
         onBack = onBack,
         onCreatePlaylist = { createDialog = true },
-        onImportPlaylist = {
-            withSystemFileAccess {
-                importLauncher.launch(
-                    arrayOf(
-                        "text/plain",
-                        "audio/x-mpegurl",
-                        "audio/mpegurl",
-                        "application/vnd.apple.mpegurl",
-                        "application/octet-stream"
-                    )
-                )
-            }
-        },
+        onImportPlaylist = { importDialog = true },
         headerTrailingContent = clearDislikesHeaderAction,
         virtualListState = listState,
         contentOverlap = 0.dp
@@ -307,6 +296,13 @@ fun PlaylistScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (importDialog) {
+        ImportPlaylistDialog(
+            librarySongs = librarySongs,
+            onDismiss = { importDialog = false },
         )
     }
 

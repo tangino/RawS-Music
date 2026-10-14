@@ -1,6 +1,13 @@
 package com.rawsmusic.module.data.playlist
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
@@ -9,7 +16,14 @@ import com.rawsmusic.core.common.model.onlineUserPlaylistSong
 import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.PlaylistStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStreamWriter
 
 /** M3U8 导入结果。字段够 UI 报告「导入了几首、几首没匹配上」。 */
 data class TransferImportResult(
@@ -50,6 +64,117 @@ object PlaylistTransferStore {
     suspend fun exportM3u8(context: Context, playlist: UserPlaylist): File? =
         PlaylistM3u8Codec.writeExportFile(context, playlist)
 
+    /** 导出歌单为 JSON 字符串。 */
+    fun exportJson(playlist: UserPlaylist): String {
+        val root = JSONObject()
+        root.put("version", 1)
+        root.put("title", playlist.name)
+        root.put("trackCount", playlist.songs.size)
+        root.put("exportTimestamp", System.currentTimeMillis())
+        val songsArray = JSONArray()
+        playlist.songs.forEach { song ->
+            val songObj = JSONObject().apply {
+                put("title", song.title)
+                put("artist", song.artist)
+                put("album", song.album)
+                put("durationMs", song.duration)
+                put("path", song.path)
+                val (plat, id) = onlinePartsOf(song.key) ?: onlinePartsOf(song.path) ?: (null to null)
+                if (plat != null) put("platform", plat)
+                if (id != null) put("songId", id)
+            }
+            songsArray.put(songObj)
+        }
+        root.put("songs", songsArray)
+        return root.toString(2)
+    }
+
+    /** 导出歌单为 JSON 文件（落在 `cacheDir/playlist_exports`），返回文件句柄。 */
+    suspend fun exportJson(context: Context, playlist: UserPlaylist): File? =
+        withContext(Dispatchers.IO) {
+            try {
+                val directory = File(context.cacheDir, PlaylistM3u8Codec.EXPORT_DIR).apply { mkdirs() }
+                val fileName = PlaylistM3u8Codec.sanitizeFileName(playlist.name.ifBlank { "playlist" }) + ".json"
+                val file = File(directory, fileName)
+                file.writeText(exportJson(playlist), Charsets.UTF_8)
+                file
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                AppLogger.e(TAG, "导出 JSON 失败：${playlist.name}", error)
+                null
+            }
+        }
+
+    /**
+     * 将导出内容保存至系统的公共 Download 目录（`Download/RawS-Music/`）。
+     */
+    suspend fun saveToDownloads(
+        context: Context,
+        fileName: String,
+        content: String,
+        mimeType: String = "application/octet-stream",
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val sanitized = PlaylistM3u8Codec.sanitizeFileName(fileName.substringBeforeLast('.')) +
+                if (fileName.contains('.')) ".${fileName.substringAfterLast('.')}" else ""
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, sanitized)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/RawS-Music")
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw java.io.IOException("无法创建公共导出文件")
+                resolver.openOutputStream(uri)?.use { os ->
+                    OutputStreamWriter(os, Charsets.UTF_8).use { osw ->
+                        osw.write(content)
+                    }
+                }
+                "已保存至「下载/RawS-Music/$sanitized」"
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "RawS-Music").apply { mkdirs() }
+                val targetFile = File(dir, sanitized)
+                FileOutputStream(targetFile).use { fos ->
+                    OutputStreamWriter(fos, Charsets.UTF_8).use { osw ->
+                        osw.write(content)
+                    }
+                }
+                "已保存至「${targetFile.absolutePath}」"
+            }
+        }
+    }
+
+    /**
+     * 调起系统 Sharesheet 分享歌单文件。
+     */
+    fun sharePlaylistFile(
+        context: Context,
+        file: File,
+        title: String,
+        mimeType: String,
+        chooserTitle: String = "导出/分享歌单",
+    ) {
+        val shareUri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, shareUri)
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_TEXT, "$title\n(来自 RawS-Music)")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(intent, chooserTitle).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    }
+
     /**
      * 从 M3U8 文本导入歌单。
      *
@@ -62,64 +187,183 @@ object PlaylistTransferStore {
         fallbackName: String,
     ): TransferImportResult {
         val document = PlaylistM3u8Codec.decode(text)
-        val store = PlaylistStore.getInstance(context)
+        val candidates = document.entries.map { entry ->
+            TransferCandidate(
+                title = entry.title,
+                artist = entry.artist,
+                durationMs = entry.durationMs,
+                path = entry.path,
+                onlinePlatformId = entry.onlinePlatformId,
+                onlineSongId = entry.onlineSongId,
+            )
+        }
+        val playlistName = document.title.ifBlank { fallbackName }
+        return importCandidates(context, candidates, librarySongs, playlistName)
+    }
 
+    /**
+     * 从 JSON 文本导入歌单（支持单歌单 JSON 与全量备份 JSON）。
+     */
+    suspend fun importJson(
+        context: Context,
+        text: String,
+        librarySongs: List<AudioFile>,
+        fallbackName: String,
+    ): TransferImportResult {
+        val trimmed = text.trim()
+        val root = try {
+            JSONObject(trimmed)
+        } catch (e: Exception) {
+            return TransferImportResult(null, 0, 0, 0)
+        }
+
+        // 若是全量备份格式 { "playlists": [...] }
+        val playlistsArray = root.optJSONArray("playlists")
+        if (playlistsArray != null && playlistsArray.length() > 0) {
+            val firstPlaylist = playlistsArray.optJSONObject(0)
+            if (firstPlaylist != null) {
+                return parseAndImportSinglePlaylistJson(context, firstPlaylist, librarySongs, fallbackName)
+            }
+        }
+
+        return parseAndImportSinglePlaylistJson(context, root, librarySongs, fallbackName)
+    }
+
+    /**
+     * 从纯文本清单导入歌单（每行一首，格式支持 "歌名 - 歌手"、"歌手 - 歌名" 或纯 "歌名"）。
+     */
+    suspend fun importPlainText(
+        context: Context,
+        text: String,
+        librarySongs: List<AudioFile>,
+        playlistName: String,
+    ): TransferImportResult {
+        val lines = text.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("//") && !it.startsWith("#") }
+        if (lines.isEmpty()) {
+            return TransferImportResult(null, 0, 0, 0)
+        }
+
+        val candidates = lines.map { rawLine ->
+            // 剥离可能存在的行首序号，如 "1. "、"01. "、"1、"、"#1 "
+            val line = rawLine.replace(Regex("^(?:#?\\d+[.、\\s-]+)"), "").trim()
+            val (title, artist) = when {
+                line.contains(" - ") -> line.split(" - ", limit = 2).let { it[0].trim() to it[1].trim() }
+                line.contains(" — ") -> line.split(" — ", limit = 2).let { it[0].trim() to it[1].trim() }
+                line.contains('\t') -> line.split('\t', limit = 2).let { it[0].trim() to it[1].trim() }
+                else -> line to ""
+            }
+            TransferCandidate(
+                title = title,
+                artist = artist,
+                durationMs = 0L,
+                path = "",
+                onlinePlatformId = null,
+                onlineSongId = null,
+            )
+        }
+
+        return importCandidates(context, candidates, librarySongs, playlistName)
+    }
+
+    // ------------------------------------------------------------------ 内部编排
+
+    private data class TransferCandidate(
+        val title: String,
+        val artist: String,
+        val durationMs: Long,
+        val path: String,
+        val onlinePlatformId: String?,
+        val onlineSongId: String?,
+    )
+
+    private suspend fun parseAndImportSinglePlaylistJson(
+        context: Context,
+        root: JSONObject,
+        librarySongs: List<AudioFile>,
+        fallbackName: String,
+    ): TransferImportResult {
+        val title = root.optString("title", "").ifBlank {
+            root.optString("name", fallbackName)
+        }
+        val songsArray = root.optJSONArray("songs") ?: return TransferImportResult(null, 0, 0, 0)
+        val candidates = mutableListOf<TransferCandidate>()
+        for (i in 0 until songsArray.length()) {
+            val obj = songsArray.optJSONObject(i) ?: continue
+            val songTitle = obj.optString("title", "").ifBlank { obj.optString("name", "") }
+            val artist = obj.optString("artist", "")
+            val durationMs = obj.optLong("durationMs", obj.optLong("duration", 0L))
+            val path = obj.optString("path", "")
+            val platform = obj.optString("platform", "").takeIf { it.isNotBlank() }
+            val songId = obj.optString("songId", "").takeIf { it.isNotBlank() }
+            candidates += TransferCandidate(
+                title = songTitle,
+                artist = artist,
+                durationMs = durationMs,
+                path = path,
+                onlinePlatformId = platform,
+                onlineSongId = songId,
+            )
+        }
+        return importCandidates(context, candidates, librarySongs, title)
+    }
+
+    private suspend fun importCandidates(
+        context: Context,
+        candidates: List<TransferCandidate>,
+        librarySongs: List<AudioFile>,
+        playlistName: String,
+    ): TransferImportResult {
+        val store = PlaylistStore.getInstance(context)
         val onlineRows = mutableListOf<UserPlaylistSong>()
-        /** 路径可能匹配得上的条目（保留原始下标，后面要按元数据补匹配）。 */
-        val localCandidates = mutableListOf<M3u8Entry>()
+        val localCandidates = mutableListOf<TransferCandidate>()
         var entriesWithoutAnything = 0
 
-        document.entries.forEach { entry ->
-            val onlineParts = onlinePartsOf(entry)
+        candidates.forEach { candidate ->
+            val onlineParts = onlinePartsOf(candidate)
             when {
-                // 有明确的在线身份 → 直接构造在线行，不走曲库匹配。
                 onlineParts != null -> {
                     val (platformId, songId) = onlineParts
-                    // 行的落库形态统一由 core 的 onlineUserPlaylistSong 定义，不要在这里自己拼。
                     onlineRows += onlineUserPlaylistSong(
                         platformId = platformId,
                         songId = songId,
-                        title = entry.title,
-                        artist = entry.artist,
-                        durationMs = entry.durationMs,
+                        title = candidate.title,
+                        artist = candidate.artist,
+                        durationMs = candidate.durationMs,
                     )
                 }
-
-                entry.path.isNotBlank() -> localCandidates += entry
-
-                // 既没有在线身份也没有路径：只能靠元数据找（下面统一处理）。
-                entry.title.isNotBlank() -> localCandidates += entry
-
+                candidate.path.isNotBlank() -> localCandidates += candidate
+                candidate.title.isNotBlank() -> localCandidates += candidate
                 else -> entriesWithoutAnything++
             }
         }
 
-        // 第一轮：按路径匹配（复用既有三层回退逻辑，不重写）。
+        // 第一轮：按路径匹配本地曲库
         val pathMatched = store.matchLibrarySongs(
             localCandidates.map { it.path }.filter { it.isNotBlank() },
             librarySongs,
         )
         val matchedKeys = pathMatched.mapTo(mutableSetOf()) { it.playlistIdentityKey() }
 
-        // 第二轮：对没匹配上的条目用「歌名 + 歌手」找；跨设备导入时路径必然失效，这层是主力。
+        // 第二轮：元数据兜底匹配
         val metaMatched = localCandidates
             .asSequence()
             .filter { it.title.isNotBlank() }
-            .mapNotNull { entry -> matchByMetadata(entry, librarySongs, matchedKeys) }
+            .mapNotNull { candidate -> matchByMetadata(candidate, librarySongs, matchedKeys) }
             .distinctBy { it.playlistIdentityKey() }
             .toList()
 
         val localSongs = (pathMatched + metaMatched).distinctBy { it.playlistIdentityKey() }
 
-        // 没匹配上的条数：既不在匹配结果里、也没有成功建成在线行的。
         val unmatched = (localCandidates.size - localSongs.size).coerceAtLeast(0) +
             entriesWithoutAnything
         if (unmatched > 0) {
-            AppLogger.i(TAG, "M3U8 导入：${unmatched} 条没能匹配到本地曲库或在线身份")
+            AppLogger.i(TAG, "歌单导入：${unmatched} 条没能匹配到本地曲库或在线身份")
         }
 
         val playlist = store.importResolvedPlaylist(
-            name = document.title.ifBlank { fallbackName },
+            name = playlistName,
             localSongs = localSongs,
             onlineSongs = onlineRows,
         )
@@ -131,54 +375,40 @@ object PlaylistTransferStore {
         )
     }
 
-    // ------------------------------------------------------------------ 私有
-
-    /**
-     * 条目是否带在线身份：优先用显式标签，其次从 `path` 前缀推。
-     *
-     * @return `(platformId, songId)`；不是在线条目返回 null。
-     */
-    private fun onlinePartsOf(entry: M3u8Entry): Pair<String, String>? {
-        val platformId = entry.onlinePlatformId
-        val songId = entry.onlineSongId
+    private fun onlinePartsOf(candidate: TransferCandidate): Pair<String, String>? {
+        val platformId = candidate.onlinePlatformId
+        val songId = candidate.onlineSongId
         if (!platformId.isNullOrBlank() && !songId.isNullOrBlank()) return platformId to songId
-        if (!isOnlineSongKey(entry.path)) return null
-        val rest = entry.path.removePrefix("online://")
+        return onlinePartsOf(candidate.path)
+    }
+
+    private fun onlinePartsOf(pathOrKey: String): Pair<String, String>? {
+        if (!isOnlineSongKey(pathOrKey)) return null
+        val rest = pathOrKey.removePrefix("online://")
         val parsedPlatform = rest.substringBefore('/', "")
         val parsedSongId = rest.substringAfter('/', "")
         if (parsedPlatform.isBlank() || parsedSongId.isBlank()) return null
         return parsedPlatform to parsedSongId
     }
 
-    /** 用「歌名 + 歌手」在曲库里找唯一匹配；已匹配过的跳过。 */
     private fun matchByMetadata(
-        entry: M3u8Entry,
+        candidate: TransferCandidate,
         librarySongs: List<AudioFile>,
         alreadyMatched: Set<String>,
     ): AudioFile? {
-        val wantTitle = normalizeForMatch(entry.title)
+        val wantTitle = normalizeForMatch(candidate.title)
         if (wantTitle.isEmpty()) return null
-        val wantArtist = normalizeForMatch(entry.artist)
+        val wantArtist = normalizeForMatch(candidate.artist)
         val candidates = librarySongs.filter { song ->
             song.playlistIdentityKey() !in alreadyMatched && normalizeForMatch(song.title) == wantTitle
         }
         if (candidates.isEmpty()) return null
         if (candidates.size == 1) return candidates.single()
-        // 同名多首（翻唱/不同版本）时用歌手收敛；仍不唯一就**不猜**，宁可不导也不导错。
         if (wantArtist.isEmpty()) return null
         val byArtist = candidates.filter { normalizeForMatch(it.artist) == wantArtist }
         return byArtist.singleOrNull()
     }
 
-    /**
-     * 匹配用的归一化：小写 + 去掉空白与常见标点。
-     *
-     * ⚠️ **为什么不在 `:module:data` 里复用 `OnlinePlaybackMatcher.normalizeForCompare`**：
-     * 那个类在 `:module:online`，而依赖方向是 `online → data`，这里引用不到。
-     * 它的逻辑更复杂（处理特殊版本标签、括号副标题等），面向的是「跨平台找同一首歌」；
-     * 这里是「本地曲库里按元数据找回自己的歌」，判定可以更严（同名多首直接放弃）。
-     * 两者刻意不共享，避免为了复用把在线匹配的宽松策略带进本地导入。
-     */
     private fun normalizeForMatch(value: String): String =
         value.lowercase()
             .replace(Regex("[\\s\\-_,，。.·•'\"()（）\\[\\]【】]"), "")

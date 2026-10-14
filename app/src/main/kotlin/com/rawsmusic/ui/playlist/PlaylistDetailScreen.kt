@@ -2,10 +2,18 @@ package com.rawsmusic.ui.playlist
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -18,6 +26,7 @@ import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListFull
 import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
 import com.rawsmusic.module.data.prefs.PlaylistStore
+import com.rawsmusic.ui.settings.themeColors
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
@@ -37,6 +46,25 @@ fun PlaylistDetailScreen(
     // 都不会与本地曲冲突；播放时由调用方按 path 前缀分流（见 AppPageRenderer）。
     val songs = entries.local + entries.online.map { it.toAudioFile() }
     val state = rememberComposeVirtualListState("playlist-${playlist?.id.orEmpty()}")
+    var exportDialog by remember { mutableStateOf(false) }
+    val colors = themeColors()
+
+    val exportHeaderAction: (@Composable () -> Unit)? = if (playlist != null && !playlist.id.startsWith("attitude:")) {
+        {
+            IconButton(
+                onClick = { exportDialog = true },
+                modifier = Modifier.size(42.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_playlist_export),
+                    contentDescription = stringResource(R.string.playlist_export_action),
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    } else null
+
     LibraryListScaffold(
         title = playlist?.name ?: stringResource(R.string.playlist_fallback_name),
         sceneId = NavScene.PLAYLIST_DETAIL_PAGE.name,
@@ -46,6 +74,7 @@ fun PlaylistDetailScreen(
         // 随机播放只取本地曲：在线曲需要逐首解析候选（见 P2-05b），把它混进队列会让播放器
         // 拿到 online:// 这样的假路径。
         onShuffle = { if (entries.local.isNotEmpty()) onPlaySong(entries.local.shuffled(), 0) },
+        headerTrailingContent = exportHeaderAction,
         contentOverlap = 0.dp,
         modifier = Modifier.fillMaxSize()
     ) { topPadding, backdropSource ->
@@ -71,5 +100,12 @@ fun PlaylistDetailScreen(
                 onSongLongClick = { song, _ -> onRemoveSong(song) }
             )
         }
+    }
+
+    if (exportDialog && playlist != null) {
+        ExportPlaylistDialog(
+            playlist = playlist,
+            onDismiss = { exportDialog = false },
+        )
     }
 }

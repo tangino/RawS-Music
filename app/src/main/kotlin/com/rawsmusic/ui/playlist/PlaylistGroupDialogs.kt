@@ -56,6 +56,7 @@ internal class PlaylistGroupChromeState {
     var deleteGroupTarget by mutableStateOf<String?>(null)
     var playlistActionsTarget by mutableStateOf<UserPlaylist?>(null)
     var moveToGroupTarget by mutableStateOf<UserPlaylist?>(null)
+    var exportPlaylistTarget by mutableStateOf<UserPlaylist?>(null)
 }
 
 @Composable
@@ -176,10 +177,21 @@ internal fun PlaylistGroupDialogHost(
                 state.playlistActionsTarget = null
                 state.moveToGroupTarget = playlist
             },
+            onExport = {
+                state.playlistActionsTarget = null
+                state.exportPlaylistTarget = playlist
+            },
             onDelete = {
                 state.playlistActionsTarget = null
                 onDeletePlaylist(playlist)
             },
+        )
+    }
+
+    state.exportPlaylistTarget?.let { playlist ->
+        ExportPlaylistDialog(
+            playlist = playlist,
+            onDismiss = { state.exportPlaylistTarget = null },
         )
     }
 
@@ -405,6 +417,7 @@ internal fun PlaylistActionsDialog(
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onMoveToGroup: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val colors = themeColors()
@@ -427,6 +440,11 @@ internal fun PlaylistActionsDialog(
             TextButton(
                 text = stringResource(R.string.playlist_group_move_title),
                 onClick = onMoveToGroup,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                text = stringResource(R.string.playlist_export_action),
+                onClick = onExport,
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(
