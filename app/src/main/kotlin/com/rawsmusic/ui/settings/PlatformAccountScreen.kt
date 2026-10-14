@@ -1,5 +1,6 @@
 package com.rawsmusic.ui.settings
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
@@ -89,6 +90,16 @@ fun PlatformAccountScreen(onBack: () -> Unit) {
     var logoutTarget by remember { mutableStateOf<OnlinePlatform?>(null) }
     var refreshingPlatform by remember { mutableStateOf<OnlinePlatform?>(null) }
 
+    // 「导入我的歌单」入口：跳到该平台的歌单导入页，平台靠 Intent extra 传递。
+    // 页面本身已经是独立 Activity，所以这里直接 startActivity，不需要新 NavScene。
+    val openPlaylistImport: (OnlinePlatform) -> Unit = { platform ->
+        context.startActivity(
+            Intent(context, PlatformPlaylistImportActivity::class.java)
+                .setPackage(context.packageName)
+                .putExtra(PlatformPlaylistImportActivity.EXTRA_PLATFORM_ID, platform.id),
+        )
+    }
+
     // 必须显式触发一次懒恢复：`accounts` 这个 StateFlow 本身不会读 MMKV，
     // 只有 `getAccount()` 之类的访问器才会 ensureRestored() 并把已登录账号发布出来。
     LaunchedEffect(Unit) {
@@ -115,6 +126,7 @@ fun PlatformAccountScreen(onBack: () -> Unit) {
                     refreshing = refreshingPlatform == platform,
                     onLogin = { qrTarget = platform },
                     onLogout = { logoutTarget = platform },
+                    onImportPlaylists = { openPlaylistImport(platform) },
                     onRefresh = {
                         refreshingPlatform = platform
                         scope.launch {
@@ -171,6 +183,7 @@ private fun PlatformAccountCard(
     refreshing: Boolean,
     onLogin: () -> Unit,
     onLogout: () -> Unit,
+    onImportPlaylists: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     val colors = themeColors()
@@ -235,6 +248,15 @@ private fun PlatformAccountCard(
             }
         }
     }
+
+    // 「导入我的歌单」：未登录时保持可见但禁用 —— 歌单只能在登录后拉到，
+    // 但入口不该被藏起来（隐藏会让用户完全发现不了这个能力）。
+    TextButton(
+        text = stringResource(R.string.platform_playlist_import_action),
+        onClick = onImportPlaylists,
+        enabled = account != null,
+        modifier = Modifier.fillMaxWidth(),
+    )
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -305,8 +327,9 @@ private fun platformVipLabel(account: PlatformAccount): String = when {
     else -> stringResource(R.string.platform_account_vip_member)
 }
 
+/** 平台显示名。做成 internal 供歌单导入页复用，避免同一套映射写两份。 */
 @Composable
-private fun platformDisplayName(platform: OnlinePlatform): String = stringResource(
+internal fun platformDisplayName(platform: OnlinePlatform): String = stringResource(
     when (platform) {
         OnlinePlatform.QQ -> R.string.platform_account_qq_name
         OnlinePlatform.KUGOU -> R.string.platform_account_kugou_name
