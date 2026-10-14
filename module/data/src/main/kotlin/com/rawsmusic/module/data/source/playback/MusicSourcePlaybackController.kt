@@ -184,6 +184,47 @@ object MusicSourcePlaybackController {
         play(context, listOf(item), 0)
     }
 
+    /**
+     * 直接使用已通过寻源与探活校验的直链起播，避免重复触发二次解析与模糊检索。
+     */
+    fun playResolved(
+        context: Context,
+        item: RawSourceMediaItem,
+        source: RawResolvedAudioSource,
+        autoPlay: Boolean = true,
+    ) {
+        applicationContext = context.applicationContext
+        val generation = generations.incrementAndGet()
+        resolveJob?.cancel()
+        mediaFallbackJob?.cancel()
+        mediaFallbackJob = null
+        cacheJob?.cancel()
+        cacheJob = null
+        prepared = false
+        completionHandledGeneration = Long.MIN_VALUE
+        backendReachedPlayingGeneration = Long.MIN_VALUE
+        fallbackAttemptedGeneration = Long.MIN_VALUE
+        activeResolvedSource = null
+        backend?.stop()
+        releaseMediaPlayer(abandonFocus = false)
+        mutableSnapshot.value = MusicSourcePlaybackSnapshot(
+            queue = listOf(item),
+            currentIndex = 0,
+            currentItem = item,
+            status = MusicSourcePlaybackStatus.Resolving,
+            requestedQuality = source.quality,
+            resolvedQuality = source.quality,
+            durationMs = item.durationMs,
+        )
+        prepareResolved(
+            generation = generation,
+            item = item,
+            source = source,
+            startPositionMs = 0L,
+            autoPlay = autoPlay,
+        )
+    }
+
     /** Persists quality and re-resolves the current item without losing position. */
     fun setPreferredQuality(quality: RawSourceQuality) {
         AppPreferences.storage.encode(PREFERRED_QUALITY_KEY, quality.name)

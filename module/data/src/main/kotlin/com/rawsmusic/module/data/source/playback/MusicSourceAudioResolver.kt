@@ -53,6 +53,17 @@ object MusicSourceAudioResolver {
             .ifEmpty { listOf(RawSourceQuality.Standard) }
     }
 
+    fun interface OnlineAudioFallbackResolver {
+        suspend fun resolveOnline(
+            context: Context,
+            item: RawSourceMediaItem,
+            requestedQuality: RawSourceQuality,
+        ): RawResolvedAudioSource?
+    }
+
+    @Volatile
+    var onlineFallbackResolver: OnlineAudioFallbackResolver? = null
+
     suspend fun resolve(
         context: Context,
         item: RawSourceMediaItem,
@@ -77,6 +88,25 @@ object MusicSourceAudioResolver {
                 "available=${item.availableQualities.joinToString()}"
         )
         if (musicFreeSource == null && lxSource == null) {
+            val fallback = onlineFallbackResolver
+            if (fallback != null) {
+                try {
+                    val resolved = fallback.resolveOnline(context, item, requestedQuality)
+                    if (resolved != null) {
+                        AppLogger.i(
+                            TAG,
+                            "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK fallback=online sourceId=${item.sourceId} " +
+                                "quality=${resolved.quality} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)} " +
+                                "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                        )
+                        return resolved
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Throwable) {
+                    AppLogger.w(TAG, "onlineFallbackResolver failed for ${item.title}: ${e.message}")
+                }
+            }
             AppLogger.e(
                 TAG,
                 "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_FAIL stage=source_lookup " +

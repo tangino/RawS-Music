@@ -84,19 +84,45 @@ object OnlinePlaybackLauncher {
         return best
     }
 
-    /** 找到候选并交给 RawS 播放控制器起播。 */
+    /** 找到候选并交给 RawS 播放控制器起播。优先照搬 OrBitPlayer 的全套寻源与探活算法。 */
     suspend fun play(context: Context, item: OnlineSongItem): OnlinePlayResult = try {
-        val hasEnabledSource = MusicSourcePluginStore.sources.value.any { it.enabled } ||
-            LxSourcePluginStore.sources.value.any { it.enabled }
-        if (!hasEnabledSource) {
-            OnlinePlayResult.NoSourceInstalled
+        // 1. 优先走 OrBitPlayer 寻源核心（LRU 缓存 -> 原平台优先通道 -> 跨平台并发搜救 -> 官方兜底直链 -> 探活）
+        val resolved = OnlineAudioSourceResolver.resolvePlayableSource(
+            context = context,
+            platform = item.platform,
+            songId = item.id,
+            title = item.title,
+            artist = item.artist,
+            album = item.album,
+            expectedDurationMs = item.durationMs,
+        )
+
+        if (resolved != null) {
+            val quality = OnlineAudioSourceResolver.stringToRawSourceQuality(resolved.quality)
+            val rawMediaItem = OnlineSourceMediaMapper.toRawSourceMediaItem(item).copy(
+                durationMs = if (resolved.durationMs > 0L) resolved.durationMs else item.durationMs,
+            )
+            val rawResolved = com.rawsmusic.core.common.source.RawResolvedAudioSource(
+                url = resolved.url,
+                quality = quality,
+                headers = emptyMap(),
+            )
+            MusicSourcePlaybackController.playResolved(context = context, item = rawMediaItem, source = rawResolved)
+            OnlinePlayResult.Started
         } else {
+            // 2. 补充兜底：若全平台多源搜救未果，尝试从用户安装的 MusicFree 插件库检索
             val candidate = findPlayableCandidate(context, item)
-            if (candidate == null) {
-                OnlinePlayResult.NoMatchFound
-            } else {
+            if (candidate != null) {
                 MusicSourcePlaybackController.playItem(context = context, item = candidate)
                 OnlinePlayResult.Started
+            } else {
+                val hasEnabledSource = MusicSourcePluginStore.sources.value.any { it.enabled } ||
+                    LxSourcePluginStore.sources.value.any { it.enabled }
+                if (!hasEnabledSource) {
+                    OnlinePlayResult.NoSourceInstalled
+                } else {
+                    OnlinePlayResult.NoMatchFound
+                }
             }
         }
     } catch (cancelled: CancellationException) {
