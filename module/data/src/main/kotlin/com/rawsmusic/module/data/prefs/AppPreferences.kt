@@ -795,6 +795,95 @@ object AppPreferences {
             get() = kv.decodeInt("ui_audio_visualizer_particle_color_mode", 0).coerceIn(0, 1)
             set(value) { kv.encode("ui_audio_visualizer_particle_color_mode", value.coerceIn(0, 1)) }
 
+        /**
+         * 频谱可视化的**视觉参数**（P4-03）。
+         *
+         * ## 默认值全部取自 OrBit，不要自行发明
+         *
+         * 逐条对应 OrBit `EqualizerViewModel` 那个 UI state 数据类的同名字段（`:69-103`）：
+         * `visualizerBarWidthDp=5.0f`、`visualizerBarAlpha=1.0f`、
+         * `visualizerBarBorderWidthDp=0.0f`、`visualizerBarBorderAlpha=0.8f`、
+         * `visualizerBarBorderColor=0xFFFFFFFF`、`visualizerBarBorderOnly=false`、
+         * `visualizerSingleColor=false`、`visualizerCustomColor=0xFF00B8D4`、
+         * `visualizerCustomColor2=0xFF818CF8`、`visualizerPeakDecayEnabled=true`、
+         * `visualizerColorScheme=FOLLOW_BACKGROUND`、`isVisualizerMaximized=false`。
+         *
+         * 滑块的**取值范围**也照 OrBit 的设置页：柱宽 `2.0..14.0 dp`、柱透明度 `0.10..1.0`、
+         * 描边宽 `0.0..4.0 dp`。
+         *
+         * ## 两条刻意的设计选择
+         *
+         * 1. **不在这里做范围夹取**（与上面 `audioVisualizerStyle` 去掉 `coerceIn` 同一理由）：
+         *    `:module:data` 看不到 `core:ui` 的枚举/常量，写死的上界迟早跟不上，
+         *    会把合法值静默夹掉。范围由设置页的滑块约束，渲染侧对越界值做 `coerceIn` 兜底。
+         * 2. **配色方案存的是 String `id` 而不是序号**（照 OrBit：它用 `prefs.getString(KEY_VIZ_COLOR, ...)`）：
+         *    序号会在追加/重排配色方案时错位，而 id 稳定。
+         *    `VisualizerColorScheme` 枚举本身带 Compose `Color`，按本工程分层应放在 `core:ui`
+         *    （依赖方向允许 core:ui → module:data），所以这里只能存 id 字符串。
+         */
+        object Visualizer {
+            /** 柱宽（dp）。OrBit 范围 2.0..14.0。 */
+            var barWidthDp: Float
+                get() = kv.decodeFloat("ui_visualizer_bar_width_dp", 5f)
+                set(value) { kv.encode("ui_visualizer_bar_width_dp", value) }
+
+            /** 柱透明度。OrBit 范围 0.10..1.0。 */
+            var barAlpha: Float
+                get() = kv.decodeFloat("ui_visualizer_bar_alpha", 1f)
+                set(value) { kv.encode("ui_visualizer_bar_alpha", value) }
+
+            /** 描边宽度（dp）。OrBit 范围 0.0..4.0，0 表示不画描边（默认）。 */
+            var borderWidthDp: Float
+                get() = kv.decodeFloat("ui_visualizer_border_width_dp", 0f)
+                set(value) { kv.encode("ui_visualizer_border_width_dp", value) }
+
+            /** 描边透明度。 */
+            var borderAlpha: Float
+                get() = kv.decodeFloat("ui_visualizer_border_alpha", 0.8f)
+                set(value) { kv.encode("ui_visualizer_border_alpha", value) }
+
+            /** 描边颜色（ARGB，`Long` 避免有符号 Int 的负数问题）。默认不透明白。 */
+            var borderColorArgb: Long
+                get() = kv.decodeLong("ui_visualizer_border_color_argb", 0xFFFFFFFFL)
+                set(value) { kv.encode("ui_visualizer_border_color_argb", value) }
+
+            /** 仅描边（线框镂空模式）：只画柱子边框、内部不填充。 */
+            var borderOnly: Boolean
+                get() = kv.decodeBool("ui_visualizer_border_only", false)
+                set(value) { kv.encode("ui_visualizer_border_only", value) }
+
+            /** 单色模式：整条频谱用同一颜色而非双色渐变。 */
+            var singleColor: Boolean
+                get() = kv.decodeBool("ui_visualizer_single_color", false)
+                set(value) { kv.encode("ui_visualizer_single_color", value) }
+
+            /** 自定义配色第一色（ARGB）。 */
+            var customColorArgb: Long
+                get() = kv.decodeLong("ui_visualizer_custom_color_argb", 0xFF00B8D4L)
+                set(value) { kv.encode("ui_visualizer_custom_color_argb", value) }
+
+            /** 自定义配色第二色（ARGB）。 */
+            var customColor2Argb: Long
+                get() = kv.decodeLong("ui_visualizer_custom_color2_argb", 0xFF818CF8L)
+                set(value) { kv.encode("ui_visualizer_custom_color2_argb", value) }
+
+            /** 峰值衰减动画开关（柱顶的峰值块会缓慢下落）。 */
+            var peakDecayEnabled: Boolean
+                get() = kv.decodeBool("ui_visualizer_peak_decay_enabled", true)
+                set(value) { kv.encode("ui_visualizer_peak_decay_enabled", value) }
+
+            /** 配色方案 id，对应 `VisualizerColorScheme.id`；默认「跟随背景」。 */
+            var colorSchemeId: String
+                get() = kv.decodeString("ui_visualizer_color_scheme_id", "follow_background")
+                    ?: "follow_background"
+                set(value) { kv.encode("ui_visualizer_color_scheme_id", value) }
+
+            /** 全屏最大化可视化。 */
+            var isMaximized: Boolean
+                get() = kv.decodeBool("ui_visualizer_maximized", false)
+                set(value) { kv.encode("ui_visualizer_maximized", value) }
+        }
+
         /** Only disables player artwork track swipes; buttons and the home carousel remain active. */
         var playerSwipeToChangeTrackDisabled: Boolean
             get() = kv.decodeBool("ui_player_swipe_to_change_track_disabled", false)
