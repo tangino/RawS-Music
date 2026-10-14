@@ -173,18 +173,36 @@ object PlatformAccountManager {
         }
     }
 
-    /** 拉取用户自建 / 收藏的歌单；失败返回空列表（由 UI 提示）。 */
-    suspend fun fetchUserPlaylists(platform: OnlinePlatform): List<OnlinePlaylist> =
+    /**
+     * 拉取用户自建 / 收藏的歌单。
+     *
+     * 返回 [Result] 而不是裸 `List`：**「没有歌单」与「拉取失败」必须能区分**。
+     * 原实现失败时返回 `emptyList()`，UI 只能显示「你没有歌单」—— 用户会以为歌单丢了，
+     * 而实际是网络或平台接口的问题。这是本工程反复强调的「不要静默失败」。
+     *
+     * （此方法此前没有任何调用方，所以改成 Result 是安全的；`IPlatformAuthService.getUserPlaylists`
+     * 的签名保持不动，避免动到已移植的平台实现。）
+     *
+     * 失败情形：未登录、平台无对应服务、平台接口异常。
+     * **成功但列表为空**表示该账号确实没有歌单（正常结果，不是错误）。
+     */
+    suspend fun fetchUserPlaylists(platform: OnlinePlatform): Result<List<OnlinePlaylist>> =
         withContext(Dispatchers.IO) {
-            val account = getAccount(platform) ?: return@withContext emptyList()
-            val service = authServices[platform] ?: return@withContext emptyList()
+            val account = getAccount(platform)
+                ?: return@withContext Result.failure(
+                    IllegalStateException("${platform.displayName} 未登录"),
+                )
+            val service = authServices[platform]
+                ?: return@withContext Result.failure(
+                    IllegalStateException("${platform.displayName} 暂无可用登录服务"),
+                )
             try {
-                service.getUserPlaylists(account)
+                Result.success(service.getUserPlaylists(account))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
                 AppLogger.e(TAG, "获取 ${platform.displayName} 用户歌单失败", error)
-                emptyList()
+                Result.failure(error)
             }
         }
 
