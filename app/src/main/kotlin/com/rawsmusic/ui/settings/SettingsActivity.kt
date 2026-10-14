@@ -25,6 +25,7 @@ class SettingsActivity : BaseSettingsActivity() {
                 onNavigateToHdr = { navigateToSettings(HdrSettingsActivity::class.java) },
                 onWebDavBackup = { navigateToSettings(WebDavBackupActivity::class.java) },
                 onNavigateToPlatformAccount = { navigateToSettings(PlatformAccountActivity::class.java) },
+                onNavigateToCloudSync = { navigateToSettings(CloudSyncActivity::class.java) },
                 onNavigateToLogViewer = { navigateToSettings(LogViewerActivity::class.java) },
                 onNavigateToAbout = { navigateToSettings(AboutActivity::class.java) },
                 onNavigateToScanSettings = { navigateToSettings(ScanSettingsActivity::class.java) }

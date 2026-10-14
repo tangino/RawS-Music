@@ -281,6 +281,7 @@ fun LiquidGlassSettingsScreen(
     onNavigateToAlbumArt: () -> Unit,
     onWebDavBackup: () -> Unit,
     onNavigateToPlatformAccount: () -> Unit,
+    onNavigateToCloudSync: () -> Unit,
     onNavigateToLogViewer: () -> Unit,
     onNavigateToAbout: () -> Unit = {},
     onNavigateToScanSettings: () -> Unit = {},
@@ -514,6 +515,14 @@ fun LiquidGlassSettingsScreen(
                     iconRes = R.drawable.ic_settings_cloud_backup,
                     tone = SettingsRootIconTone.Backup,
                     onClick = onWebDavBackup
+                ),
+                SettingsRootItem(
+                    title = stringResource(R.string.cloud_sync_entry_title),
+                    summary = stringResource(R.string.cloud_sync_entry_summary),
+                    keywords = stringResource(R.string.cloud_sync_entry_keywords),
+                    iconRes = R.drawable.ic_settings_cloud_sync,
+                    tone = SettingsRootIconTone.CloudSync,
+                    onClick = onNavigateToCloudSync
                 )
             )
         ),
@@ -2169,6 +2178,7 @@ private enum class SettingsRootIconTone(
     Scan(Color(0xFF3F8363), Color(0xFF7DC39D)),
     Backup(Color(0xFF3D759F), Color(0xFF7EB4D8)),
     PlatformAccount(Color(0xFF2F6FA8), Color(0xFF83B4E2)),
+    CloudSync(Color(0xFF2E7D6F), Color(0xFF82C7BA)),
     Log(Color(0xFF64758C), Color(0xFFA7B5C7)),
     About(Color(0xFF6E7180), Color(0xFFB3B5C0));
 
@@ -2190,6 +2200,7 @@ private enum class SettingsRootIconTone(
         Scan -> ScanSettingsActivity::class.java
         Backup -> WebDavBackupActivity::class.java
         PlatformAccount -> PlatformAccountActivity::class.java
+        CloudSync -> CloudSyncActivity::class.java
         Log -> LogViewerActivity::class.java
         About -> AboutActivity::class.java
     }

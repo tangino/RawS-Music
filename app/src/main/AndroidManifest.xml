@@ -172,6 +172,7 @@
         <activity android:name=".ui.settings.HardwareDeviceControlActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.WebDavBackupActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.PlatformAccountActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
+        <activity android:name=".ui.settings.CloudSyncActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.AboutActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.RewardActivity" android:theme="@style/SettingsActivityTheme" android:exported="false" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.ScanSettingsActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
