@@ -31,6 +31,7 @@
     <string name="source_tab_sources">Sources</string>
     <string name="source_tab_configuration">Configure sources</string>
     <string name="source_tab_downloads">Downloads</string>
+    <string name="source_tab_cloud_sync">Cloud sync</string>
     <string name="common_hi_res">Hi-Res</string>
     <string name="source_search_hint">Search songs, artists, or albums</string>
     <string name="source_no_playback">No online source is playing</string>

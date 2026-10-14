@@ -305,6 +305,11 @@ fun SourceImportPage(
                     SourcePortalTab.Downloads -> SourceDownloadsPage(
                         onBack = { popTab() },
                     )
+
+                    SourcePortalTab.CloudSync -> SourceCloudSyncTab(
+                        installedSources = installedLxSources,
+                        onBack = { popTab() },
+                    )
                 }
             }
         }

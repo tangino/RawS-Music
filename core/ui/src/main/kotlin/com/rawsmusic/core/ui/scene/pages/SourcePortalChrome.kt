@@ -53,6 +53,7 @@ import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.CloudFill
 import top.yukonga.miuix.kmp.icon.extended.Music
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -61,6 +62,7 @@ enum class SourcePortalTab(val labelRes: Int) {
     Sources(R.string.source_tab_sources),
     Configuration(R.string.source_tab_configuration),
     Downloads(R.string.source_tab_downloads),
+    CloudSync(R.string.source_tab_cloud_sync),
 }
 
 @Composable
@@ -318,6 +320,12 @@ private fun SourcePortalTabIcon(
         )
         SourcePortalTab.Downloads -> Icon(
             painter = painterResource(R.drawable.ic_source_download),
+            contentDescription = stringResource(tab.labelRes),
+            tint = tint,
+            modifier = modifier,
+        )
+        SourcePortalTab.CloudSync -> Icon(
+            imageVector = MiuixIcons.Regular.CloudFill,
             contentDescription = stringResource(tab.labelRes),
             tint = tint,
             modifier = modifier,
