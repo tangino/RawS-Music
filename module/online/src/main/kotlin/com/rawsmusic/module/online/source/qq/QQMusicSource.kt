@@ -77,10 +77,14 @@ class QQMusicSource(
         return trimmed
     }
 
-    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
-        // QQ 音乐分类标签预设与兜底
-        listOf(
+    companion object {
+        private val PRESET_TAGS = listOf(
             OnlinePlaylistTag("10000000", "全部", "默认"),
+            OnlinePlaylistTag("39", "华语", "语种"),
+            OnlinePlaylistTag("40", "欧美", "语种"),
+            OnlinePlaylistTag("41", "日语", "语种"),
+            OnlinePlaylistTag("42", "韩语", "语种"),
+            OnlinePlaylistTag("43", "粤语", "语种"),
             OnlinePlaylistTag("165", "流行", "风格"),
             OnlinePlaylistTag("166", "摇滚", "风格"),
             OnlinePlaylistTag("167", "民谣", "风格"),
@@ -99,8 +103,16 @@ class QQMusicSource(
         )
     }
 
+    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
+        PRESET_TAGS
+    }
+
     override suspend fun getPlaylists(tagId: String, page: Int, pageSize: Int): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
-        val categoryId = if (tagId.isEmpty() || tagId == "全部") 10000000 else tagId.toIntOrNull() ?: 10000000
+        val categoryId = when {
+            tagId.isEmpty() || tagId == "全部" || tagId == "10000000" -> 10000000
+            tagId.toIntOrNull() != null -> tagId.toInt()
+            else -> PRESET_TAGS.firstOrNull { it.name == tagId }?.id?.toIntOrNull() ?: 10000000
+        }
         val sin = (page - 1) * pageSize
         val ein = sin + pageSize - 1
 
@@ -1056,9 +1068,21 @@ class QQMusicSource(
                 description = singerBrief
             )
 
+            val finalSongs = if (songs.isNotEmpty()) {
+                songs
+            } else if (artistName.isNotBlank() && !artistName.startsWith("歌手")) {
+                try {
+                    searchSongsByArtist(artistName, 1, 30)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+
             com.rawsmusic.module.online.model.OnlineArtistDetail(
                 artist = artist,
-                hotSongs = songs,
+                hotSongs = finalSongs,
                 albums = finalAlbums
             )
         } catch (_: Exception) {

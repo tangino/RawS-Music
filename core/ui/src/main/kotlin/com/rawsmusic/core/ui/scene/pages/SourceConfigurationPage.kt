@@ -2,7 +2,9 @@ package com.rawsmusic.core.ui.scene.pages
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +22,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,9 +39,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
+import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.InstalledMusicSource
 import com.rawsmusic.module.data.source.MusicSourceOrigin
+import com.rawsmusic.module.data.source.ResolveStrategy
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Switch
@@ -62,6 +67,7 @@ internal fun SourceConfigurationPage(
     onToggleLx: (String, Boolean) -> Unit,
     onDeleteMusicFree: (InstalledMusicSource) -> Unit,
     onDeleteLx: (InstalledLxSource) -> Unit,
+    onOpenCloudSync: () -> Unit = {},
 ) {
     val scheme = MiuixTheme.colorScheme
     Column(modifier = Modifier.fillMaxSize()) {
@@ -73,6 +79,16 @@ internal fun SourceConfigurationPage(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 174.dp),
         ) {
+            var currentStrategy by remember { mutableStateOf(AppPreferences.Source.resolveStrategy) }
+            ResolveStrategyCard(
+                currentStrategy = currentStrategy,
+                onSelectStrategy = { newStrategy ->
+                    currentStrategy = newStrategy
+                    AppPreferences.Source.resolveStrategy = newStrategy
+                },
+            )
+            Spacer(Modifier.height(20.dp))
+
             SourceProtocolHeader(
                 title = stringResource(R.string.source_musicfree_title),
                 summary = stringResource(R.string.source_musicfree_summary),
@@ -141,6 +157,29 @@ internal fun SourceConfigurationPage(
                     onClick = onImportLxUrl,
                     modifier = Modifier.weight(1f),
                 )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(scheme.primary.copy(alpha = 0.08f))
+                    .clickable(onClick = onOpenCloudSync)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_cloud),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(scheme.primary),
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("洛雪音源云同步", color = scheme.onBackground, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("在云端（Cloudflare）安全备份或一键恢复全部音源脚本", color = scheme.onSurfaceVariantSummary, fontSize = 11.sp)
+                }
+                Text("前往同步 ›", color = scheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
             Spacer(Modifier.height(12.dp))
             if (installedLxSources.isEmpty()) {
@@ -401,3 +440,83 @@ internal fun SourceUrlImportDialog(
         }
     }
 }
+
+/**
+ * 寻源解析调度策略配置卡片 (1:1 还原 OrbitPlayer)
+ */
+@Composable
+private fun ResolveStrategyCard(
+    currentStrategy: ResolveStrategy,
+    onSelectStrategy: (ResolveStrategy) -> Unit,
+) {
+    val scheme = MiuixTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(scheme.surfaceContainer.copy(alpha = 0.74f))
+            .padding(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "寻源解析调度策略",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.onBackground,
+            )
+            Text(
+                text = "支持双向预加载",
+                fontSize = 11.sp,
+                color = scheme.primary,
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ResolveStrategy.entries.forEach { strategy ->
+                val isSelected = currentStrategy == strategy
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isSelected) scheme.primary.copy(alpha = 0.15f)
+                            else scheme.surfaceContainer.copy(alpha = 0.6f)
+                        )
+                        .border(
+                            width = if (isSelected) 1.5.dp else 0.5.dp,
+                            color = if (isSelected) scheme.primary else scheme.outline.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        .clickable { onSelectStrategy(strategy) }
+                        .padding(vertical = 12.dp, horizontal = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = strategy.title,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) scheme.primary else scheme.onBackground,
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = if (strategy == ResolveStrategy.CLASSIC_POLLING) "多源轮询 / 流长严检" else "多源并发 / 极速秒开",
+                            fontSize = 10.sp,
+                            color = if (isSelected) scheme.primary.copy(alpha = 0.85f) else scheme.onSurfaceVariantSummary,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

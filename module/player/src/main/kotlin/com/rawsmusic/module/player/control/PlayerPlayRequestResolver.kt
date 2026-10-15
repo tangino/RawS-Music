@@ -11,10 +11,16 @@ internal data class ResolvedPlayRequest(
 internal class PlayerPlayRequestResolver(
     private val logWarning: (String) -> Unit,
 ) {
-    fun sameItem(left: AudioFile, right: AudioFile): Boolean =
-        left.path == right.path &&
+    fun sameItem(left: AudioFile, right: AudioFile): Boolean {
+        if (left == right) return true
+        if (left.path == right.path &&
             left.cueOffsetMs == right.cueOffsetMs &&
             left.cueTrackIndex == right.cueTrackIndex
+        ) return true
+        if (left.id != 0L && left.id == right.id) return true
+        if (left.title.isNotBlank() && left.title == right.title && left.artist == right.artist) return true
+        return false
+    }
 
     fun sameQueue(left: List<AudioFile>, right: List<AudioFile>): Boolean {
         if (left.size != right.size) return false

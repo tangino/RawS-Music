@@ -5636,6 +5636,25 @@ class PlayerController private constructor(context: Context) {
             Log.w(TAG, "play() skip: isReleased")
             return
         }
+        if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
+            val mediaItems = queue.map { qSong ->
+                val rest = qSong.path.removePrefix("online://")
+                val platformId = rest.substringBefore('/', "netease")
+                val songId = rest.substringAfter('/', qSong.id.toString())
+                com.rawsmusic.core.common.source.RawSourceMediaItem(
+                    sourceId = platformId,
+                    remoteId = songId,
+                    mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                    title = qSong.title,
+                    artists = listOf(qSong.artist),
+                    album = qSong.album,
+                    durationMs = qSong.duration,
+                    artworkUrl = qSong.albumArtPath,
+                )
+            }
+            MusicSourcePlaybackController.play(context, mediaItems, index)
+            return
+        }
         _playbackSourceOverride.value?.let { activeOverride ->
             if (!activeOverride.matches(song)) {
                 AppLogger.i(

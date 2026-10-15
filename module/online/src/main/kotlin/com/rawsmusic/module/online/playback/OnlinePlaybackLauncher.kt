@@ -85,7 +85,19 @@ object OnlinePlaybackLauncher {
     }
 
     /** 找到候选并交给 RawS 播放控制器起播。优先照搬 OrBitPlayer 的全套寻源与探活算法。 */
-    suspend fun play(context: Context, item: OnlineSongItem): OnlinePlayResult = try {
+    suspend fun play(
+        context: Context,
+        item: OnlineSongItem,
+        queue: List<OnlineSongItem> = listOf(item),
+        index: Int = 0,
+    ): OnlinePlayResult = try {
+        val rawQueue = if (queue.isNotEmpty()) {
+            queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+        } else {
+            listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
+        }
+        val resolvedIndex = if (index in rawQueue.indices) index else 0
+
         // 1. 优先走 OrBitPlayer 寻源核心（LRU 缓存 -> 原平台优先通道 -> 跨平台并发搜救 -> 官方兜底直链 -> 探活）
         val resolved = OnlineAudioSourceResolver.resolvePlayableSource(
             context = context,
@@ -107,13 +119,26 @@ object OnlinePlaybackLauncher {
                 quality = quality,
                 headers = emptyMap(),
             )
-            MusicSourcePlaybackController.playResolved(context = context, item = rawMediaItem, source = rawResolved)
+            MusicSourcePlaybackController.playResolved(
+                context = context,
+                item = rawMediaItem,
+                source = rawResolved,
+                queue = rawQueue,
+                index = resolvedIndex,
+                originalPlatform = item.platform.displayName,
+                resolvedPlatform = resolved.platform.displayName,
+                sourceTag = resolved.sourceName,
+            )
             OnlinePlayResult.Started
         } else {
             // 2. 补充兜底：若全平台多源搜救未果，尝试从用户安装的 MusicFree 插件库检索
             val candidate = findPlayableCandidate(context, item)
             if (candidate != null) {
-                MusicSourcePlaybackController.playItem(context = context, item = candidate)
+                MusicSourcePlaybackController.play(
+                    context = context,
+                    queue = rawQueue,
+                    index = resolvedIndex,
+                )
                 OnlinePlayResult.Started
             } else {
                 val hasEnabledSource = MusicSourcePluginStore.sources.value.any { it.enabled } ||
@@ -131,5 +156,16 @@ object OnlinePlaybackLauncher {
     } catch (error: Throwable) {
         AppLogger.e(TAG, "在线歌曲起播失败：${item.title}", error)
         OnlinePlayResult.Failed(error.message.orEmpty().ifBlank { "解析播放地址失败" })
+    }
+
+    suspend fun playQueue(
+        context: Context,
+        songs: List<OnlineSongItem>,
+        startIndex: Int = 0,
+    ): OnlinePlayResult {
+        if (songs.isEmpty()) return OnlinePlayResult.Failed("队列为空")
+        val targetIndex = startIndex.coerceIn(songs.indices)
+        val item = songs[targetIndex]
+        return play(context = context, item = item, queue = songs, index = targetIndex)
     }
 }

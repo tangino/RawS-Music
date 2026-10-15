@@ -269,6 +269,17 @@ class PlaylistStore private constructor(private val context: Context) {
         online = onlineSongsOf(playlist),
     )
 
+    fun getPlaylistCoverUrl(playlistId: String): String? =
+        AppPreferences.storage.decodeString("playlist_cover_url_$playlistId")
+
+    fun setPlaylistCoverUrl(playlistId: String, coverUrl: String?) {
+        if (coverUrl.isNullOrBlank()) {
+            AppPreferences.storage.remove("playlist_cover_url_$playlistId")
+        } else {
+            AppPreferences.storage.encode("playlist_cover_url_$playlistId", coverUrl)
+        }
+    }
+
     /**
      * 把一批候选路径匹配到曲库（纯文本 / M3U8 / 链接导入共用）。
      *
@@ -316,6 +327,7 @@ class PlaylistStore private constructor(private val context: Context) {
         name: String,
         localSongs: List<AudioFile>,
         onlineSongs: List<UserPlaylistSong> = emptyList(),
+        coverUrl: String? = null,
     ): UserPlaylist? = withDatabase {
         mutationMutex.withLock {
             val baseName = name.trim().ifBlank { DEFAULT_IMPORT_PLAYLIST_NAME }
@@ -329,13 +341,16 @@ class PlaylistStore private constructor(private val context: Context) {
             if (incoming.isEmpty() && existing != null) return@withLock existing
 
             val importedSongs = existing.orEmptySongs() + incoming
+            val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
             val imported = UserPlaylist(
                 id = existing?.id ?: "playlist-${UUID.randomUUID()}",
                 name = existing?.name ?: baseName,
                 songs = importedSongs,
                 createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
+                coverUrl = targetCover,
             )
+            targetCover?.let { setPlaylistCoverUrl(imported.id, it) }
             dao.upsertPlaylist(
                 imported.toEntity(existing?.let(_playlists.value::indexOf) ?: _playlists.value.size),
             )
@@ -480,7 +495,8 @@ class PlaylistStore private constructor(private val context: Context) {
                     name = playlist.name,
                     songs = songsByPlaylist[playlist.playlistId].orEmpty(),
                     createdAt = playlist.createdAt,
-                    updatedAt = playlist.updatedAt
+                    updatedAt = playlist.updatedAt,
+                    coverUrl = getPlaylistCoverUrl(playlist.playlistId),
                 )
             }
         )
@@ -569,6 +585,7 @@ class PlaylistStore private constructor(private val context: Context) {
         .put("name", playlist.name)
         .put("createdAt", playlist.createdAt)
         .put("updatedAt", playlist.updatedAt)
+        .put("coverUrl", playlist.coverUrl.orEmpty())
         .put("songs", JSONArray().also { songs ->
             playlist.songs.forEach { song ->
                 songs.put(JSONObject()
@@ -597,12 +614,18 @@ class PlaylistStore private constructor(private val context: Context) {
                 ))
             }
         }
+        val id = json.optString("id").ifBlank { "playlist-${UUID.randomUUID()}" }
+        val coverUrl = json.optString("coverUrl").takeIf { it.isNotBlank() }
+        if (!coverUrl.isNullOrBlank()) {
+            setPlaylistCoverUrl(id, coverUrl)
+        }
         return UserPlaylist(
-            id = json.optString("id").ifBlank { "playlist-${UUID.randomUUID()}" },
+            id = id,
             name = json.optString("name"),
             songs = songs,
             createdAt = json.optLong("createdAt"),
-            updatedAt = json.optLong("updatedAt")
+            updatedAt = json.optLong("updatedAt"),
+            coverUrl = coverUrl ?: getPlaylistCoverUrl(id),
         )
     }
 }

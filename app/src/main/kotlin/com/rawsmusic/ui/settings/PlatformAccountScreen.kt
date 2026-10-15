@@ -1,8 +1,11 @@
 package com.rawsmusic.ui.settings
 
+import android.content.Context
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +67,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 
 /**
  * 平台账号（QQ / 酷狗）设置页。
@@ -354,15 +358,25 @@ private fun PlatformAccountQrDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val colors = themeColors()
     val displayName = platformDisplayName(platform)
 
+    var currentTab by remember(platform) { mutableIntStateOf(0) } // 0: 扫码, 1: Cookie
+
+    // ====== 扫码登录状态 ======
     var attempt by remember(platform) { mutableIntStateOf(0) }
     var qrBitmap by remember(platform) { mutableStateOf<Bitmap?>(null) }
     var status by remember(platform) { mutableStateOf<QrStatus?>(null) }
     var polling by remember(platform) { mutableStateOf(false) }
 
-    LaunchedEffect(platform, attempt) {
+    // ====== Cookie 登录状态 ======
+    var cookieInput by remember(platform) { mutableStateOf("") }
+    var isCookieLoggingIn by remember(platform) { mutableStateOf(false) }
+    var cookieError by remember(platform) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(platform, attempt, currentTab) {
+        if (currentTab != 0) return@LaunchedEffect
         qrBitmap = null
         status = null
         polling = true
@@ -381,7 +395,6 @@ private fun PlatformAccountQrDialog(
                 return@LaunchedEffect
             }
 
-            // 生成二维码是纯 CPU + GC 的活（QQ 是 PNG 解码，酷狗可能是 base64 PNG 或需要 ZXing 编码）。
             qrBitmap = withContext(Dispatchers.Default) { renderQrBitmap(qrData) }
             if (qrBitmap == null) {
                 status = QrStatus.ERROR
@@ -403,7 +416,6 @@ private fun PlatformAccountQrDialog(
                 status = result.status
                 when (result.status) {
                     QrStatus.SUCCESS -> {
-                        // 账号已由 checkQrStatus 内部落盘，这里只提示 + 关弹窗。
                         AppNoticeBus.post(
                             message = context.getString(
                                 R.string.platform_account_login_success,
@@ -417,7 +429,6 @@ private fun PlatformAccountQrDialog(
                     QrStatus.EXPIRED, QrStatus.ERROR -> return@LaunchedEffect
                     else -> Unit
                 }
-                // 平台没主动回过期时按有效期兜底，避免无限轮询一个已经失效的 key。
                 if (System.currentTimeMillis() >= deadline) {
                     status = QrStatus.EXPIRED
                     return@LaunchedEffect
@@ -428,7 +439,6 @@ private fun PlatformAccountQrDialog(
         }
     }
 
-    // 弹窗被移除时复位按钮可用性标记；轮询协程本身由上面的 LaunchedEffect 取消。
     DisposableEffect(platform) {
         onDispose { polling = false }
     }
@@ -443,10 +453,48 @@ private fun PlatformAccountQrDialog(
     }
     val retryable = status == QrStatus.EXPIRED || status == QrStatus.ERROR
 
+    fun handleCookieLogin() {
+        if (cookieInput.isBlank()) {
+            cookieError = "请输入 Cookie 或 Token 内容"
+            return
+        }
+        scope.launch {
+            isCookieLoggingIn = true
+            cookieError = null
+            try {
+                val parsed = parseCookieMap(cookieInput).toMutableMap()
+                val trimmed = cookieInput.trim()
+                val keyPattern = Regex("(Q_H_L_[A-Za-z0-9_-]+)")
+                val keyMatch = keyPattern.find(trimmed)
+                if (keyMatch != null) {
+                    val k = keyMatch.value
+                    parsed["qm_keyst"] = k
+                    parsed["qqmusic_key"] = k
+                    parsed["psrf_musickey_id"] = k
+                }
+                val result = PlatformAccountManager.loginWithCookies(platform, parsed)
+                result.onSuccess { account ->
+                    AppNoticeBus.post(
+                        message = context.getString(
+                            R.string.platform_account_login_success,
+                            account.nickname.ifBlank { displayName },
+                        ),
+                        icon = AppNoticeIcon.INFO,
+                    )
+                    onDismiss()
+                }.onFailure { err ->
+                    cookieError = "登录失败：${err.message ?: "Cookie 无效或已过期"}"
+                }
+            } finally {
+                isCookieLoggingIn = false
+            }
+        }
+    }
+
     RawMiuixOverlayDialog(
         show = true,
         title = stringResource(R.string.platform_account_qr_title, displayName),
-        summary = stringResource(R.string.platform_account_qr_summary, displayName),
+        summary = if (currentTab == 0) stringResource(R.string.platform_account_qr_summary, displayName) else "手动填入账号 Cookie 或 Token 登录",
         backgroundColor = colors.surface,
         onDismissRequest = onDismiss,
     ) {
@@ -454,58 +502,182 @@ private fun PlatformAccountQrDialog(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(
+            // Tab 切换按钮
+            Row(
                 modifier = Modifier
-                    .size(216.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(colors.background),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val bitmap = qrBitmap
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                    )
-                } else {
-                    Text(
-                        text = stringResource(R.string.platform_account_qr_loading),
-                        color = colors.secondaryText,
-                        fontSize = 12.sp,
-                        fontFamily = appFontFamily(),
-                    )
+                Button(
+                    onClick = { currentTab = 0 },
+                    colors = if (currentTab == 0) ButtonDefaults.buttonColorsPrimary() else ButtonDefaults.buttonColors(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(text = "扫码登录", fontFamily = appFontFamily())
+                }
+                Button(
+                    onClick = { currentTab = 1 },
+                    colors = if (currentTab == 1) ButtonDefaults.buttonColorsPrimary() else ButtonDefaults.buttonColors(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(text = "Cookie 登录", fontFamily = appFontFamily())
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = stringResource(statusRes),
-                color = if (status == QrStatus.SUCCESS) colors.primary else colors.secondaryText,
-                fontSize = 13.sp,
-                fontFamily = appFontFamily(),
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                if (retryable) {
+
+            if (currentTab == 0) {
+                Box(
+                    modifier = Modifier
+                        .size(216.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.background),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bitmap = qrBitmap
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.platform_account_qr_loading),
+                            color = colors.secondaryText,
+                            fontSize = 12.sp,
+                            fontFamily = appFontFamily(),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = stringResource(statusRes),
+                    color = if (status == QrStatus.SUCCESS) colors.primary else colors.secondaryText,
+                    fontSize = 13.sp,
+                    fontFamily = appFontFamily(),
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (retryable) {
+                        TextButton(
+                            text = stringResource(R.string.platform_account_qr_retry),
+                            onClick = { attempt += 1 },
+                            enabled = !polling,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     TextButton(
-                        text = stringResource(R.string.platform_account_qr_retry),
-                        onClick = { attempt += 1 },
-                        enabled = !polling,
+                        text = stringResource(R.string.platform_account_qr_close),
+                        onClick = onDismiss,
                         modifier = Modifier.weight(1f),
                     )
                 }
+            } else {
+                TextField(
+                    value = cookieInput,
+                    onValueChange = {
+                        cookieInput = it
+                        cookieError = null
+                    },
+                    label = "填入 Cookie 字符串或 JSON",
+                    singleLine = false,
+                    enabled = !isCookieLoggingIn,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                cookieError?.let { err ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(text = err, color = Color(0xFFE53935), fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(
+                        text = "从剪贴板粘贴",
+                        onClick = {
+                            try {
+                                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                val clip = cb?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
+                                if (!clip.isNullOrBlank()) {
+                                    cookieInput = clip
+                                    cookieError = null
+                                }
+                            } catch (_: Exception) {}
+                        },
+                        enabled = !isCookieLoggingIn,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = ::handleCookieLogin,
+                        enabled = !isCookieLoggingIn && cookieInput.isNotBlank(),
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(text = if (isCookieLoggingIn) "登录验证中..." else "验证并登录", fontFamily = appFontFamily())
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
                 TextButton(
                     text = stringResource(R.string.platform_account_qr_close),
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
     }
+}
+
+private fun parseCookieMap(input: String): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    val text = input.trim()
+
+    if (text.startsWith("[") && text.endsWith("]")) {
+        try {
+            val jsonArray = org.json.JSONArray(text)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.optJSONObject(i) ?: continue
+                val name = obj.optString("name", obj.optString("key", ""))
+                val value = obj.optString("value", "")
+                if (name.isNotBlank()) map[name] = value
+            }
+            if (map.isNotEmpty()) return map
+        } catch (_: Exception) {}
+    } else if (text.startsWith("{") && text.endsWith("}")) {
+        try {
+            val jsonObj = org.json.JSONObject(text)
+            val keys = jsonObj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                map[key] = jsonObj.optString(key, "")
+            }
+            if (map.isNotEmpty()) return map
+        } catch (_: Exception) {}
+    }
+
+    val lines = text.split("\n", ";", "&")
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) continue
+        if (trimmed.contains("=")) {
+            val equalIdx = trimmed.indexOf('=')
+            val key = trimmed.substring(0, equalIdx).trim()
+            val value = trimmed.substring(equalIdx + 1).trim()
+            if (key.isNotEmpty()) map[key] = value
+        } else if (trimmed.contains("\t")) {
+            val parts = trimmed.split("\t")
+            if (parts.size >= 2) {
+                val key = parts[0].trim()
+                val value = parts[1].trim()
+                if (key.isNotEmpty()) map[key] = value
+            }
+        }
+    }
+    return map
 }
 
 /** 退出登录是破坏性操作（凭据密文会被删除），单独二次确认。 */

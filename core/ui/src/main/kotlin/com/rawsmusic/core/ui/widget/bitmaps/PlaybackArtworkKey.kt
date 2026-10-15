@@ -14,6 +14,16 @@ import com.rawsmusic.core.common.model.resolveAudioFirstArtworkKey
  */
 fun AudioFile?.resolvePlaybackArtworkKey(fallback: String? = null): String? {
     val song = this
+    if (song != null) {
+        val external = song.albumArtPath.trim().ifBlank { fallback?.trim().orEmpty() }
+        if (external.startsWith("http://", ignoreCase = true) || external.startsWith("https://", ignoreCase = true)) {
+            return if (external.startsWith("http://", ignoreCase = true)) {
+                "https://" + external.substring(7)
+            } else {
+                external
+            }
+        }
+    }
     val fileKey = song?.fileArtworkKeyOrNull()
     if (!fileKey.isNullOrBlank()) return fileKey
     if (song == null) return fallback?.takeIf { it.isNotBlank() }

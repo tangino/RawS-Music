@@ -78,7 +78,7 @@ class CloudSourceJsonTest {
         assertEquals("s1", entry.id)
         assertEquals("音源甲", entry.name)
         assertEquals("/*js*/", entry.scriptContent)
-        assertTrue(entry.enabled)
+        assertTrue(entry.isEnabled)
         assertEquals(listOf("wy", "tx"), entry.supportPlatforms)
         assertEquals(1700000000000L, entry.importedAt)
         assertTrue(CloudSourceJson.isUsable(entry))
@@ -94,7 +94,7 @@ class CloudSourceJsonTest {
         val entry = CloudSourceJson.decode(docJson).single()
 
         assertEquals("s2", entry.id)
-        assertFalse("应能读到 enabled 别名", entry.enabled)
+        assertFalse("应能读到 enabled 别名", entry.isEnabled)
         assertEquals(123L, entry.importedAt)
     }
 
@@ -153,10 +153,10 @@ class CloudSourceJsonTest {
 
         val entry = CloudSourceJson.fromLxSource(source, "/*js*/")
 
-        assertEquals(setOf("wy", "tx"), entry.supportPlatforms.toSet())
+        assertEquals(setOf("wy", "tx"), entry.safeSupportPlatforms.toSet())
         // 音质不该混进来
-        assertFalse(entry.supportPlatforms.contains("320k"))
-        assertFalse(entry.supportPlatforms.contains("flac"))
+        assertFalse(entry.safeSupportPlatforms.contains("320k"))
+        assertFalse(entry.safeSupportPlatforms.contains("flac"))
     }
 
     @Test
@@ -168,11 +168,11 @@ class CloudSourceJsonTest {
         assertEquals(source.id, entry.id)
         assertEquals(source.name, entry.name)
         assertEquals("/*js*/", entry.scriptContent)
-        assertEquals(source.enabled, entry.enabled)
+        assertEquals(source.enabled, entry.isEnabled)
         assertEquals(source.installedAtMs, entry.importedAt)
         assertEquals(source.scriptSha256, entry.scriptSha256)
         // RawS 没有主音源概念 → 固定 false
-        assertFalse(entry.isPrimary)
+        assertFalse(entry.isPrimarySource)
     }
 
     @Test

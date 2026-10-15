@@ -570,7 +570,9 @@ object BitmapProvider {
                 trace("CACHE_DEFER_PLAYBACK_RESIZE seq=$seq bitmap=${cached.width}x${cached.height} target=${actualWidth}x${actualHeight} key=${key.tailForTrace()}")
             }
 
-            if (surface.rememberNullAsNoArt && hasRecentFailure(failureSourceKey, "${failureSourceKey}_${bucket}")) {
+            if (surface.rememberNullAsNoArt &&
+                !RemoteArtworkDownloader.isRemoteUrl(key) &&
+                hasRecentFailure(failureSourceKey, "${failureSourceKey}_${bucket}")) {
                 logFailCacheThrottled(failureSourceKey)
                 trace("NOT_FOUND_SENTINEL_HIT seq=$seq size=${actualWidth}x${actualHeight} priority=$priority key=${key.tailForTrace()}")
                 PowerTraceLogger.bitmapRequest(
@@ -581,6 +583,14 @@ object BitmapProvider {
                 )
                 postNull(request, terminalNoArt = true)
                 return completeAdmission(request)
+            }
+        }
+
+        if (RemoteArtworkDownloader.isRemoteUrl(key)) {
+            appContext?.let { ctx ->
+                val sourceDir = File(ctx.cacheDir, REMOTE_SOURCE_DIR)
+                val sourceFile = File(sourceDir, "${stableDigest(key)}.source")
+                RemoteArtworkDownloader.prefetch(key, sourceFile)
             }
         }
 
@@ -1955,6 +1965,7 @@ object BitmapProvider {
     }
 
     private fun pathPartFromArtworkKey(key: String): String {
+        if (RemoteArtworkDownloader.isRemoteUrl(key)) return key
         return key
             .removePrefix("audio://")
             .removePrefix("file://")
@@ -2339,93 +2350,20 @@ object BitmapProvider {
         if (!sourceDir.exists() && !sourceDir.mkdirs()) return SourceDecodeResult.TransientFailure
         val sourceFile = File(sourceDir, "${stableDigest(url)}.source")
 
-        if (!sourceFile.isFile || sourceFile.length() <= 0L) {
-            val temp = File(sourceDir, "${sourceFile.name}.tmp-${Thread.currentThread().id}")
-            val downloaded = runCatching {
-                var currentUrl = if (url.startsWith("//")) "https:$url" else url
-                var redirects = 0
-                var connection: HttpURLConnection? = null
-                var code = 0
-                while (redirects < 5) {
-                    val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 10_000
-                        readTimeout = 15_000
-                        instanceFollowRedirects = false // 手动处理跨协议与CDN跳转
-                        setRequestProperty(
-                            "User-Agent",
-                            "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                        )
-                        setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                        if (currentUrl.contains("qq.com") || currentUrl.contains("gtimg.cn")) {
-                            setRequestProperty("Referer", "https://y.qq.com/")
-                        } else if (currentUrl.contains("163.com") || currentUrl.contains("126.net")) {
-                            setRequestProperty("Referer", "https://music.163.com/")
-                        } else if (currentUrl.contains("kugou.com")) {
-                            setRequestProperty("Referer", "http://m.kugou.com/")
-                        } else if (currentUrl.contains("kuwo.cn")) {
-                            setRequestProperty("Referer", "http://www.kuwo.cn/")
-                        } else if (currentUrl.contains("migu.cn")) {
-                            setRequestProperty("Referer", "https://m.music.migu.cn/")
-                        }
-                    }
-                    code = conn.responseCode
-                    if (code in 300..399) {
-                        val location = conn.getHeaderField("Location")
-                        conn.disconnect()
-                        if (location.isNullOrBlank()) break
-                        currentUrl = if (location.startsWith("//")) {
-                            "https:$location"
-                        } else if (location.startsWith("http")) {
-                            location
-                        } else {
-                            URL(URL(currentUrl), location).toString()
-                        }
-                        redirects++
-                        continue
-                    }
-                    connection = conn
-                    break
-                }
-                val finalConn = connection ?: return@runCatching false
-                try {
-                    if (code !in 200..299) return@runCatching false
-                    val declaredLength = finalConn.contentLengthLong
-                    if (declaredLength > REMOTE_SOURCE_MAX_BYTES) return@runCatching false
-                    var copied = 0L
-                    finalConn.inputStream.use { input ->
-                        temp.outputStream().buffered().use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read <= 0) break
-                                copied += read
-                                if (copied > REMOTE_SOURCE_MAX_BYTES) return@runCatching false
-                                output.write(buffer, 0, read)
-                            }
-                        }
-                    }
-                    if (copied <= 0L) return@runCatching false
-                    if (!temp.renameTo(sourceFile) && !sourceFile.isFile) return@runCatching false
-                    true
-                } finally {
-                    finalConn.disconnect()
-                    if (temp.exists() && sourceFile.exists()) temp.delete()
-                }
-            }.getOrElse {
-                temp.delete()
-                false
-            }
-            if (!downloaded || !sourceFile.isFile || sourceFile.length() <= 0L) {
-                temp.delete()
-                return SourceDecodeResult.TransientFailure
-            }
+        val ready = RemoteArtworkDownloader.downloadToFile(url, sourceFile)
+        if (!ready || !sourceFile.isFile || sourceFile.length() <= 0L) {
+            Log.w(TAG, "decodeRemoteImage download failed for $url")
+            return SourceDecodeResult.TransientFailure
         }
 
         providerSourceCacheHit(storageKey, url, targetWidth, targetHeight, aspectPolicy)?.let {
             return SourceDecodeResult.Found(it, url)
         }
         val bitmap = decodeImageFile(sourceFile.absolutePath, targetWidth, targetHeight, aspectPolicy)
-            ?: return SourceDecodeResult.TransientFailure
+            ?: run {
+                Log.w(TAG, "decodeRemoteImage decodeImageFile failed for ${sourceFile.absolutePath} size=${sourceFile.length()} url=$url")
+                return SourceDecodeResult.TransientFailure
+            }
         return SourceDecodeResult.Found(bitmap, url)
     }
 
@@ -2699,15 +2637,12 @@ object BitmapProvider {
             val opts = threadLocalDecodeOptions.get()!!
             val sourceCacheKey = DecodedArtworkSourceCache.keyFor(filePath)
             val cachedBounds = sourceCacheKey?.let { DecodedArtworkSourceCache.getBounds(it) }
-            val origWidth: Int
-            val origHeight: Int
+            var origWidth: Int
+            var origHeight: Int
             if (cachedBounds != null) {
                 origWidth = cachedBounds.width
                 origHeight = cachedBounds.height
             } else {
-                // Keep dimensions alongside the decoded wrapper. Avoid
-                // repeating the bounds pass for every physical list holder while still versioning
-                // the record by canonical path, file length, and lastModified.
                 opts.inJustDecodeBounds = true
                 opts.inSampleSize = 1
                 opts.inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -2720,6 +2655,13 @@ object BitmapProvider {
                 }
             }
             if (origWidth <= 0 || origHeight <= 0) {
+                val freshOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(filePath, freshOpts)
+                origWidth = freshOpts.outWidth
+                origHeight = freshOpts.outHeight
+            }
+            if (origWidth <= 0 || origHeight <= 0) {
+                Log.w(TAG, "decodeImageFile failed to read bounds for $filePath")
                 return null
             }
 
@@ -2783,9 +2725,20 @@ object BitmapProvider {
             opts.inPreferredConfig = config
             opts.inMutable = config != Bitmap.Config.HARDWARE
 
-            val decoded = BitmapFactory.decodeFile(filePath, opts) ?: return null
+            var decoded = BitmapFactory.decodeFile(filePath, opts)
+            if (decoded == null && config != Bitmap.Config.ARGB_8888) {
+                opts.inPreferredConfig = Bitmap.Config.ARGB_8888
+                opts.inMutable = true
+                decoded = BitmapFactory.decodeFile(filePath, opts)
+            }
+            if (decoded == null) {
+                Log.w(TAG, "decodeImageFile decodeFile returned null for $filePath config=$config sampleSize=${opts.inSampleSize}")
+                return null
+            }
 
+            val isRemoteFile = filePath.contains(REMOTE_SOURCE_DIR)
             if (
+                !isRemoteFile &&
                 useDecodedSourceRescaleCache &&
                 sourceCacheKey != null &&
                 sourceSide >= maxOf(targetWidth, targetHeight)
@@ -2804,11 +2757,19 @@ object BitmapProvider {
                         )
                     }
                     if (scaled != null && !scaled.isRecycled) return scaled
-                    return null
                 }
             }
 
-            normalizeDecodedBitmap(decoded, targetWidth, targetHeight, aspectPolicy)
+            val normalized = normalizeDecodedBitmap(decoded, targetWidth, targetHeight, aspectPolicy)
+            if (normalized != null && !normalized.isRecycled) return normalized
+            if (!decoded.isRecycled) return decoded
+
+            // 终极单次文件重读容错兜底：若上游流程发生并发回收，使用全新配置直接解码文件
+            val freshOpts = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
+            }
+            BitmapFactory.decodeFile(filePath, freshOpts)
         } catch (e: OutOfMemoryError) {
             // Artwork is optional.  Do not let one oversized/corrupt cover terminate playback or
             // the whole process; the caller will use its placeholder/fallback path.
@@ -3946,6 +3907,7 @@ object BitmapProvider {
                     // source wrapper; applying it here made every reused list holder inherit a
                     // stale sentinel and was the direct cause of covers disappearing in bulk.
                     if (request.surface.rememberNullAsNoArt &&
+                        !RemoteArtworkDownloader.isRemoteUrl(request.decodeKey) &&
                         hasRecentFailure(failureSourceKey, "${failureSourceKey}_${request.bucket}")) {
                         trace("DECODE_SKIP_NO_ART_SENTINEL seq=${request.traceSeq} provider=${request.key.tailForTrace()} decode=${request.decodeKey.tailForTrace()}")
                         // deliverResult owns draining all observers, including list waiters that
@@ -3982,7 +3944,10 @@ object BitmapProvider {
                         providerSourceString = decodeResult.providerSourceString
                         request.terminalNoArt = decodeResult.terminalNoArt
 
-                        if ((bitmap == null || bitmap.isRecycled) && request.surface.rememberNullAsNoArt && decodeResult.terminalNoArt) {
+                        if ((bitmap == null || bitmap.isRecycled) &&
+                            request.surface.rememberNullAsNoArt &&
+                            decodeResult.terminalNoArt &&
+                            !RemoteArtworkDownloader.isRemoteUrl(request.decodeKey)) {
                             rememberFailure(failureSourceKey, "${failureSourceKey}_${request.bucket}")
                             clearProviderAliasForNoArt(request.key, failureSourceKey)
                         }

@@ -30,6 +30,7 @@
     <string name="online_tab_favorites">Favorites</string>
     <string name="nav_scene_online_music">Online music</string>
     <string name="nav_scene_online_playlist_detail">Online playlist</string>
+    <string name="nav_scene_online_artist_detail">Online artist</string>
     <string name="online_plaza_section_recommend">Recommended</string>
     <string name="online_plaza_section_categories">Categories</string>
     <string name="online_plaza_section_leaderboards">Charts</string>

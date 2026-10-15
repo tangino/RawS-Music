@@ -7,7 +7,7 @@ internal fun tabletCarouselLaneAlpha(offset: Float): Float {
     return t * t * (3f - 2f * t)
 }
 internal fun homeCarouselUsesDefaultArtwork(enabled: Boolean, hasBitmap: Boolean, missing: Boolean): Boolean =
-    enabled && !hasBitmap && missing
+    enabled && !hasBitmap
 
 /** Keep side covers on almost the same visual plane, without the phone's double minification. */
 internal fun tabletCarouselPlaneScale(offset: Float, centerScale: Float): Float {

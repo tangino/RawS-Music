@@ -7,9 +7,11 @@ import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceMediaType
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.utils.AppLogger
+import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.LxSourcePluginStore
 import com.rawsmusic.module.data.source.MusicSourcePluginStore
+import com.rawsmusic.module.data.source.ResolveStrategy
 import com.rawsmusic.module.data.source.playback.MusicSourceAudioResolver
 import com.rawsmusic.module.data.source.runtime.MusicSourceRuntimeClient
 import com.rawsmusic.module.data.source.runtime.MusicSourceSearchCoordinator
@@ -377,7 +379,8 @@ object OnlineAudioSourceResolver {
                         }.toString(),
                     )
                     try {
-                        val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, lxSource, mediaItem, rawQuality)
+                        val timeout = if (q == qualityTryList.first()) 3500L else 2500L
+                        val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, lxSource, mediaItem, rawQuality, timeoutMs = timeout)
                         val url = resolved.url
                         if (url.isNotBlank() && url.startsWith("http", ignoreCase = true)) {
                             val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
@@ -458,10 +461,250 @@ object OnlineAudioSourceResolver {
     }
 
     /**
-     * 异步解析在线单曲的真实音频直链与音源信息。
-     * 逐字照搬自 OrBitPlayer 的 `resolvePlayableSource`。
+     * 模式 1：经典多源轮询 (1:1 还原 OrbitPlayer 的 resolvePlayableSourceClassicPolling)。
+     *
+     * 特性：
+     * 1. 候选平台按序逐一轮询（当前平台优先，其余平台按序），绝无乱序
+     * 2. 可用音源按序逐一轮询（主音源优先，备用音源其后）
+     * 3. 音质逐个尝试，执行严格的 3500ms/2500ms 紧凑超时，杜绝卡死挂起
+     * 4. 拿到直链后经 OnlinePlaybackProbe 严格探活与流长度完整性防试听校验
+     * 5. 网易云 outer 官方兜底与咪咕官方免费直链兜底
+     * 6. 稳定性极佳，抗试听与偶发网络波动
      */
-    suspend fun resolvePlayableSource(
+    suspend fun resolvePlayableSourceClassicPolling(
+        context: Context,
+        platform: OnlinePlatform,
+        songId: String,
+        title: String,
+        artist: String,
+        album: String,
+        expectedDurationMs: Long = 0L,
+        explicitQuality: String? = null,
+    ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
+        val cacheKey = if (explicitQuality != null) "${platform.id}:$songId:$explicitQuality" else "${platform.id}:$songId"
+        val now = System.currentTimeMillis()
+
+        // 1. 查内存缓存 (15 分钟有效期)
+        val cached = memoryUrlCache.get(cacheKey)
+        if (cached != null && cached.expireAtMs > now) {
+            AppLogger.d(TAG, "[ClassicPolling] Hit memory cache for $title: ${cached.url}")
+            return@withContext ResolvedAudioSource(
+                url = cached.url,
+                platform = platform,
+                sourceName = platform.displayName,
+                durationMs = expectedDurationMs,
+                quality = explicitQuality ?: cached.quality,
+            )
+        }
+
+        val qualityTryList = OnlineQualityLadder.qualityTryList(explicitQuality)
+
+        // 2. 候选平台列表：当前平台优先，其余平台按序轮询
+        val candidatePlatforms = listOf(platform) + OnlinePlatform.values().filter { it != platform }
+
+        // 3. 所有可用音源列表：主音源优先，备用音源依次轮询
+        val enabledLxSources = LxSourcePluginStore.sources.value.filter { it.enabled }
+        val primarySource = enabledLxSources.firstOrNull()
+        val orderedEngines = if (primarySource != null) {
+            listOf(primarySource) + enabledLxSources.filter { it != primarySource }
+        } else {
+            enabledLxSources
+        }
+
+        var resolvedResult: ResolvedAudioSource? = null
+
+        for (targetPlatform in candidatePlatforms) {
+            val isOriginal = (targetPlatform == platform)
+            var targetSongId = if (isOriginal) songId else ""
+            var targetHash = if (isOriginal) songId else ""
+
+            if (!isOriginal) {
+                val match = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs).firstOrNull()
+                if (match != null) {
+                    targetSongId = match.songId
+                    targetHash = match.hash ?: match.songId
+                } else {
+                    // 该平台无匹配歌曲，跳到下一平台
+                    continue
+                }
+            }
+
+            val sourceKey = platformToSourceKey(targetPlatform)
+            val effectiveId = targetSongId.ifEmpty { songId }
+            val effectiveHash = targetHash.ifEmpty { songId }
+
+            // 4. 在当前平台上依次轮询各个音源脚本
+            for (holder in orderedEngines) {
+                for (q in qualityTryList) {
+                    val rawQuality = stringToRawSourceQuality(q)
+                    val mediaItem = RawSourceMediaItem(
+                        sourceId = holder.id,
+                        remoteId = "$sourceKey:$effectiveId",
+                        mediaType = RawSourceMediaType.Music,
+                        title = title,
+                        artists = listOf(artist),
+                        album = album,
+                        durationMs = expectedDurationMs,
+                        artworkUrl = "",
+                        sourcePayload = JSONObject().apply {
+                            put("source", sourceKey)
+                            put("songmid", effectiveId)
+                            put("id", effectiveId)
+                            put("hash", effectiveHash)
+                            put("name", title)
+                            put("singer", artist)
+                            put("albumName", album)
+                        }.toString(),
+                    )
+                    try {
+                        val timeout = if (q == qualityTryList.first()) 3500L else 2500L
+                        val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, holder, mediaItem, rawQuality, timeoutMs = timeout)
+                        val url = resolved.url
+                        if (url.isNotBlank() && url.startsWith("http", ignoreCase = true)) {
+                            val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
+                            if (probePair != null) {
+                                val (validUrl, detectedDur) = probePair
+                                val finalDur = if (detectedDur > 0L) detectedDur else expectedDurationMs
+                                resolvedResult = ResolvedAudioSource(
+                                    url = validUrl,
+                                    platform = targetPlatform,
+                                    sourceName = "${targetPlatform.displayName} (${holder.name})",
+                                    quality = q,
+                                    durationMs = finalDur,
+                                    isFallback = !isOriginal,
+                                    fallbackReason = if (!isOriginal) "原平台音频缺失，由「${holder.name}」切换至 ${targetPlatform.displayName}" else null,
+                                )
+                                AppLogger.i(TAG, "[ClassicPolling] Successfully resolved $title ($q) via ${holder.name} on ${targetPlatform.displayName}: $validUrl (duration: ${finalDur}ms)")
+                                break
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (e: Throwable) {
+                        AppLogger.d(TAG, "[ClassicPolling] LX resolve error on $sourceKey via ${holder.name} for $effectiveId ($q): ${e.message}")
+                    }
+                }
+                if (resolvedResult != null) break
+            }
+
+            // 5. 针对网易云官方 outer 兜底直链
+            if (resolvedResult == null && targetPlatform == OnlinePlatform.NETEASE) {
+                val neteaseId = targetSongId.ifEmpty { if (isOriginal) songId else "" }
+                if (neteaseId.isNotEmpty() && neteaseId.matches(Regex("^\\d+$"))) {
+                    val outerUrl = "https://music.163.com/song/media/outer/url?id=$neteaseId.mp3"
+                    val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(outerUrl, expectedDurationMs, targetPlatform)
+                    if (probePair != null) {
+                        val (validUrl, detectedDur) = probePair
+                        val finalDur = if (detectedDur > 0L) detectedDur else expectedDurationMs
+                        resolvedResult = ResolvedAudioSource(
+                            url = validUrl,
+                            platform = targetPlatform,
+                            sourceName = "网易云官方",
+                            quality = "128k",
+                            durationMs = finalDur,
+                            isFallback = !isOriginal,
+                            fallbackReason = if (!isOriginal) "原音源未匹配，自动降级至网易云官方音频" else null,
+                        )
+                        AppLogger.i(TAG, "[ClassicPolling] Fallback to verified Netease outer URL for $title: $validUrl")
+                    }
+                }
+            }
+
+            // 6. 针对咪咕音乐官方免费直链兜底
+            if (resolvedResult == null && targetPlatform == OnlinePlatform.MIGU) {
+                val miguId = targetSongId.ifEmpty { if (isOriginal) songId else "" }
+                if (miguId.isNotEmpty()) {
+                    val miguUrl = OnlinePlaybackProbe.resolveMiguDirectPlayUrl(miguId)
+                    if (!miguUrl.isNullOrBlank()) {
+                        val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(miguUrl, expectedDurationMs, targetPlatform)
+                        if (probePair != null) {
+                            val (validUrl, detectedDur) = probePair
+                            val finalDur = if (detectedDur > 0L) detectedDur else expectedDurationMs
+                            resolvedResult = ResolvedAudioSource(
+                                url = validUrl,
+                                platform = targetPlatform,
+                                sourceName = "咪咕官方",
+                                quality = "HQ",
+                                durationMs = finalDur,
+                                isFallback = !isOriginal,
+                                fallbackReason = if (!isOriginal) "原音源未匹配，自动降级至咪咕官方直链" else null,
+                            )
+                            AppLogger.i(TAG, "[ClassicPolling] Fallback to verified Migu official direct URL for $title: $validUrl")
+                        }
+                    }
+                }
+            }
+
+            // 一旦成功获取并通过流长度与时长检验的有效直链，立即结束平台轮询
+            if (resolvedResult != null) {
+                break
+            }
+        }
+
+        // 7. 若仍未命中，尝试 MusicFree 插件补充兜底
+        if (resolvedResult == null) {
+            val enabledMusicFree = MusicSourcePluginStore.sources.value.filter { it.enabled }
+            if (enabledMusicFree.isNotEmpty()) {
+                try {
+                    val query = "$title $artist".trim()
+                    val aggregated = MusicSourceSearchCoordinator.search(
+                        context = context,
+                        sources = enabledMusicFree,
+                        lxSources = emptyList(),
+                        query = query,
+                    )
+                    val best = OnlinePlaybackBridge.selectBestCandidate(
+                        target = com.rawsmusic.module.online.model.OnlineSongItem(
+                            id = songId,
+                            platform = platform,
+                            title = title,
+                            artist = artist,
+                            album = album,
+                            durationMs = expectedDurationMs,
+                        ),
+                        candidates = aggregated.items,
+                    )
+                    if (best != null) {
+                        val rawResolved = MusicSourceAudioResolver.resolve(context, best, RawSourceQuality.Standard)
+                        val validated = OnlinePlaybackProbe.probeAndValidateAudioUrl(rawResolved.url, expectedDurationMs, platform)
+                        if (validated != null) {
+                            val (validUrl, dur) = validated
+                            resolvedResult = ResolvedAudioSource(
+                                url = validUrl,
+                                platform = platform,
+                                sourceName = "MusicFree 插件",
+                                quality = "128k",
+                                durationMs = if (dur > 0L) dur else expectedDurationMs,
+                                isFallback = true,
+                                fallbackReason = "全网多源搜救降级至 MusicFree 插件解析",
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    AppLogger.d(TAG, "[ClassicPolling] MusicFree fallback error for $title: ${e.message}")
+                }
+            }
+        }
+
+        if (resolvedResult != null) {
+            val expireAt = now + 15 * 60 * 1000L
+            memoryUrlCache.put(cacheKey, CachedUrl(resolvedResult.url, expireAt, resolvedResult.quality))
+        }
+
+        resolvedResult
+    }
+
+    /**
+     * 模式 2：并发智能寻源 (1:1 还原 OrbitPlayer 的 resolvePlayableSource 并发分支)。
+     *
+     * 特性：
+     * 1. 阶段 1：主音源原平台优先通道（0ms 搜索延迟，不串歌，秒开）
+     * 2. 阶段 2：主音源跨平台并发搜救（协程多平台并发检索探活，Channel 抢先返回）
+     * 3. 阶段 3：备用多音源并发竞速寻源（唤醒全部备用源多协程全平台并发搜救）
+     * 4. 阶段 4：MusicFree 插件兜底
+     * 5. 寻源响应极其迅速
+     */
+    suspend fun resolvePlayableSourceConcurrent(
         context: Context,
         platform: OnlinePlatform,
         songId: String,
@@ -477,7 +720,7 @@ object OnlineAudioSourceResolver {
         // 1. 查内存缓存 (0ms 秒开)
         val cached = memoryUrlCache.get(cacheKey)
         if (cached != null && cached.expireAtMs > now) {
-            AppLogger.d(TAG, "Hit memory cache for $title: ${cached.url}")
+            AppLogger.d(TAG, "[Concurrent] Hit memory cache for $title: ${cached.url}")
             return@withContext ResolvedAudioSource(
                 url = cached.url,
                 platform = platform,
@@ -632,7 +875,7 @@ object OnlineAudioSourceResolver {
                         }
                     }
                 } catch (e: Exception) {
-                    AppLogger.d(TAG, "MusicFree fallback error for $title: ${e.message}")
+                    AppLogger.d(TAG, "[Concurrent] MusicFree fallback error for $title: ${e.message}")
                 }
             }
         }
@@ -644,6 +887,45 @@ object OnlineAudioSourceResolver {
         }
 
         resolvedResult
+    }
+
+    /**
+     * 统一入口：根据用户配置的寻源策略动态调度（经典多源轮询 vs 并发智能寻源）。
+     */
+    suspend fun resolvePlayableSource(
+        context: Context,
+        platform: OnlinePlatform,
+        songId: String,
+        title: String,
+        artist: String,
+        album: String,
+        expectedDurationMs: Long = 0L,
+        explicitQuality: String? = null,
+    ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
+        val strategy = AppPreferences.Source.resolveStrategy
+        if (strategy == ResolveStrategy.CLASSIC_POLLING) {
+            resolvePlayableSourceClassicPolling(
+                context = context,
+                platform = platform,
+                songId = songId,
+                title = title,
+                artist = artist,
+                album = album,
+                expectedDurationMs = expectedDurationMs,
+                explicitQuality = explicitQuality,
+            )
+        } else {
+            resolvePlayableSourceConcurrent(
+                context = context,
+                platform = platform,
+                songId = songId,
+                title = title,
+                artist = artist,
+                album = album,
+                expectedDurationMs = expectedDurationMs,
+                explicitQuality = explicitQuality,
+            )
+        }
     }
 
     /**

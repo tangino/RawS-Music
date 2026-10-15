@@ -49,6 +49,17 @@ class CoverUriResolver(
      * stable audio-file key so all 192/512/1024 requests share the same embedded/folder-cover source.
      */
     fun resolveCoverUri(song: AudioFile): String {
+        val albumArt = song.albumArtPath.trim()
+        if (albumArt.startsWith("http://", ignoreCase = true) || albumArt.startsWith("https://", ignoreCase = true)) {
+            val httpsUrl = if (albumArt.startsWith("http://", ignoreCase = true)) {
+                "https://" + albumArt.substring(7)
+            } else {
+                albumArt
+            }
+            coverKeyCache[stableSongCacheKey(song)] = httpsUrl
+            return httpsUrl
+        }
+
         // Check the real audio identity before any resolver cache. Legacy extraction callbacks and
         // scanner updates may have cached a file:// URI, but they must not replace the provider key
         // for a song that still has a real audio source. This branch must also remain free of file
@@ -83,6 +94,13 @@ class CoverUriResolver(
                 coverKeyCache[cacheKey] = albumArtPath
                 return albumArtPath
             }
+        }
+
+        if (albumArtPath.startsWith("http://", ignoreCase = true) ||
+            albumArtPath.startsWith("https://", ignoreCase = true)
+        ) {
+            coverKeyCache[cacheKey] = albumArtPath
+            return albumArtPath
         }
 
         return ""

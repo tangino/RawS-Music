@@ -134,9 +134,9 @@ internal fun OnlinePlaylistDetailPage(
         runCatching { OnlinePlaylistFavoriteStore.refresh(context) }
     }
 
-    fun playSong(item: OnlineSongItem) {
+    fun playSong(item: OnlineSongItem, index: Int) {
         scope.launch {
-            when (val result = OnlinePlaybackLauncher.play(context, item)) {
+            when (val result = OnlinePlaybackLauncher.play(context, item, queue = songs, index = index)) {
                 OnlinePlayResult.Started -> Unit
                 OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(noSourceMessage)
                 OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(noMatchMessage)
@@ -204,7 +204,7 @@ internal fun OnlinePlaylistDetailPage(
                                         }.onFailure { AppNoticeBus.error(loadFailedMessage) }
                                     }
                                 },
-                                onPlayAll = { songs.firstOrNull()?.let(::playSong) },
+                                onPlayAll = { if (songs.isNotEmpty()) playSong(songs.first(), 0) },
                             )
                         }
                     }
@@ -219,7 +219,7 @@ internal fun OnlinePlaylistDetailPage(
                             OnlineDetailSongRow(
                                 index = index + 1,
                                 song = song,
-                                onClick = { playSong(song) },
+                                onClick = { playSong(song, index) },
                             )
                         }
                     }
@@ -243,9 +243,15 @@ private fun OnlineDetailHeader(
                 modifier = Modifier
                     .size(112.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(colors.surface),
+                    .background(colors.surface.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center,
             ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Folder,
+                    contentDescription = null,
+                    tint = colors.secondaryText.copy(alpha = 0.35f),
+                    modifier = Modifier.size(44.dp)
+                )
                 if (playlist.coverUrl.isNotBlank()) {
                     BitmapImage(
                         key = playlist.coverUrl,
@@ -253,13 +259,7 @@ private fun OnlineDetailHeader(
                         modifier = Modifier.fillMaxSize(),
                         targetWidth = 256,
                         targetHeight = 256,
-                    )
-                } else {
-                    Icon(
-                        imageVector = MiuixIcons.Regular.Folder,
-                        contentDescription = null,
-                        tint = colors.secondaryText.copy(alpha = 0.5f),
-                        modifier = Modifier.size(48.dp)
+                        showDefaultArtwork = false,
                     )
                 }
             }
@@ -326,7 +326,7 @@ private fun OnlineDetailHeader(
 }
 
 @Composable
-private fun OnlineDetailSongRow(
+internal fun OnlineDetailSongRow(
     index: Int,
     song: OnlineSongItem,
     onClick: () -> Unit,
@@ -352,9 +352,15 @@ private fun OnlineDetailSongRow(
             modifier = Modifier
                 .size(42.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(colors.surface),
+                .background(colors.surface.copy(alpha = 0.5f)),
             contentAlignment = Alignment.Center,
         ) {
+            Icon(
+                imageVector = MiuixIcons.Regular.Music,
+                contentDescription = null,
+                tint = colors.secondaryText.copy(alpha = 0.35f),
+                modifier = Modifier.size(20.dp)
+            )
             if (!cover.isNullOrBlank()) {
                 BitmapImage(
                     key = cover,
@@ -362,13 +368,7 @@ private fun OnlineDetailSongRow(
                     modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
                     targetWidth = 128,
                     targetHeight = 128,
-                )
-            } else {
-                Icon(
-                    imageVector = MiuixIcons.Regular.Music,
-                    contentDescription = null,
-                    tint = colors.secondaryText.copy(alpha = 0.5f),
-                    modifier = Modifier.size(20.dp)
+                    showDefaultArtwork = false,
                 )
             }
         }

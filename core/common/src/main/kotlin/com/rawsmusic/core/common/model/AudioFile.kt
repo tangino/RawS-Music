@@ -103,3 +103,12 @@ data class AudioFile(
         get() = format.equals("DSD", true) || format.equals("DSF", true) || format.equals("DFF", true) ||
             format.equals("SACD-ISO", true)
 }
+
+/**
+ * 跨播放队列与界面的统一曲目身份标识。
+ * 当为在线歌曲（具有稳定 id）或本地音乐时，确保本地缓存音频与虚拟条目能正确匹配为同一曲目。
+ */
+fun AudioFile.queueIdentity(): String {
+    val base = if (id != 0L) "id:$id" else path
+    return "$base|$cueOffsetMs|$cueTrackIndex"
+}

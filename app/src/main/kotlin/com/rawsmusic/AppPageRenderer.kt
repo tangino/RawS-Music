@@ -164,36 +164,8 @@ class AppPageRendererImpl(
                     playingSongId = pc?.currentSong?.collectAsState()?.value?.id ?: -1L,
                     onBack = onBack,
                     onPlaySong = { songs, index ->
-                        val clicked = songs.getOrNull(index)
-                        val onlineItem = clicked?.let(OnlineSourceMediaMapper::toOnlineSongItem)
-                        if (onlineItem != null) {
-                            // 在线曲在歌单里只有元数据快照、没有播放地址，必须回落在线解析层**单曲**起播。
-                            // 整单队列要为每首预解析候选（N 次音源检索），见 P2-05b，本轮不做。
-                            scope.launch {
-                                when (val result = OnlinePlaybackLauncher.play(context, onlineItem)) {
-                                    OnlinePlayResult.Started -> Unit
-                                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
-                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_no_source),
-                                    )
-                                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
-                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_no_match),
-                                    )
-                                    is OnlinePlayResult.Failed -> AppNoticeBus.error(
-                                        context.getString(com.rawsmusic.core.ui.R.string.online_detail_play_failed),
-                                    )
-                                }
-                            }
-                        } else {
-                            // 本地曲：队列里必须剔除在线项，否则播放器会拿到 online:// 这种假路径。
-                            val localOnly = songs.filterNot { isOnlineSongKey(it.path) }
-                            if (localOnly.isNotEmpty()) {
-                                val localIndex = clicked
-                                    ?.let { target -> localOnly.indexOfFirst { it.path == target.path } }
-                                    ?.takeIf { it >= 0 }
-                                    ?: index.coerceIn(0, localOnly.lastIndex)
-                                pc?.playQueue(localOnly, localIndex)
-                            }
-                        }
+                        val clicked = songs.getOrNull(index) ?: return@PlaylistDetailScreen
+                        pc?.play(clicked, songs, index)
                     },
                     onRemoveSong = { song ->
                         val targetId = argument

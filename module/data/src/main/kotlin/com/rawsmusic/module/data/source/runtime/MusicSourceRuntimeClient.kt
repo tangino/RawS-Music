@@ -165,10 +165,11 @@ object MusicSourceRuntimeClient {
         source: InstalledLxSource,
         item: RawSourceMediaItem,
         quality: RawSourceQuality,
+        timeoutMs: Long = RESOLVE_TIMEOUT_MS,
     ): RawResolvedAudioSource {
         require(item.sourceId == source.id) { "歌曲与 LX 解析源不匹配" }
         if (source.format.equals("renderApi", ignoreCase = true)) {
-            return resolveLxRenderApi(source, item, quality)
+            return resolveLxRenderApi(source, item, quality, timeoutMs)
         }
         val itemPayload = buildItemPayload(item)
         require(itemPayload.toByteArray(Charsets.UTF_8).size <= MusicSourceRuntimeWire.MAX_RUNTIME_ITEM_BYTES) {
@@ -177,7 +178,7 @@ object MusicSourceRuntimeClient {
         val response = callRuntime(
             context = context,
             action = MusicSourceRuntimeWire.ACTION_LX_RESOLVE_AUDIO,
-            timeoutMs = RESOLVE_TIMEOUT_MS,
+            timeoutMs = timeoutMs,
             timeoutMessage = "LX 播放地址解析超时",
         ) {
             putLxSource(source)
@@ -320,6 +321,7 @@ object MusicSourceRuntimeClient {
         source: InstalledLxSource,
         item: RawSourceMediaItem,
         quality: RawSourceQuality,
+        timeoutMs: Long = RESOLVE_TIMEOUT_MS,
     ): RawResolvedAudioSource = withContext(Dispatchers.IO) {
         val script = java.io.File(source.scriptPath).readText(Charsets.UTF_8)
         val apiUrl = Regex("""API_URL\s*=\s*['"]([^'"]+)['"]""").find(script)
@@ -341,8 +343,9 @@ object MusicSourceRuntimeClient {
                 "url=${OnlinePlaybackDiagnostics.safeUrl(url)}"
         )
         val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 22_000
+        val effectiveTimeout = if (timeoutMs > 0) timeoutMs.coerceAtMost(22_000L).toInt() else 15_000
+        connection.connectTimeout = effectiveTimeout.coerceAtMost(15_000)
+        connection.readTimeout = effectiveTimeout
         connection.requestMethod = "GET"
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("User-Agent", "lx-music-mobile/1.0.0")

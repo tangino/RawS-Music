@@ -2256,4 +2256,13 @@ object AppPreferences {
             get() = kv.decodeString("webdav_extra_headers", "") ?: ""
             set(value) { kv.encode("webdav_extra_headers", value) }
     }
+
+    object Source {
+        var resolveStrategy: com.rawsmusic.module.data.source.ResolveStrategy
+            get() = com.rawsmusic.module.data.source.ResolveStrategy.fromId(
+                kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.CLASSIC_POLLING.id)
+            )
+            set(value) { kv.encode("resolve_strategy", value.id) }
+    }
 }
+

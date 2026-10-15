@@ -66,7 +66,16 @@ class LyricLoadHelper(
             // Parsing and animation-flag decoration both walk the full lyric structure. Keep that
             // immutable preparation off Main so a freshly written Lyrico sidecar cannot contend
             // with an immediate PLAYER <-> LYRIC shared transition.
-            val styledLyricData = LyricReader.readLyrics(song).withAnimationFlags()
+            var styledLyricData = LyricReader.readLyrics(song).withAnimationFlags()
+            if (styledLyricData.isEmpty && (song.title.isNotBlank() || song.artist.isNotBlank())) {
+                val onlineLrc = com.rawsmusic.module.online.lyric.OnlineLyricFetcher.fetchLyric(
+                    title = song.title,
+                    artist = song.artist,
+                )
+                if (!onlineLrc.isNullOrBlank()) {
+                    styledLyricData = com.rawsmusic.module.scanner.parser.RawSLyricsParser.parse(onlineLrc).withAnimationFlags()
+                }
+            }
             launch(Dispatchers.Main) {
                 if (loadGeneration.get() != generation) return@launch
                 val current = getCurrentSong()

@@ -151,20 +151,26 @@ object CloudSourceSyncService {
         val failures = mutableListOf<String>()
 
         entries.forEach { entry ->
+            val name = entry.safeName
+            val script = entry.safeScriptContent
+            val sourceUrl = entry.safeSourceUrl
+            val isEnabled = entry.isEnabled
+            val expectedSha256 = entry.safeScriptSha256
+
             // AGENTS §6.0：缺正文的备份要**明确报错**，不静默失败。
             // 这里跳过而不是「当空脚本安装」——空脚本会被解析器拒绝，报错信息还更难懂。
             if (!CloudSourceJson.isUsable(entry)) {
-                skippedIncomplete += entry.name
+                skippedIncomplete += name.ifBlank { "未知音源" }
                 return@forEach
             }
 
             val result = LxSourcePluginStore.installFromScript(
                 context = context,
-                script = entry.scriptContent,
-                sourceUrl = entry.sourceUrl,
+                script = script,
+                sourceUrl = sourceUrl,
                 // 云端不带 origin（OrBit 也没这个字段）。用 sourceUrl 推断：
                 // 有地址的当初就是从 URL 装的，没地址的当作本地文件导入。
-                origin = if (entry.sourceUrl.isBlank()) {
+                origin = if (sourceUrl.isBlank()) {
                     MusicSourceOrigin.LocalFile
                 } else {
                     MusicSourceOrigin.RemoteUrl
@@ -173,28 +179,27 @@ object CloudSourceSyncService {
 
             when (result) {
                 is LxSourceInstallResult.Failure -> {
-                    failures += "${entry.name}: ${result.message}"
+                    failures += "$name: ${result.message}"
                 }
 
                 is LxSourceInstallResult.Success -> {
                     val source = result.source
                     // sha256 校验：备份里的值若为空（例如 OrBit 写的，它没有这个字段）就无从比对，
                     // 只做「装上了」的计数，不算不匹配。
-                    val expected = entry.scriptSha256
-                    if (expected.isNotBlank() && expected != source.scriptSha256) {
-                        hashMismatched += entry.name
+                    if (expectedSha256.isNotBlank() && expectedSha256 != source.scriptSha256) {
+                        hashMismatched += name
                         AppLogger.w(
                             TAG,
-                            "音源「${entry.name}」安装后 sha256 与备份不一致：" +
-                                "备份=$expected 实际=${source.scriptSha256}",
+                            "音源「$name」安装后 sha256 与备份不一致：" +
+                                "备份=$expectedSha256 实际=${source.scriptSha256}",
                         )
                     } else {
                         installed++
                     }
                     // installFromScript 对新装的一律给 enabled = true，
                     // 云端记录「已停用」的要补一次，否则还原后会被意外启用。
-                    if (source.enabled != entry.enabled) {
-                        LxSourcePluginStore.setEnabled(source.id, entry.enabled)
+                    if (source.enabled != isEnabled) {
+                        LxSourcePluginStore.setEnabled(source.id, isEnabled)
                     }
                 }
             }

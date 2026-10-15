@@ -121,21 +121,40 @@ internal fun SourceOnlinePlayerPage(
                     Icon(painter = painterResource(R.drawable.ic_back), contentDescription = stringResource(R.string.source_player_collapse), tint = Color.White)
                 }
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = if (playback.requestedQuality == playback.resolvedQuality) {
-                        playback.requestedQuality.sourceQualityLabel()
-                    } else {
-                        "${playback.requestedQuality.sourceQualityLabel()} · 实际 ${playback.resolvedQuality.sourceQualityLabel()}"
-                    },
-                    color = Color.White.copy(alpha = 0.88f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                val sourceBadgeText = when {
+                    playback.isBusy -> "寻源解析中..."
+                    playback.isFallbackSource -> "${playback.originalPlatform} ➔ ${playback.resolvedPlatform} · ${playback.resolvedQuality.sourceQualityLabel()}"
+                    !playback.originalPlatform.isNullOrBlank() -> "${playback.originalPlatform} · ${playback.resolvedQuality.sourceQualityLabel()}"
+                    playback.requestedQuality == playback.resolvedQuality -> playback.requestedQuality.sourceQualityLabel()
+                    else -> "${playback.requestedQuality.sourceQualityLabel()} · 实际 ${playback.resolvedQuality.sourceQualityLabel()}"
+                }
+                val badgeBgColor = if (playback.isFallbackSource) {
+                    Color(0xFFE65100).copy(alpha = 0.38f)
+                } else {
+                    Color.Black.copy(alpha = 0.22f)
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Color.Black.copy(alpha = 0.22f))
-                        .clickable(enabled = item != null) { showQualityDialog = true }
+                        .background(badgeBgColor)
+                        .clickable(enabled = item != null && !playback.isBusy) { showQualityDialog = true }
                         .padding(horizontal = 12.dp, vertical = 7.dp),
-                )
+                ) {
+                    if (playback.isBusy) {
+                        top.yukonga.miuix.kmp.basic.CircularProgressIndicator(
+                            size = 12.dp,
+                            strokeWidth = 1.5.dp,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = sourceBadgeText,
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 Spacer(Modifier.width(4.dp))
                 Text(
                     text = stringResource(R.string.player_lyrics_short),

@@ -2,7 +2,9 @@ package com.rawsmusic.core.ui.scene.pages
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +20,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Folder
+import top.yukonga.miuix.kmp.icon.extended.Music
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -80,15 +87,15 @@ internal fun OnlinePlazaTab(
     val platform by repository.currentPlatform.collectAsState()
 
     var section by remember { mutableStateOf(OnlinePlazaSection.Recommend) }
-    var tags by remember { mutableStateOf<List<OnlinePlaylistTag>>(emptyList()) }
-    var selectedTagId by remember { mutableStateOf("全部") }
-    var playlists by remember { mutableStateOf<List<OnlinePlaylist>>(emptyList()) }
-    var leaderboards by remember { mutableStateOf<List<OnlineLeaderboard>>(emptyList()) }
-    var page by remember { mutableIntStateOf(1) }
+    var tags by remember(platform) { mutableStateOf<List<OnlinePlaylistTag>>(emptyList()) }
+    var selectedTagId by remember(platform) { mutableStateOf("全部") }
+    var playlists by remember(platform) { mutableStateOf<List<OnlinePlaylist>>(emptyList()) }
+    var leaderboards by remember(platform) { mutableStateOf<List<OnlineLeaderboard>>(emptyList()) }
+    var page by remember(platform) { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    var endReached by remember { mutableStateOf(false) }
+    var endReached by remember(platform) { mutableStateOf(false) }
     // 重试令牌：自增即触发下面的 LaunchedEffect 重新拉取（不引入 ViewModel，AGENTS §4.4）。
     var reloadToken by remember { mutableIntStateOf(0) }
 
@@ -118,7 +125,8 @@ internal fun OnlinePlazaTab(
             repository.getTags(platform).onSuccess { tags = it }
         }
 
-        repository.getPlaylists(tagId = selectedTagId, page = 1, pageSize = PAGE_SIZE, platform = platform)
+        val queryTagId = if (section == OnlinePlazaSection.Recommend) "全部" else selectedTagId
+        repository.getPlaylists(tagId = queryTagId, page = 1, pageSize = PAGE_SIZE, platform = platform)
             .onSuccess {
                 playlists = it
                 endReached = it.size < PAGE_SIZE
@@ -137,7 +145,8 @@ internal fun OnlinePlazaTab(
         loadingMore = true
         scope.launch {
             val next = page + 1
-            repository.getPlaylists(tagId = selectedTagId, page = next, pageSize = PAGE_SIZE, platform = platform)
+            val queryTagId = if (section == OnlinePlazaSection.Recommend) "全部" else selectedTagId
+            repository.getPlaylists(tagId = queryTagId, page = next, pageSize = PAGE_SIZE, platform = platform)
                 .onSuccess {
                     playlists = playlists + it
                     page = next
@@ -188,7 +197,10 @@ internal fun OnlinePlazaTab(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(playlists.chunked(GRID_COLUMNS)) { rowItems ->
+                    items(
+                        playlists.chunked(GRID_COLUMNS),
+                        key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }
+                    ) { rowItems ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             rowItems.forEach { playlist ->
                                 OnlinePlaylistCard(
@@ -225,22 +237,27 @@ private fun OnlinePlazaSectionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         OnlinePlazaSection.entries.forEach { item ->
             val isSelected = item == selected
-            Text(
-                text = stringResource(item.labelRes),
-                color = if (isSelected) colors.onPrimaryContainer else colors.secondaryText,
-                fontSize = 14.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(if (isSelected) colors.primaryContainer else colors.surface)
+                    .background(if (isSelected) colors.primary.copy(alpha = 0.15f) else Color.Transparent)
                     .clickable { onSelect(item) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-            )
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(item.labelRes),
+                    color = if (isSelected) colors.primary else colors.secondaryText,
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
         }
     }
 }
@@ -251,29 +268,36 @@ private fun OnlineTagRow(
     selectedTagId: String,
     onSelect: (String) -> Unit,
 ) {
-    val colors = themeColors()
     val allLabel = stringResource(R.string.online_plaza_tag_all)
+    val filteredTags = remember(tags) {
+        tags.filter {
+            val name = it.name.trim()
+            val id = it.id.trim()
+            name != "全部" && name != "推荐" && id != "全部" && id != "10000000" && id != "0"
+        }
+    }
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
+            val isAllSelected = selectedTagId == "全部" || selectedTagId == "10000000" || selectedTagId == "0"
             OnlineChip(
                 label = allLabel,
-                selected = selectedTagId == "全部",
+                selected = isAllSelected,
                 onClick = { onSelect("全部") },
             )
         }
-        items(tags, key = { it.id }) { tag ->
+        items(filteredTags, key = { it.id }) { tag ->
             OnlineChip(
                 label = tag.name,
-                selected = selectedTagId == tag.id,
+                selected = selectedTagId == tag.id || selectedTagId == tag.name,
                 onClick = { onSelect(tag.id) },
             )
         }
     }
-    Spacer(Modifier.height(6.dp))
+    Spacer(Modifier.height(4.dp))
 }
 
 @Composable
@@ -281,15 +305,21 @@ private fun OnlineChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = themeColors()
     Text(
         text = label,
-        color = if (selected) colors.onPrimaryContainer else colors.secondaryText,
+        color = if (selected) colors.primary else colors.secondaryText,
         fontSize = 12.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) colors.primaryContainer else colors.surface)
+            .background(if (selected) colors.primary.copy(alpha = 0.12f) else colors.surface.copy(alpha = 0.7f))
+            .border(
+                width = 0.5.dp,
+                color = if (selected) colors.primary.copy(alpha = 0.4f) else colors.outline.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(999.dp),
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 11.dp, vertical = 5.dp),
     )
 }
 
@@ -308,16 +338,29 @@ private fun OnlinePlaylistCard(
             .clickable(onClick = onClick)
             .padding(bottom = 8.dp),
     ) {
-        BitmapImage(
-            key = playlist.coverUrl,
-            contentDescription = playlist.title,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)),
-            targetWidth = 256,
-            targetHeight = 256,
-        )
+                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                .background(colors.surface.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = MiuixIcons.Regular.Music,
+                contentDescription = null,
+                tint = colors.secondaryText.copy(alpha = 0.25f),
+                modifier = Modifier.size(36.dp),
+            )
+            BitmapImage(
+                key = playlist.coverUrl,
+                contentDescription = playlist.title,
+                modifier = Modifier.fillMaxSize(),
+                targetWidth = 256,
+                targetHeight = 256,
+                showDefaultArtwork = false,
+            )
+        }
         Text(
             text = playlist.title,
             color = colors.onSurface,
@@ -347,16 +390,29 @@ private fun OnlineLeaderboardRow(board: OnlineLeaderboard) {
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BitmapImage(
-            key = board.coverUrl,
-            contentDescription = board.title,
+        Box(
             modifier = Modifier
                 .width(64.dp)
                 .height(64.dp)
-                .clip(RoundedCornerShape(12.dp)),
-            targetWidth = 128,
-            targetHeight = 128,
-        )
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.surface.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = MiuixIcons.Regular.Folder,
+                contentDescription = null,
+                tint = colors.secondaryText.copy(alpha = 0.25f),
+                modifier = Modifier.size(24.dp),
+            )
+            BitmapImage(
+                key = board.coverUrl,
+                contentDescription = board.title,
+                modifier = Modifier.fillMaxSize(),
+                targetWidth = 128,
+                targetHeight = 128,
+                showDefaultArtwork = false,
+            )
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(

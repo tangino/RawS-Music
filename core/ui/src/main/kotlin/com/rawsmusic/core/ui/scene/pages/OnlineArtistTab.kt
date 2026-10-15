@@ -41,6 +41,7 @@ import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineArtist
 import com.rawsmusic.module.online.model.OnlineArtistCategory
+import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -72,7 +73,10 @@ private const val ALL_CATEGORY = "全部"
  * 而不是停在白屏或空 chip 行。
  */
 @Composable
-internal fun OnlineArtistTab(modifier: Modifier = Modifier) {
+internal fun OnlineArtistTab(
+    onOpenArtist: (OnlinePlatform, String, String, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
@@ -181,8 +185,7 @@ internal fun OnlineArtistTab(modifier: Modifier = Modifier) {
                                 OnlineArtistCard(
                                     artist = artist,
                                     modifier = Modifier.weight(1f),
-                                    // 歌手详情页（热门歌曲 / 专辑）由后续任务接线，这里先留空。
-                                    onClick = { },
+                                    onClick = { onOpenArtist(artist.platform, artist.id, artist.name, artist.avatarUrl) },
                                 )
                             }
                             // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。

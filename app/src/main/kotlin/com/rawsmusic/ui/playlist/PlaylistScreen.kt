@@ -1,6 +1,8 @@
 package com.rawsmusic.ui.playlist
 
 import android.widget.Toast
+import com.rawsmusic.core.common.model.isOnlineEntry
+import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.helper.rememberSystemFileAccessGate
@@ -157,7 +159,9 @@ fun PlaylistScreen(
 
     val resolvedSongsByPlaylistId = remember(displayedPlaylists, librarySongs) {
         displayedPlaylists.associate { playlist ->
-            playlist.id to playlistStore.resolveSongs(playlist, librarySongs)
+            val local = playlistStore.resolveSongs(playlist, librarySongs)
+            val online = playlist.songs.filter { it.isOnlineEntry() }.map { it.toAudioFile() }
+            playlist.id to (local + online)
         }
     }
     val collageSongsByPlaylistId = remember(resolvedSongsByPlaylistId) {
@@ -169,16 +173,17 @@ fun PlaylistScreen(
     val orderedGroupNames = remember(playlistGroups) {
         playlistGroups.map { it.name }.ifEmpty { listOf(DEFAULT_PLAYLIST_GROUP) }
     }
+    val filteredPlaylists = remember(playlists) { playlists.filterNot { it.isFavorites } }
     val playlistGridPlan = remember(
         attitudePlaylists,
-        playlists,
+        filteredPlaylists,
         orderedGroupNames,
         playlistGroupMap,
         playlistColumns,
     ) {
         buildPlaylistGridPlan(
             attitudePlaylists = attitudePlaylists,
-            playlists = playlists,
+            playlists = filteredPlaylists,
             groupNames = orderedGroupNames,
             playlistGroups = playlistGroupMap,
             columns = playlistColumns,
@@ -522,7 +527,17 @@ internal fun PlaylistFrameCard(
                 .clip(RoundedCornerShape(26.dp))
                 .background(Color.Black.copy(alpha = 0.26f))
         ) {
-            if (collageSongs.isEmpty()) {
+            val coverUrl = playlist.coverUrl
+            if (!coverUrl.isNullOrBlank()) {
+                BitmapImage(
+                    key = coverUrl,
+                    contentDescription = playlist.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 512,
+                    targetHeight = 512,
+                )
+            } else if (collageSongs.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center

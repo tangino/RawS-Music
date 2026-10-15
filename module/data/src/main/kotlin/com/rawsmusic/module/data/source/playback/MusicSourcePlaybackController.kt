@@ -47,6 +47,9 @@ data class MusicSourcePlaybackSnapshot(
     val status: MusicSourcePlaybackStatus = MusicSourcePlaybackStatus.Idle,
     val requestedQuality: RawSourceQuality = RawSourceQuality.Standard,
     val resolvedQuality: RawSourceQuality = RawSourceQuality.Standard,
+    val originalPlatform: String? = null,
+    val resolvedPlatform: String? = null,
+    val sourceTag: String? = null,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val bufferedPercent: Int = 0,
@@ -57,6 +60,9 @@ data class MusicSourcePlaybackSnapshot(
 
     val isBusy: Boolean
         get() = status == MusicSourcePlaybackStatus.Resolving || status == MusicSourcePlaybackStatus.Preparing
+
+    val isFallbackSource: Boolean
+        get() = !originalPlatform.isNullOrBlank() && !resolvedPlatform.isNullOrBlank() && originalPlatform != resolvedPlatform
 
     val canGoPrevious: Boolean
         get() = currentIndex > 0 || positionMs > 5_000L
@@ -191,6 +197,11 @@ object MusicSourcePlaybackController {
         context: Context,
         item: RawSourceMediaItem,
         source: RawResolvedAudioSource,
+        queue: List<RawSourceMediaItem> = listOf(item),
+        index: Int = 0,
+        originalPlatform: String? = null,
+        resolvedPlatform: String? = null,
+        sourceTag: String? = null,
         autoPlay: Boolean = true,
     ) {
         applicationContext = context.applicationContext
@@ -207,13 +218,18 @@ object MusicSourcePlaybackController {
         activeResolvedSource = null
         backend?.stop()
         releaseMediaPlayer(abandonFocus = false)
+        val activeQueue = if (queue.isNotEmpty()) queue else listOf(item)
+        val activeIndex = if (index in activeQueue.indices) index else 0
         mutableSnapshot.value = MusicSourcePlaybackSnapshot(
-            queue = listOf(item),
-            currentIndex = 0,
+            queue = activeQueue,
+            currentIndex = activeIndex,
             currentItem = item,
             status = MusicSourcePlaybackStatus.Resolving,
             requestedQuality = source.quality,
             resolvedQuality = source.quality,
+            originalPlatform = originalPlatform,
+            resolvedPlatform = resolvedPlatform,
+            sourceTag = sourceTag,
             durationMs = item.durationMs,
         )
         prepareResolved(
@@ -504,11 +520,14 @@ object MusicSourcePlaybackController {
         startPositionMs: Long,
         autoPlay: Boolean,
     ) {
+        val state = mutableSnapshot.value
         backend.play(
             MusicSourcePlaybackRequest(
                 generation = generation,
                 item = item,
                 source = source,
+                queue = state.queue,
+                queueIndex = state.currentIndex,
                 startPositionMs = startPositionMs,
                 autoPlay = autoPlay,
             )

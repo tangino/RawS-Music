@@ -65,15 +65,21 @@ fun PlaylistDetailScreen(
         }
     } else null
 
-    LibraryListScaffold(
-        title = playlist?.name ?: stringResource(R.string.playlist_fallback_name),
-        sceneId = NavScene.PLAYLIST_DETAIL_PAGE.name,
-        statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size),
-        onBack = onBack,
-        virtualListState = state,
-        // 随机播放只取本地曲：在线曲需要逐首解析候选（见 P2-05b），把它混进队列会让播放器
-        // 拿到 online:// 这样的假路径。
-        onShuffle = { if (entries.local.isNotEmpty()) onPlaySong(entries.local.shuffled(), 0) },
+        val statsText = when {
+            entries.local.isNotEmpty() && entries.online.isNotEmpty() ->
+                "共 ${songs.size} 首 (本地 ${entries.local.size} · 网络 ${entries.online.size})"
+            entries.online.isNotEmpty() ->
+                "共 ${songs.size} 首 (网络歌单)"
+            else ->
+                stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size)
+        }
+        LibraryListScaffold(
+            title = playlist?.name ?: stringResource(R.string.playlist_fallback_name),
+            sceneId = NavScene.PLAYLIST_DETAIL_PAGE.name,
+            statisticsText = statsText,
+            onBack = onBack,
+            virtualListState = state,
+            onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
         headerTrailingContent = exportHeaderAction,
         contentOverlap = 0.dp,
         modifier = Modifier.fillMaxSize()

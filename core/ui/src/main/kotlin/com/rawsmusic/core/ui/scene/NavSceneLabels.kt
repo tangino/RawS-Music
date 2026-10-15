@@ -61,4 +61,5 @@ fun NavScene.labelRes(): Int = when (this) {
     NavScene.HDR_SETTINGS -> R.string.settings_hdr_title
     NavScene.ONLINE_MUSIC -> R.string.nav_scene_online_music
     NavScene.ONLINE_PLAYLIST_DETAIL -> R.string.nav_scene_online_playlist_detail
+    NavScene.ONLINE_ARTIST_DETAIL -> R.string.nav_scene_online_artist_detail
 }

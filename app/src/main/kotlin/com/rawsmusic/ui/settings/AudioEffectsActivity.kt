@@ -67,64 +67,64 @@ class AudioEffectsActivity : BaseSettingsActivity() {
         val peqController: ParametricEQController? = try {
             playerController?.ensurePEQConnected()
             playerController?.peqController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val graphicEqController = try {
             playerController?.ensureGraphicEQConnected()
             playerController?.graphicEqController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val experimentalGainController: ExperimentalGainController? = try {
             playerController?.ensureExperimentalGainConnected()
             playerController?.experimentalGainController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         refreshCoreAudioEnhancementControllers()
         val fftConvolverController = try {
             playerController?.ensureFftConvolverConnected()
             playerController?.fftConvolverController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val compressorController = try {
             playerController?.ensureCompressorConnected()
             playerController?.compressorController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val bassBoostController = try {
             playerController?.ensureBassBoostConnected()
             playerController?.bassBoostController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val trebleBoostController = try {
             playerController?.ensureTrebleBoostConnected()
             playerController?.trebleBoostController
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         refreshSpeakerOutputElasticityController()
         val surround360Controller = try {
             playerController?.ensureSurround360Connected()
             playerController?.surround360Controller
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         val panoramic360Controller = try {
             playerController?.ensurePanoramic360Connected()
             playerController?.panoramic360Controller
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
 
         val reverbController = try {
             playerController?.ensureReverbConnected()
             playerController?.reverbController
-        } catch (_: Exception) { null }
+        } catch (_: Throwable) { null }
         setContent {
             LiquidGlassAudioEffectsScreen(
                 onNavigateToPEQ = { navigateToSettings(PEQActivity::class.java) },

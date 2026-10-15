@@ -54,38 +54,52 @@ import java.lang.reflect.Type
  */
 data class CloudSourceEntry(
     @SerializedName("id")
-    val id: String,
+    val id: String? = "",
     @SerializedName("name")
-    val name: String,
+    val name: String? = "",
     @SerializedName("version")
-    val version: String = "",
+    val version: String? = "",
     @SerializedName("author")
-    val author: String = "",
+    val author: String? = "",
     @SerializedName("description")
-    val description: String = "",
+    val description: String? = "",
     /** 脚本正文。**raws 只存路径，所以上传时必须读文件内联**；为空说明备份不完整。 */
     @SerializedName("scriptContent")
-    val scriptContent: String = "",
+    val scriptContent: String? = "",
     @SerializedName("sourceUrl")
-    val sourceUrl: String = "",
+    val sourceUrl: String? = "",
     // alternate 让它同时认 OrBit 的 isEnabled 与契约文档写的 enabled。
     @SerializedName(value = "isEnabled", alternate = ["enabled"])
-    val enabled: Boolean = true,
+    val enabled: Boolean? = true,
     @SerializedName("isPrimary")
-    val isPrimary: Boolean = false,
+    val isPrimary: Boolean? = false,
     /** 平台码（`wy` / `tx` / `kg` / `kw` / `mg`）。线上是逗号分隔字符串，见 [CloudPlatformListAdapter]。 */
     @SerializedName("supportPlatforms")
     @JsonAdapter(CloudPlatformListAdapter::class)
-    val supportPlatforms: List<String> = emptyList(),
+    val supportPlatforms: List<String>? = emptyList(),
     @SerializedName(value = "importedAt", alternate = ["installedAtMs"])
-    val importedAt: Long = 0L,
+    val importedAt: Long? = 0L,
     /** RawS 扩展：脚本 sha256，用于还原后校验完整性。OrBit 会忽略它。 */
     @SerializedName("scriptSha256")
-    val scriptSha256: String = "",
+    val scriptSha256: String? = "",
     /** RawS 扩展：OrBit 会忽略它。 */
     @SerializedName("updatedAtMs")
-    val updatedAtMs: Long = 0L,
-)
+    val updatedAtMs: Long? = 0L,
+) {
+    val safeId: String get() = id.orEmpty()
+    val safeName: String get() = name.orEmpty()
+    val safeVersion: String get() = version.orEmpty()
+    val safeAuthor: String get() = author.orEmpty()
+    val safeDescription: String get() = description.orEmpty()
+    val safeScriptContent: String get() = scriptContent.orEmpty()
+    val safeSourceUrl: String get() = sourceUrl.orEmpty()
+    val isEnabled: Boolean get() = enabled ?: true
+    val isPrimarySource: Boolean get() = isPrimary ?: false
+    val safeSupportPlatforms: List<String> get() = supportPlatforms.orEmpty()
+    val safeImportedAt: Long get() = importedAt ?: 0L
+    val safeScriptSha256: String get() = scriptSha256.orEmpty()
+    val safeUpdatedAtMs: Long get() = updatedAtMs ?: 0L
+}
 
 /**
  * `supportPlatforms` 的双向适配：
@@ -186,7 +200,24 @@ object CloudSourceJson {
     fun decode(json: String?): List<CloudSourceEntry> {
         if (json.isNullOrBlank()) return emptyList()
         return try {
-            gson.fromJson(json, Array<CloudSourceEntry>::class.java)?.toList().orEmpty()
+            val list = gson.fromJson(json, Array<CloudSourceEntry>::class.java)?.toList().orEmpty()
+            list.map { entry ->
+                entry.copy(
+                    id = entry.safeId,
+                    name = entry.safeName,
+                    version = entry.safeVersion,
+                    author = entry.safeAuthor,
+                    description = entry.safeDescription,
+                    scriptContent = entry.safeScriptContent,
+                    sourceUrl = entry.safeSourceUrl,
+                    enabled = entry.isEnabled,
+                    isPrimary = entry.isPrimarySource,
+                    supportPlatforms = entry.safeSupportPlatforms,
+                    importedAt = entry.safeImportedAt,
+                    scriptSha256 = entry.safeScriptSha256,
+                    updatedAtMs = entry.safeUpdatedAtMs,
+                )
+            }
         } catch (error: Throwable) {
             AppLogger.e(TAG, "解析 sources_json 失败（${json.length} 字节）", error)
             emptyList()
@@ -198,7 +229,7 @@ object CloudSourceJson {
      *
      * 对应契约 §4 的「只有路径没有正文 → 明确报错『该备份不完整』」。
      */
-    fun isUsable(entry: CloudSourceEntry): Boolean = entry.scriptContent.isNotBlank()
+    fun isUsable(entry: CloudSourceEntry): Boolean = entry.safeScriptContent.isNotBlank()
 
     /** 从条目里挑出不可用的那些，供 UI 提示用（不静默丢弃）。 */
     fun unusableEntries(entries: List<CloudSourceEntry>): List<CloudSourceEntry> =

@@ -50,6 +50,8 @@ import com.rawsmusic.core.ui.scene.pages.OnlineMusicPortalPage
 import com.rawsmusic.core.ui.scene.pages.OnlinePlaylistDetailPage
 import com.rawsmusic.core.ui.scene.pages.PlaylistsPage
 import com.rawsmusic.core.ui.scene.pages.onlinePlaylistDetailArgument
+import com.rawsmusic.core.ui.scene.pages.OnlineArtistDetailPage
+import com.rawsmusic.core.ui.scene.pages.onlineArtistDetailArgument
 import com.rawsmusic.core.ui.scene.pages.resolveCollectionHeroWindowGeometry
 import com.rawsmusic.core.ui.scene.pages.LibrarySongSelectionActions
 import com.rawsmusic.core.ui.scene.pages.QueuePage
@@ -476,10 +478,22 @@ fun ComposeNavHost(
                         onlinePlaylistDetailArgument(platform, playlistId),
                     )
                 },
+                onOpenArtist = { platform, artistId, name, avatar ->
+                    state.navigateTo(
+                        NavScene.ONLINE_ARTIST_DETAIL,
+                        onlineArtistDetailArgument(platform, artistId, name, avatar),
+                    )
+                },
                 modifier = Modifier.fillMaxSize(),
             )
 
             NavScene.ONLINE_PLAYLIST_DETAIL -> OnlinePlaylistDetailPage(
+                argument = state.currentArgument,
+                onBack = onBack,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            NavScene.ONLINE_ARTIST_DETAIL -> OnlineArtistDetailPage(
                 argument = state.currentArgument,
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),

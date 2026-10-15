@@ -892,7 +892,8 @@ private fun resolveCarouselCenterIndex(
 
 private fun carouselSongIdentity(song: AudioFile?): String? {
     if (song == null) return null
-    return "${song.path}|${song.cueOffsetMs}|${song.cueTrackIndex}"
+    val base = if (song.id != 0L) "id:${song.id}" else song.path
+    return "$base|${song.cueOffsetMs}|${song.cueTrackIndex}"
 }
 
 private fun wrapCarouselIndex(index: Int, size: Int): Int {

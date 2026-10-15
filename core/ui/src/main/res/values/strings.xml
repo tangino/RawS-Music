@@ -28,6 +28,7 @@
     <string name="online_tab_favorites">我的收藏</string>
     <string name="nav_scene_online_music">在线音乐</string>
     <string name="nav_scene_online_playlist_detail">在线歌单详情</string>
+    <string name="nav_scene_online_artist_detail">在线歌手详情</string>
     <string name="online_plaza_section_recommend">推荐</string>
     <string name="online_plaza_section_categories">分类</string>
     <string name="online_plaza_section_leaderboards">榜单</string>

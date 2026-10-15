@@ -7,7 +7,8 @@ data class UserPlaylist(
     val name: String,
     val songs: List<UserPlaylistSong>,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val coverUrl: String? = null,
 ) {
     val isFavorites: Boolean get() = id == FAVORITES_PLAYLIST_ID
 }

@@ -57,9 +57,15 @@ internal fun buildHomeCarouselQueueProjection(
     return HomeCarouselQueueProjection(projected, radius)
 }
 
-private fun AudioFile.sameQueueItem(other: AudioFile): Boolean =
-    path == other.path &&
+private fun AudioFile.sameQueueItem(other: AudioFile): Boolean {
+    if (this == other) return true
+    if (path == other.path &&
         cueOffsetMs == other.cueOffsetMs &&
         cueTrackIndex == other.cueTrackIndex
+    ) return true
+    if (id != 0L && id == other.id) return true
+    if (title.isNotBlank() && title == other.title && artist == other.artist) return true
+    return false
+}
 
 private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus

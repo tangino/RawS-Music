@@ -73,51 +73,33 @@ class KugouMusicSource(
         return trimmed
     }
 
-    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
-        try {
-            val root = getApi("http://mobilecdnbj.kugou.com/api/v5/tag/list?pid=0&apiver=55&showtype=3")
-            val infoArr = root.optJSONObject("data")?.optJSONArray("info")
-            val tags = mutableListOf<OnlinePlaylistTag>()
-            tags.add(OnlinePlaylistTag("0", "推荐", "默认"))
+    companion object {
+        private val PRESET_TAGS = listOf(
+            OnlinePlaylistTag("0", "全部", "默认"),
+            OnlinePlaylistTag("1", "华语", "语种"),
+            OnlinePlaylistTag("2", "流行", "风格"),
+            OnlinePlaylistTag("3", "摇滚", "风格"),
+            OnlinePlaylistTag("4", "民谣", "风格"),
+            OnlinePlaylistTag("5", "古风", "风格"),
+            OnlinePlaylistTag("6", "电子", "风格"),
+            OnlinePlaylistTag("7", "说唱", "风格"),
+            OnlinePlaylistTag("8", "轻音乐", "风格"),
+            OnlinePlaylistTag("9", "欧美", "语种"),
+            OnlinePlaylistTag("10", "日韩", "语种"),
+            OnlinePlaylistTag("11", "粤语", "语种"),
+            OnlinePlaylistTag("12", "治愈", "心情"),
+            OnlinePlaylistTag("13", "伤感", "心情"),
+            OnlinePlaylistTag("14", "运动", "场景"),
+            OnlinePlaylistTag("15", "睡眠", "场景"),
+            OnlinePlaylistTag("16", "学习", "场景"),
+            OnlinePlaylistTag("17", "ACG", "主题"),
+            OnlinePlaylistTag("18", "影视", "主题"),
+            OnlinePlaylistTag("19", "经典", "主题")
+        )
+    }
 
-            if (infoArr != null) {
-                for (i in 0 until infoArr.length()) {
-                    val obj = infoArr.optJSONObject(i) ?: continue
-                    val name = obj.optString("name")
-                    val id = obj.optString("id")
-                    if (name.isNotEmpty() && tags.none { it.name == name }) {
-                        tags.add(OnlinePlaylistTag(id, name, "分类"))
-                    }
-                }
-            }
-            if (tags.size <= 1) {
-                listOf(
-                    OnlinePlaylistTag("0", "推荐"),
-                    OnlinePlaylistTag("153", "华语"),
-                    OnlinePlaylistTag("154", "欧美"),
-                    OnlinePlaylistTag("155", "日韩"),
-                    OnlinePlaylistTag("156", "流行"),
-                    OnlinePlaylistTag("157", "摇滚"),
-                    OnlinePlaylistTag("158", "古风"),
-                    OnlinePlaylistTag("159", "民谣"),
-                    OnlinePlaylistTag("160", "ACG"),
-                    OnlinePlaylistTag("161", "治愈")
-                )
-            } else tags
-        } catch (e: Exception) {
-            listOf(
-                OnlinePlaylistTag("0", "推荐"),
-                OnlinePlaylistTag("153", "华语"),
-                OnlinePlaylistTag("154", "欧美"),
-                OnlinePlaylistTag("155", "日韩"),
-                OnlinePlaylistTag("156", "流行"),
-                OnlinePlaylistTag("157", "摇滚"),
-                OnlinePlaylistTag("158", "古风"),
-                OnlinePlaylistTag("159", "民谣"),
-                OnlinePlaylistTag("160", "ACG"),
-                OnlinePlaylistTag("161", "治愈")
-            )
-        }
+    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
+        PRESET_TAGS
     }
 
     override suspend fun getPlaylists(
@@ -125,15 +107,20 @@ class KugouMusicSource(
         page: Int,
         pageSize: Int
     ): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
-        val url = if (tagId == "0" || tagId == "推荐" || tagId == "全部") {
+        val isAll = tagId.isEmpty() || tagId == "0" || tagId == "推荐" || tagId == "全部"
+        val url = if (isAll) {
             "http://m.kugou.com/plist/index&json=true&page=$page"
         } else {
-            "http://m.kugou.com/plist/index&json=true&page=$page"
+            val tagObj = PRESET_TAGS.firstOrNull { it.id == tagId || it.name == tagId }
+            val keyword = tagObj?.name ?: tagId
+            val encodedKeyword = URLEncoder.encode(keyword, "UTF-8")
+            "http://mobilecdn.kugou.com/api/v3/search/special?keyword=$encodedKeyword&page=$page&pagesize=$pageSize"
         }
 
         try {
             val root = getApi(url)
-            val infoArr = root.optJSONObject("plist")?.optJSONObject("list")?.optJSONArray("info")
+            val infoArr = root.optJSONObject("data")?.optJSONArray("info")
+                ?: root.optJSONObject("plist")?.optJSONObject("list")?.optJSONArray("info")
                 ?: return@withContext emptyList()
 
             val list = mutableListOf<OnlinePlaylist>()

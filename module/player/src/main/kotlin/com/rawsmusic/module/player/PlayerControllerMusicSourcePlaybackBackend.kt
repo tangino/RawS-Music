@@ -55,14 +55,25 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         )
 
         val song = request.toAudioFile()
+        val allSongs = if (request.queue.isNotEmpty()) {
+            request.queue.mapIndexed { idx, mediaItem ->
+                if (idx == request.queueIndex) {
+                    song
+                } else {
+                    mediaItem.toVirtualAudioFile()
+                }
+            }
+        } else {
+            listOf(song)
+        }
         AppLogger.i(
             TAG,
             "${OnlinePlaybackDiagnostics.PREFIX} PLAY_START generation=${request.generation} " +
                 "quality=${request.source.quality} headers=${OnlinePlaybackDiagnostics.headerNames(request.source.headers)} " +
                 "ua=${!request.source.userAgent.isNullOrBlank()} autoPlay=${request.autoPlay} " +
-                "startMs=${request.startPositionMs} url=${OnlinePlaybackDiagnostics.safeUrl(request.source.url)}"
+                "startMs=${request.startPositionMs} queueSize=${allSongs.size} url=${OnlinePlaybackDiagnostics.safeUrl(request.source.url)}"
         )
-        controller.play(song, listOf(song), 0)
+        controller.play(song, allSongs, request.queueIndex.coerceIn(allSongs.indices))
     }
 
     override fun pause() {
@@ -288,6 +299,20 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         var hash = 1125899906842597L
         value.forEach { char -> hash = hash * 31L + char.code.toLong() }
         return hash and Long.MAX_VALUE
+    }
+
+    private fun com.rawsmusic.core.common.source.RawSourceMediaItem.toVirtualAudioFile(): AudioFile {
+        return AudioFile(
+            id = stableLong(stableIdentity),
+            path = com.rawsmusic.core.common.model.onlineSongKey(sourceId, remoteId),
+            title = title,
+            artist = artists.joinToString(", "),
+            album = album,
+            duration = durationMs.coerceAtLeast(0L),
+            format = "ONLINE",
+            albumArtPath = artworkUrl,
+            encodingFormat = MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
+        )
     }
 
     private companion object {

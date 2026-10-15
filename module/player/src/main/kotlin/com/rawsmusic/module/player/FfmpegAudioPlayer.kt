@@ -3007,7 +3007,7 @@ class FfmpegAudioPlayer(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long, usbPrepareAlreadyDone: Boolean = false, keepPaused: Boolean = false) {
-        dspEngine?.resetReverb()
+        runCatching { dspEngine?.resetReverb() }
         val targetMs = positionMs.coerceToDuration()
         val stateAtRequest = _state
         val active = stateAtRequest == State.PLAYING || stateAtRequest == State.PAUSED
@@ -3033,7 +3033,7 @@ class FfmpegAudioPlayer(private val context: Context) {
                 detail = "queued_seek targetMs=$targetMs state=$stateAtRequest",
             )
         }
-        RealtimePlaybackPcmProcessorRegistry.reset("seek_to")
+        runCatching { RealtimePlaybackPcmProcessorRegistry.reset("seek_to") }
         seekPositionMs = -1L
         pendingDecoderSeek.clear()
         pausedSeekCommitGate.clear()

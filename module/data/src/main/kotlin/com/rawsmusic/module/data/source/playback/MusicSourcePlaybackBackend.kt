@@ -22,6 +22,8 @@ data class MusicSourcePlaybackRequest(
     val generation: Long,
     val item: RawSourceMediaItem,
     val source: RawResolvedAudioSource,
+    val queue: List<RawSourceMediaItem> = emptyList(),
+    val queueIndex: Int = 0,
     val startPositionMs: Long = 0L,
     val autoPlay: Boolean = true,
 )

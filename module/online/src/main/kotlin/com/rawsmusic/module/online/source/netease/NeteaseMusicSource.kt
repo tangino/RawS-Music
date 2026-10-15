@@ -123,10 +123,10 @@ class NeteaseMusicSource(
             val item = playlistsArr.optJSONObject(i) ?: continue
             val id = item.optLong("id").toString()
             val name = item.optString("name")
-            var cover = item.optString("coverImgUrl")
-            if (cover.isNotEmpty() && !cover.contains("?param=")) {
-                cover = "$cover?param=300y300"
-            }
+            val rawCover = item.optString("coverImgUrl")
+                .ifEmpty { item.optString("picUrl") }
+                .ifEmpty { item.optString("cover") }
+            val cover = formatNeteaseImg(rawCover, 300)
             val playCount = item.optLong("playCount")
             val trackCount = item.optInt("trackCount")
             val creatorObj = item.optJSONObject("creator")
@@ -350,12 +350,14 @@ class NeteaseMusicSource(
     private fun formatNeteaseImg(url: String, size: Int = 300): String {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return ""
+        // 去除所有既有的复合处理参数（如分类歌单自带的 ?imageView=...&watermark=...），还原为纯净原图 URL
+        val cleanUrl = if (trimmed.contains("?")) trimmed.substringBefore("?") else trimmed
         val fullUrl = when {
-            trimmed.startsWith("//") -> "https:$trimmed"
-            trimmed.startsWith("http://") -> "https://" + trimmed.removePrefix("http://")
-            else -> trimmed
+            cleanUrl.startsWith("//") -> "https:$cleanUrl"
+            cleanUrl.startsWith("http://", ignoreCase = true) -> "https://" + cleanUrl.substring(7)
+            else -> cleanUrl
         }
-        return if (!fullUrl.contains("?param=")) {
+        return if (size > 0) {
             "$fullUrl?param=${size}y${size}"
         } else {
             fullUrl
@@ -638,7 +640,7 @@ class NeteaseMusicSource(
         // 2. 获取热门歌曲
         val hotSongs = mutableListOf<OnlineSongItem>()
         try {
-            val songsRoot = getApi("https://music.163.com/api/artist/50/hot?id=$artistId")
+            val songsRoot = getApi("https://music.163.com/api/artist/top/song?id=$artistId")
             val songsArr = songsRoot.optJSONArray("songs")
             if (songsArr != null) {
                 if (artistName.isEmpty() && songsArr.length() > 0) {
@@ -680,6 +682,12 @@ class NeteaseMusicSource(
                 }
             }
         } catch (_: Exception) {}
+
+        if (hotSongs.isEmpty()) {
+            try {
+                hotSongs.addAll(getArtistSongs(artistId, 1, 50))
+            } catch (_: Exception) {}
+        }
 
         if (songCount <= 0) songCount = hotSongs.size
 
@@ -727,16 +735,20 @@ class NeteaseMusicSource(
             val sObj = songsArr.optJSONObject(i) ?: continue
             val id = sObj.optLong("id").toString()
             val title = sObj.optString("name")
-            val arArr = sObj.optJSONArray("ar")
+            val arArr = sObj.optJSONArray("ar") ?: sObj.optJSONArray("artists")
             val arNames = mutableListOf<String>()
             if (arArr != null) {
                 for (j in 0 until arArr.length()) {
                     arArr.optJSONObject(j)?.optString("name")?.let { arNames.add(it) }
                 }
             }
-            val alObj = sObj.optJSONObject("al")
+            val alObj = sObj.optJSONObject("al") ?: sObj.optJSONObject("album")
             val albumTitle = alObj?.optString("name") ?: ""
-            var pic = alObj?.optString("picUrl") ?: ""
+            val albumId = alObj?.optString("id") ?: ""
+            var pic = alObj?.optString("picUrl")?.ifEmpty { alObj.optString("blurPicUrl") } ?: ""
+            if (pic.isEmpty()) {
+                pic = sObj.optString("picUrl").ifEmpty { sObj.optString("blurPicUrl") }
+            }
             if (pic.isNotEmpty() && !pic.contains("?param=")) {
                 pic = "$pic?param=300y300"
             }

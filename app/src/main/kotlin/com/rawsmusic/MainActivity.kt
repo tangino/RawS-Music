@@ -1663,10 +1663,7 @@ class MainActivity : ComponentActivity() {
     ) = libraryMetadataCoordinator.start(songs, mode)
 
     /**
-     * Keeps the library scene on its last settled playback snapshot while the player owns the
-     * foreground. The player overlay has its own live queue collector; recomposing the complete
-     * library, carousel and collapsed bar behind it during a 550 ms artwork settle only competes
-     * for the same Main/RenderThread frame and cannot produce a visible result.
+     * 保持主界面/走马灯的播放队列与控制器实时同步。
      */
     @Composable
     private fun rememberMainSurfacePlaybackQueue(): com.rawsmusic.core.common.model.PlayQueue {
@@ -1683,12 +1680,8 @@ class MainActivity : ComponentActivity() {
                     (!::playerSceneController.isInitialized ||
                         !playerSceneController.composeIsTransitioning)
 
-            fun playerWasOpenedFromHome(): Boolean =
-                prePlayerContainerScene == com.rawsmusic.core.ui.scene.NavScene.HOME
-
             fun playerSurfaceCanCatchUpWhileHidden(): Boolean =
-                playerWasOpenedFromHome() &&
-                    playerSceneState.currentScene == com.rawsmusic.core.ui.widget.PlayerScene.PLAYER &&
+                playerSceneState.currentScene == com.rawsmusic.core.ui.widget.PlayerScene.PLAYER &&
                     ::playerSceneController.isInitialized &&
                     !playerSceneController.composeIsTransitioning
 
@@ -1700,11 +1693,8 @@ class MainActivity : ComponentActivity() {
                 playerIdleCatchupJob?.cancel()
                 if (!playerSurfaceCanCatchUpWhileHidden()) return
                 playerIdleCatchupJob = launch {
-                    kotlinx.coroutines.delay(620L)
+                    kotlinx.coroutines.delay(400L)
                     if (playerSurfaceCanCatchUpWhileHidden()) {
-                        // The foreground artwork settle has had time to finish. Pre-commit the
-                        // retained MAIN playback identity now so HOME carousel/current-row state
-                        // is already correct before a later PLAYER -> MAIN collapse begins.
                         publishLatest()
                     }
                 }
@@ -1719,6 +1709,7 @@ class MainActivity : ComponentActivity() {
                             publishLatest()
                         }
                         playerSurfaceCanCatchUpWhileHidden() -> scheduleHiddenPlayerCatchup()
+                        else -> scheduleHiddenPlayerCatchup()
                     }
                 }
             }
@@ -1742,13 +1733,7 @@ class MainActivity : ComponentActivity() {
                         scene == com.rawsmusic.core.ui.widget.PlayerScene.PLAYER && !transitioning -> {
                             scheduleHiddenPlayerCatchup()
                         }
-                        scene == com.rawsmusic.core.ui.widget.PlayerScene.PLAYER &&
-                            transitioning &&
-                            playerWasOpenedFromHome() -> {
-                            // During a return gesture the committed scene remains PLAYER until the
-                            // sheet reaches MAIN. If a user returns immediately after a switch,
-                            // publish the newest hidden MAIN snapshot at the *start* of that
-                            // transition rather than after the player is fully closed.
+                        scene == com.rawsmusic.core.ui.widget.PlayerScene.PLAYER && transitioning -> {
                             playerIdleCatchupJob?.cancel()
                             publishLatest()
                         }
