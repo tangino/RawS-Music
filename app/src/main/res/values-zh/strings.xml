@@ -1030,6 +1030,7 @@
     <string name="playlist_attitude_notice_disliked">已加入我不喜欢的歌</string>
     <string name="playlist_attitude_notice_undisliked">已取消不喜欢</string>
     <string name="playlist_attitude_notice_failed">更新喜欢状态失败</string>
+    <string name="playlist_group_all">全部</string>
     <string name="playlist_group_default_name">默认</string>
     <string name="playlist_group_menu_summary">管理该分组</string>
     <string name="playlist_group_action_create">新建分组</string>

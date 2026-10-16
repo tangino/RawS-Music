@@ -46,7 +46,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
+import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
 import com.rawsmusic.module.online.model.OnlineAlbum
 import com.rawsmusic.module.online.model.OnlineArtist
 import com.rawsmusic.module.online.model.OnlineSongItem
@@ -136,6 +140,7 @@ internal fun OnlineArtistDetailPage(
     var hasMoreSongs by remember { mutableStateOf(true) }
     var hasMoreAlbums by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
+    var addToPlaylistSong by remember { mutableStateOf<OnlineSongItem?>(null) }
 
     val loadFailedMessage = stringResource(R.string.online_artist_load_failed)
     val noSourceMessage = stringResource(R.string.online_detail_no_source)
@@ -220,13 +225,41 @@ internal fun OnlineArtistDetailPage(
             }
     }
 
+    val playbackSnapshot by MusicSourcePlaybackController.snapshot.collectAsState()
+    var resolvingSongKey by remember { mutableStateOf<String?>(null) }
+
     fun playSong(item: OnlineSongItem, index: Int, queue: List<OnlineSongItem>) {
+        val songKey = "${item.platform.id}_${item.id}"
+        resolvingSongKey = songKey
         scope.launch {
-            when (OnlinePlaybackLauncher.play(context, item, queue = queue, index = index)) {
-                OnlinePlayResult.Started -> Unit
-                OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(noSourceMessage)
-                OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(noMatchMessage)
-                is OnlinePlayResult.Failed -> AppNoticeBus.error(playFailedMessage)
+            try {
+                when (val result = OnlinePlaybackLauncher.play(context, item, queue = queue, index = index)) {
+                    OnlinePlayResult.Started -> Unit
+                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_source)
+                    )
+                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_match, item.title)
+                    )
+                    is OnlinePlayResult.Failed -> {
+                        val tip = when {
+                            result.reason.contains("Timeout", ignoreCase = true) ->
+                                context.getString(R.string.online_network_timeout)
+                            result.reason.contains("UnknownHost", ignoreCase = true) ||
+                                result.reason.contains("Connect", ignoreCase = true) ->
+                                context.getString(R.string.online_network_error)
+                            result.reason.isNotBlank() ->
+                                context.getString(R.string.online_detail_play_failed_with_reason, item.title, result.reason)
+                            else ->
+                                context.getString(R.string.online_detail_play_failed, item.title)
+                        }
+                        AppNoticeBus.error(tip)
+                    }
+                }
+            } finally {
+                if (resolvingSongKey == songKey) {
+                    resolvingSongKey = null
+                }
             }
         }
     }
@@ -278,7 +311,8 @@ internal fun OnlineArtistDetailPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .rawStableStatusBarsPadding(),
+            .rawStableStatusBarsPadding()
+            .bottomChromeNestedScroll(),
     ) {
         SmallTopAppBar(
             title = if (selectedAlbum != null) selectedAlbum!!.title else currentArtist.name,
@@ -329,131 +363,151 @@ internal fun OnlineArtistDetailPage(
                     }
                 } else {
                     itemsIndexed(albumSongs, key = { _, s -> "${s.platform.id}_${s.id}" }) { index, song ->
+                        val isSongResolving = resolvingSongKey == "${song.platform.id}_${song.id}" ||
+                            ((playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving ||
+                                playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) &&
+                                (playbackSnapshot.currentItem?.remoteId == song.id ||
+                                    (playbackSnapshot.currentItem?.title.equals(song.title, ignoreCase = true) &&
+                                        playbackSnapshot.currentItem?.artists?.contains(song.artist) == true)))
                         OnlineDetailSongRow(
                             index = index + 1,
                             song = song,
+                            isLoading = isSongResolving,
+                            onAddToPlaylist = { addToPlaylistSong = song },
                             onClick = { playSong(song, index, albumSongs) },
                         )
                     }
                 }
             }
-            return
-        }
+        } else {
+            // ── 歌手主体视图 ──
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 180.dp),
+            ) {
+                item {
+                    ArtistDetailHeader(
+                        artist = currentArtist,
+                        songCount = hotSongs.size,
+                        onPlayAll = {
+                            if (hotSongs.isNotEmpty()) playSong(hotSongs.first(), 0, hotSongs)
+                        },
+                    )
+                }
 
-        // ── 歌手主体视图 ──
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 180.dp),
-        ) {
-            item {
-                ArtistDetailHeader(
-                    artist = currentArtist,
-                    songCount = hotSongs.size,
-                    onPlayAll = {
-                        if (hotSongs.isNotEmpty()) playSong(hotSongs.first(), 0, hotSongs)
-                    },
-                )
-            }
-
-            // 二级 Tab 选择行：【热门歌曲】与【专辑列表】
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    val tabs = listOf("热门歌曲 (${hotSongs.size})", "全部专辑 (${albums.size})")
-                    tabs.forEachIndexed { idx, label ->
-                        val isSelected = selectedDetailTab == idx
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (isSelected) colors.primary.copy(alpha = 0.16f) else colors.surface)
-                                .border(
-                                    width = if (isSelected) 1.2.dp else 0.5.dp,
-                                    color = if (isSelected) colors.primary else colors.outline.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp),
+                // 二级 Tab 选择行：【热门歌曲】与【专辑列表】
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        val tabs = listOf("热门歌曲 (${hotSongs.size})", "全部专辑 (${albums.size})")
+                        tabs.forEachIndexed { idx, label ->
+                            val isSelected = selectedDetailTab == idx
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) colors.primary.copy(alpha = 0.16f) else colors.surface)
+                                    .border(
+                                        width = if (isSelected) 1.2.dp else 0.5.dp,
+                                        color = if (isSelected) colors.primary else colors.outline.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp),
+                                    )
+                                    .clickable { selectedDetailTab = idx }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (isSelected) colors.primary else colors.onSurface,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                 )
-                                .clickable { selectedDetailTab = idx }
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = label,
-                                color = if (isSelected) colors.primary else colors.onSurface,
-                                fontSize = 13.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            )
+                            }
                         }
                     }
                 }
-            }
 
-            if (loading) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp), color = colors.primary)
-                    }
-                }
-            } else if (errorText != null) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                        Text(errorText.orEmpty(), color = colors.secondaryText, fontSize = 14.sp)
-                    }
-                }
-            } else if (selectedDetailTab == 0) {
-                // ── 热门歌曲列表 ──
-                if (hotSongs.isEmpty()) {
+                if (loading) {
                     item {
                         Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                            Text("暂无歌曲", color = colors.secondaryText, fontSize = 14.sp)
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), color = colors.primary)
+                        }
+                    }
+                } else if (errorText != null) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                            Text(errorText.orEmpty(), color = colors.secondaryText, fontSize = 14.sp)
+                        }
+                    }
+                } else if (selectedDetailTab == 0) {
+                    // ── 热门歌曲列表 ──
+                    if (hotSongs.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无歌曲", color = colors.secondaryText, fontSize = 14.sp)
+                            }
+                        }
+                    } else {
+                        itemsIndexed(hotSongs, key = { idx, s -> "${s.platform.id}_${s.id}_$idx" }) { index, song ->
+                            val isSongResolving = resolvingSongKey == "${song.platform.id}_${song.id}" ||
+                                ((playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving ||
+                                    playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) &&
+                                    (playbackSnapshot.currentItem?.remoteId == song.id ||
+                                        (playbackSnapshot.currentItem?.title.equals(song.title, ignoreCase = true) &&
+                                            playbackSnapshot.currentItem?.artists?.contains(song.artist) == true)))
+                            OnlineDetailSongRow(
+                                index = index + 1,
+                                song = song,
+                                isLoading = isSongResolving,
+                                onAddToPlaylist = { addToPlaylistSong = song },
+                                onClick = { playSong(song, index, hotSongs) },
+                            )
+                        }
+                        if (hasMoreSongs) {
+                            item {
+                                ArtistLoadMoreRow(
+                                    loading = loadingMore,
+                                    onLoadMore = { loadMoreSongs() },
+                                )
+                            }
                         }
                     }
                 } else {
-                    itemsIndexed(hotSongs, key = { idx, s -> "${s.platform.id}_${s.id}_$idx" }) { index, song ->
-                        OnlineDetailSongRow(
-                            index = index + 1,
-                            song = song,
-                            onClick = { playSong(song, index, hotSongs) },
-                        )
-                    }
-                    if (hasMoreSongs) {
+                    // ── 专辑列表 ──
+                    if (albums.isEmpty()) {
                         item {
-                            ArtistLoadMoreRow(
-                                loading = loadingMore,
-                                onLoadMore = { loadMoreSongs() },
-                            )
+                            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无专辑", color = colors.secondaryText, fontSize = 14.sp)
+                            }
                         }
-                    }
-                }
-            } else {
-                // ── 专辑列表 ──
-                if (albums.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                            Text("暂无专辑", color = colors.secondaryText, fontSize = 14.sp)
-                        }
-                    }
-                } else {
-                    itemsIndexed(albums, key = { idx, a -> "${a.platform.id}_${a.id}_$idx" }) { _, album ->
-                        ArtistAlbumRowItem(
-                            album = album,
-                            onClick = { selectedAlbum = album },
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
-                    if (hasMoreAlbums) {
-                        item {
-                            ArtistLoadMoreRow(
-                                loading = loadingMore,
-                                onLoadMore = { loadMoreAlbums() },
+                    } else {
+                        itemsIndexed(albums, key = { idx, a -> "${a.platform.id}_${a.id}_$idx" }) { _, album ->
+                            ArtistAlbumRowItem(
+                                album = album,
+                                onClick = { selectedAlbum = album },
                             )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        if (hasMoreAlbums) {
+                            item {
+                                ArtistLoadMoreRow(
+                                    loading = loadingMore,
+                                    onLoadMore = { loadMoreAlbums() },
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+
+        OnlineAddToPlaylistDialog(
+            song = addToPlaylistSong,
+            onDismiss = { addToPlaylistSong = null },
+        )
     }
 }
 

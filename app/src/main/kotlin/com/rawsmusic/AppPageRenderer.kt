@@ -20,6 +20,8 @@ import com.rawsmusic.module.online.playback.OnlinePlayResult
 import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.core.common.ui.AppNoticeIcon
+import com.rawsmusic.core.ui.scene.pages.onlinePlaylistDetailArgument
+import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.core.ui.scene.ExternalPageRenderer
 import com.rawsmusic.core.ui.scene.GlobalSearchScope
 import com.rawsmusic.core.ui.scene.NavScene
@@ -140,7 +142,13 @@ class AppPageRendererImpl(
                     virtualListState = virtualListState,
                     onPlaylistClick = { playlistId, _ ->
                         navState?.navigateTo(NavScene.PLAYLIST_DETAIL_PAGE, playlistId)
-                    }
+                    },
+                    onOnlinePlaylistClick = { platform, remoteId ->
+                        navState?.navigateTo(
+                            NavScene.ONLINE_PLAYLIST_DETAIL,
+                            onlinePlaylistDetailArgument(platform, remoteId),
+                        )
+                    },
                 )
             }
 

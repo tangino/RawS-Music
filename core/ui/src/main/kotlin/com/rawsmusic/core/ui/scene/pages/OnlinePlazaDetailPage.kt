@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -41,8 +42,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.model.OnlineSongItem
@@ -61,6 +65,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Playlist
 
 private const val ARGUMENT_SEPARATOR = "|"
 
@@ -96,6 +101,7 @@ internal fun OnlinePlaylistDetailPage(
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var reloadToken by remember { mutableIntStateOf(0) }
+    var addToPlaylistSong by remember { mutableStateOf<OnlineSongItem?>(null) }
 
     val favorites by OnlinePlaylistFavoriteStore.favorites.collectAsState()
     val loadFailedMessage = stringResource(R.string.online_detail_load_failed)
@@ -134,13 +140,41 @@ internal fun OnlinePlaylistDetailPage(
         runCatching { OnlinePlaylistFavoriteStore.refresh(context) }
     }
 
+    val playbackSnapshot by MusicSourcePlaybackController.snapshot.collectAsState()
+    var resolvingSongKey by remember { mutableStateOf<String?>(null) }
+
     fun playSong(item: OnlineSongItem, index: Int) {
+        val songKey = "${item.platform.id}_${item.id}"
+        resolvingSongKey = songKey
         scope.launch {
-            when (val result = OnlinePlaybackLauncher.play(context, item, queue = songs, index = index)) {
-                OnlinePlayResult.Started -> Unit
-                OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(noSourceMessage)
-                OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(noMatchMessage)
-                is OnlinePlayResult.Failed -> AppNoticeBus.error(playFailedMessage)
+            try {
+                when (val result = OnlinePlaybackLauncher.play(context, item, queue = songs, index = index)) {
+                    OnlinePlayResult.Started -> Unit
+                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_source)
+                    )
+                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_match, item.title)
+                    )
+                    is OnlinePlayResult.Failed -> {
+                        val tip = when {
+                            result.reason.contains("Timeout", ignoreCase = true) ->
+                                context.getString(R.string.online_network_timeout)
+                            result.reason.contains("UnknownHost", ignoreCase = true) ||
+                                result.reason.contains("Connect", ignoreCase = true) ->
+                                context.getString(R.string.online_network_error)
+                            result.reason.isNotBlank() ->
+                                context.getString(R.string.online_detail_play_failed_with_reason, item.title, result.reason)
+                            else ->
+                                context.getString(R.string.online_detail_play_failed, item.title)
+                        }
+                        AppNoticeBus.error(tip)
+                    }
+                }
+            } finally {
+                if (resolvingSongKey == songKey) {
+                    resolvingSongKey = null
+                }
             }
         }
     }
@@ -148,7 +182,8 @@ internal fun OnlinePlaylistDetailPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .rawStableStatusBarsPadding(),
+            .rawStableStatusBarsPadding()
+            .bottomChromeNestedScroll(),
     ) {
         SmallTopAppBar(
             title = playlist?.title ?: stringResource(R.string.nav_scene_online_playlist_detail),
@@ -195,7 +230,7 @@ internal fun OnlinePlaylistDetailPage(
                                     scope.launch {
                                         runCatching {
                                             if (isFavorite) {
-                                                favoriteKey?.let { OnlinePlaylistFavoriteStore.remove(context, it) }
+                                                OnlinePlaylistFavoriteStore.remove(context, favoriteKey)
                                                 AppNoticeBus.post(removedMessage)
                                             } else {
                                                 OnlinePlaylistFavoriteStore.add(context, header)
@@ -216,9 +251,17 @@ internal fun OnlinePlaylistDetailPage(
                             items = songs,
                             key = { _, song -> "${song.platform.id}_${song.id}" },
                         ) { index, song ->
+                            val isSongResolving = resolvingSongKey == "${song.platform.id}_${song.id}" ||
+                                ((playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving ||
+                                    playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) &&
+                                    (playbackSnapshot.currentItem?.remoteId == song.id ||
+                                        (playbackSnapshot.currentItem?.title.equals(song.title, ignoreCase = true) &&
+                                            playbackSnapshot.currentItem?.artists?.contains(song.artist) == true)))
                             OnlineDetailSongRow(
                                 index = index + 1,
                                 song = song,
+                                isLoading = isSongResolving,
+                                onAddToPlaylist = { addToPlaylistSong = song },
                                 onClick = { playSong(song, index) },
                             )
                         }
@@ -226,6 +269,11 @@ internal fun OnlinePlaylistDetailPage(
                 }
             }
         }
+
+        OnlineAddToPlaylistDialog(
+            song = addToPlaylistSong,
+            onDismiss = { addToPlaylistSong = null },
+        )
     }
 }
 
@@ -329,6 +377,8 @@ private fun OnlineDetailHeader(
 internal fun OnlineDetailSongRow(
     index: Int,
     song: OnlineSongItem,
+    isLoading: Boolean = false,
+    onAddToPlaylist: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val colors = themeColors()
@@ -370,6 +420,21 @@ internal fun OnlineDetailSongRow(
                     targetHeight = 128,
                     showDefaultArtwork = false,
                 )
+            }
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White,
+                    )
+                }
             }
         }
         Spacer(Modifier.width(10.dp))
@@ -425,6 +490,23 @@ internal fun OnlineDetailSongRow(
                 color = colors.secondaryText,
                 fontSize = 11.sp,
             )
+        }
+        if (onAddToPlaylist != null) {
+            Spacer(Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onAddToPlaylist),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Playlist,
+                    contentDescription = stringResource(R.string.online_add_to_playlist),
+                    tint = colors.secondaryText,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

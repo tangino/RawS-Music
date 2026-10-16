@@ -1,19 +1,31 @@
 package com.rawsmusic.ui.playlist
 
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
@@ -24,13 +36,16 @@ import com.rawsmusic.core.ui.scene.pages.SectionHeader
 import com.rawsmusic.core.ui.widget.virtuallist.VirtualListCustomProvider
 import com.rawsmusic.module.data.db.entity.PlaylistGroupEntity
 import com.rawsmusic.module.data.prefs.PlaylistGroupOpResult
+import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
+import com.rawsmusic.module.online.model.OnlinePlatform
 
 /**
- * 歌单分组 UI 的「无状态」部分：网格排布、分组标题行、`PlaylistGroupOpResult` 文案映射。
+ * 歌单分组 UI 的「无状态」部分：网格排布、分组筛选 Chip 栏、`PlaylistGroupOpResult` 文案映射。
  *
  * 为什么独立成文件：`PlaylistScreen.kt` 已经 700+ 行，分组只是它的一个维度；
  * 页面里只保留状态与弹窗装配，排布与文案映射放这里，避免主文件继续膨胀。
@@ -50,14 +65,35 @@ internal const val DEFAULT_PLAYLIST_GROUP = PlaylistGroupEntity.DEFAULT_GROUP_NA
  */
 private const val PLAYLIST_GRID_ENCODING_PREFIX = "raws_playlist_grid:"
 
+/**
+ * 歌单项抽象模型：本地歌单 (Local) 与 在线收藏歌单 (Online) 均实现该接口。
+ */
+sealed interface PlaylistItemCardModel {
+    val id: String
+    val name: String
+    val groupName: String
+
+    data class Local(val playlist: UserPlaylist, val group: String) : PlaylistItemCardModel {
+        override val id: String get() = playlist.id
+        override val name: String get() = playlist.name
+        override val groupName: String get() = group
+    }
+
+    data class Online(val favorite: OnlinePlaylistFavoriteEntity) : PlaylistItemCardModel {
+        override val id: String get() = favorite.playlistKey
+        override val name: String get() = favorite.title
+        override val groupName: String get() = favorite.groupName
+    }
+}
+
 /** 分组标题行高。`SectionHeader` 自带 12/4 的上下内边距，这里给足余量避免文字被裁。 */
 private val PLAYLIST_GRID_HEADER_HEIGHT = 44.dp
 
-/** 网格里的一行：要么是分组标题，要么是一排歌单卡（伪歌单行也复用后者）。 */
+/** 网格里的一行：要么是分组标题，要么是一排歌单卡（本地/在线/伪歌单共用）。 */
 internal sealed interface PlaylistGridEntry {
     data class GroupHeader(val groupName: String) : PlaylistGridEntry
 
-    data class Row(val playlists: List<UserPlaylist>) : PlaylistGridEntry
+    data class Row(val items: List<PlaylistItemCardModel>) : PlaylistGridEntry
 }
 
 /** 排布结果：逻辑条目 + 直接喂给 `ComposeVirtualList` 的虚拟条目。 */
@@ -67,37 +103,22 @@ internal data class PlaylistGridPlan(
 )
 
 /**
- * 把「伪歌单 + 真实歌单 + 分组列表」排成一条直线。
+ * 把「伪歌单 + 本地歌单 + 在线收藏歌单」排成规整的网格。
  *
- * 伪歌单不属于任何分组（它们是系统入口），固定排在最前；之后按 [groupNames] 的顺序
- * （数据层保证「默认」在第一位）逐个分区，空分组也会产出一个标题行，
- * 否则用户没有任何地方能长按到它去改名/删除。
+ * 分组查看统一由顶部的横向 Chip 筛选栏承载，网格卡片永远规整对齐，没有任何孤立文本挤占打断。
  */
 internal fun buildPlaylistGridPlan(
     attitudePlaylists: List<UserPlaylist>,
-    playlists: List<UserPlaylist>,
-    groupNames: List<String>,
-    playlistGroups: Map<String, String>,
+    items: List<PlaylistItemCardModel>,
     columns: Int,
 ): PlaylistGridPlan {
     val safeColumns = columns.coerceAtLeast(1)
-    val orderedGroups = groupNames.ifEmpty { listOf(DEFAULT_PLAYLIST_GROUP) }
-    val knownGroups = orderedGroups.toSet()
-    // 歌单指向一个不存在的分组时（云同步还原会带回 groupName，但分组表可能没有对应的行）
-    // 必须回落到「默认」分区：直接丢掉会让这批歌单在界面上凭空消失，用户连移都移不走。
-    val groupOf: (String) -> String = { playlistId ->
-        playlistGroups[playlistId]?.takeIf { it in knownGroups } ?: DEFAULT_PLAYLIST_GROUP
-    }
-
     val entries = buildList {
-        attitudePlaylists.chunked(safeColumns).forEach { add(PlaylistGridEntry.Row(it)) }
-        orderedGroups.forEach { groupName ->
-            add(PlaylistGridEntry.GroupHeader(groupName))
-            playlists.asSequence()
-                .filter { groupOf(it.id) == groupName }
-                .chunked(safeColumns)
-                .forEach { add(PlaylistGridEntry.Row(it)) }
+        if (attitudePlaylists.isNotEmpty()) {
+            val attitudeItems = attitudePlaylists.map { PlaylistItemCardModel.Local(it, DEFAULT_PLAYLIST_GROUP) }
+            attitudeItems.chunked(safeColumns).forEach { add(PlaylistGridEntry.Row(it)) }
         }
+        items.chunked(safeColumns).forEach { add(PlaylistGridEntry.Row(it)) }
     }
     return PlaylistGridPlan(
         entries = entries,
@@ -132,6 +153,8 @@ internal fun rememberPlaylistGridProvider(
     attitudeSongCounts: Map<String, Int>,
     onPlaylistClick: (String, String) -> Unit,
     onPlaylistActions: (UserPlaylist) -> Unit,
+    onOnlinePlaylistClick: (OnlinePlatform, String) -> Unit,
+    onOnlinePlaylistActions: (OnlinePlaylistFavoriteEntity) -> Unit,
     onGroupLongPress: (String) -> Unit,
 ): VirtualListCustomProvider = remember(
     plan,
@@ -141,6 +164,8 @@ internal fun rememberPlaylistGridProvider(
     attitudeSongCounts,
     onPlaylistClick,
     onPlaylistActions,
+    onOnlinePlaylistClick,
+    onOnlinePlaylistActions,
     onGroupLongPress,
 ) {
     VirtualListCustomProvider(
@@ -163,12 +188,14 @@ internal fun rememberPlaylistGridProvider(
                 )
 
                 is PlaylistGridEntry.Row -> PlaylistGridRow(
-                    playlists = entry.playlists,
+                    items = entry.items,
                     columns = columns,
                     collageSongsByPlaylistId = collageSongsByPlaylistId,
                     attitudeSongCounts = attitudeSongCounts,
                     onPlaylistClick = onPlaylistClick,
                     onPlaylistActions = onPlaylistActions,
+                    onOnlinePlaylistClick = onOnlinePlaylistClick,
+                    onOnlinePlaylistActions = onOnlinePlaylistActions,
                     modifier = modifier,
                 )
 
@@ -255,12 +282,14 @@ private fun PlaylistGroupHeaderRow(
 
 @Composable
 private fun PlaylistGridRow(
-    playlists: List<UserPlaylist>,
+    items: List<PlaylistItemCardModel>,
     columns: Int,
     collageSongsByPlaylistId: Map<String, List<AudioFile>>,
     attitudeSongCounts: Map<String, Int>,
     onPlaylistClick: (String, String) -> Unit,
     onPlaylistActions: (UserPlaylist) -> Unit,
+    onOnlinePlaylistClick: (OnlinePlatform, String) -> Unit,
+    onOnlinePlaylistActions: (OnlinePlaylistFavoriteEntity) -> Unit,
     modifier: Modifier,
 ) {
     val rowColors = themeColors()
@@ -270,27 +299,45 @@ private fun PlaylistGridRow(
             .padding(start = 12.dp, end = 12.dp, bottom = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        playlists.forEach { playlist ->
-            // 伪歌单沿用同一张卡片，只是锁住改名/删除/移动（它们不落 Room）。
-            val attitudeCard = isAttitudePlaylistId(playlist.id)
-            val actionsEnabled = !attitudeCard && !playlist.isFavorites
-            PlaylistFrameCard(
-                playlist = playlist,
-                collageSongs = collageSongsByPlaylistId[playlist.id].orEmpty(),
-                modifier = Modifier.weight(1f),
-                iconRes = playlistCardIconRes(playlist),
-                accentOverride = when (playlist.id) {
-                    ATTITUDE_FAVORITES_PLAYLIST_ID -> rowColors.primary
-                    ATTITUDE_DISLIKED_PLAYLIST_ID -> rowColors.outline
-                    else -> null
-                },
-                songCountOverride = attitudeSongCounts[playlist.id],
-                actionsEnabled = actionsEnabled,
-                onClick = { onPlaylistClick(playlist.id, playlist.name) },
-                onActions = { if (actionsEnabled) onPlaylistActions(playlist) },
-            )
+        items.forEach { item ->
+            when (item) {
+                is PlaylistItemCardModel.Local -> {
+                    val playlist = item.playlist
+                    // 伪歌单沿用同一张卡片，只是锁住改名/删除/移动（它们不落 Room）。
+                    val attitudeCard = isAttitudePlaylistId(playlist.id)
+                    val actionsEnabled = !attitudeCard && !playlist.isFavorites
+                    PlaylistFrameCard(
+                        playlist = playlist,
+                        collageSongs = collageSongsByPlaylistId[playlist.id].orEmpty(),
+                        modifier = Modifier.weight(1f),
+                        iconRes = playlistCardIconRes(playlist),
+                        accentOverride = when (playlist.id) {
+                            ATTITUDE_FAVORITES_PLAYLIST_ID -> rowColors.primary
+                            ATTITUDE_DISLIKED_PLAYLIST_ID -> rowColors.outline
+                            else -> null
+                        },
+                        songCountOverride = attitudeSongCounts[playlist.id],
+                        actionsEnabled = actionsEnabled,
+                        onClick = { onPlaylistClick(playlist.id, playlist.name) },
+                        onActions = { if (actionsEnabled) onPlaylistActions(playlist) },
+                    )
+                }
+
+                is PlaylistItemCardModel.Online -> {
+                    val favorite = item.favorite
+                    OnlinePlaylistFrameCard(
+                        favorite = favorite,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val platform = OnlinePlatform.fromId(favorite.platform) ?: OnlinePlatform.NETEASE
+                            onOnlinePlaylistClick(platform, favorite.remoteId)
+                        },
+                        onActions = { onOnlinePlaylistActions(favorite) },
+                    )
+                }
+            }
         }
-        repeat((columns - playlists.size).coerceAtLeast(0)) {
+        repeat((columns - items.size).coerceAtLeast(0)) {
             Spacer(Modifier.weight(1f))
         }
     }
@@ -304,7 +351,7 @@ private fun playlistGridVirtualItem(index: Int, entry: PlaylistGridEntry): Audio
     // id 落在私有负数区间，不会与真实曲目或伪歌单行撞号。
     val identity = when (entry) {
         is PlaylistGridEntry.GroupHeader -> "header:${entry.groupName}"
-        is PlaylistGridEntry.Row -> "row:" + entry.playlists.joinToString(separator = "|") { it.id }
+        is PlaylistGridEntry.Row -> "row:" + entry.items.joinToString(separator = "|") { it.id }
     }.fold(17L) { acc, char -> acc * 31L + char.code }
     return AudioFile(
         id = Long.MIN_VALUE / 4L + identity,
@@ -312,3 +359,117 @@ private fun playlistGridVirtualItem(index: Int, entry: PlaylistGridEntry): Audio
         encodingFormat = "$PLAYLIST_GRID_ENCODING_PREFIX$index",
     )
 }
+
+/**
+ * 现代轻量化二级分组筛选胶囊栏 (OrBit 风格移植并深度融合 Miuix 视觉规范)。
+ * 仅在存在多个包含歌单的分组时展示；空分组自动隐形，不打扰用户。
+ */
+@Composable
+internal fun PlaylistGroupFilterBar(
+    groups: List<PlaylistGroupEntity>,
+    totalPlaylistCount: Int,
+    selectedGroup: String?,
+    onSelectGroup: (String?) -> Unit,
+    groupCounts: Map<String, Int>,
+    onGroupLongPress: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = themeColors()
+    Surface(
+        color = colors.surface.copy(alpha = 0.85f),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val isAllSelected = selectedGroup == null
+            PlaylistFilterChip(
+                name = stringResource(R.string.playlist_group_all),
+                count = totalPlaylistCount,
+                isSelected = isAllSelected,
+                onClick = { onSelectGroup(null) },
+                onLongClick = {},
+            )
+
+            groups.forEach { group ->
+                val isSelected = selectedGroup == group.name
+                val count = groupCounts[group.name] ?: 0
+                val displayName = playlistGroupDisplayName(group.name)
+                PlaylistFilterChip(
+                    name = displayName,
+                    count = count,
+                    isSelected = isSelected,
+                    onClick = { onSelectGroup(group.name) },
+                    onLongClick = {
+                        if (group.name != DEFAULT_PLAYLIST_GROUP) {
+                            onGroupLongPress(group.name)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlaylistFilterChip(
+    name: String,
+    count: Int,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val colors = themeColors()
+    val shape = RoundedCornerShape(8.dp)
+    val bgColor = if (isSelected) colors.primary.copy(alpha = 0.16f) else colors.surface.copy(alpha = 0.45f)
+    val borderColor = if (isSelected) colors.primary.copy(alpha = 0.6f) else colors.outline.copy(alpha = 0.15f)
+    val textColor = if (isSelected) colors.primary else colors.onSurface
+
+    Surface(
+        shape = shape,
+        color = bgColor,
+        border = BorderStroke(if (isSelected) 1.dp else 0.5.dp, borderColor),
+        modifier = Modifier
+            .clip(shape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = name,
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = textColor,
+                fontFamily = appFontFamily(),
+            )
+            if (count > 0) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = if (isSelected) colors.primary.copy(alpha = 0.22f) else colors.onSurface.copy(alpha = 0.08f),
+                ) {
+                    Text(
+                        text = "$count",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSelected) colors.primary else colors.onSurfaceVariant,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+

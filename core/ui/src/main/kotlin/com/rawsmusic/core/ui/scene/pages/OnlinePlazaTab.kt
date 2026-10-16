@@ -1,10 +1,18 @@
 package com.rawsmusic.core.ui.scene.pages
 
+import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,8 +32,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -85,6 +95,7 @@ internal fun OnlinePlazaTab(
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
+    val keyboard = LocalSoftwareKeyboardController.current
 
     var section by remember { mutableStateOf(OnlinePlazaSection.Recommend) }
     var tags by remember(platform) { mutableStateOf<List<OnlinePlaylistTag>>(emptyList()) }
@@ -99,7 +110,70 @@ internal fun OnlinePlazaTab(
     // 重试令牌：自增即触发下面的 LaunchedEffect 重新拉取（不引入 ViewModel，AGENTS §4.4）。
     var reloadToken by remember { mutableIntStateOf(0) }
 
+    // 歌单搜索状态
+    var isSearchMode by remember { mutableStateOf(false) }
+    var searchKeyword by remember { mutableStateOf("") }
+    var activeSearchKeyword by remember { mutableStateOf("") }
+    var searchResults by remember(platform) { mutableStateOf<List<OnlinePlaylist>>(emptyList()) }
+    var searchPage by remember(platform) { mutableIntStateOf(1) }
+    var searching by remember { mutableStateOf(false) }
+    var searchLoadingMore by remember { mutableStateOf(false) }
+    var searchEndReached by remember(platform) { mutableStateOf(false) }
+    var searchErrorText by remember { mutableStateOf<String?>(null) }
+
     val loadFailedMessage = stringResource(R.string.online_plaza_load_failed)
+
+    BackHandler(enabled = isSearchMode) {
+        isSearchMode = false
+    }
+
+    fun startSearchPlaylists(query: String) {
+        val q = query.trim()
+        if (q.isBlank()) return
+        keyboard?.hide()
+        activeSearchKeyword = q
+        searching = true
+        searchErrorText = null
+        searchPage = 1
+        searchEndReached = false
+        scope.launch {
+            repository.searchPlaylists(keyword = q, page = 1, pageSize = PAGE_SIZE, platform = platform)
+                .onSuccess {
+                    searchResults = it
+                    searchEndReached = it.size < PAGE_SIZE
+                    searchErrorText = null
+                }
+                .onFailure {
+                    searchResults = emptyList()
+                    searchErrorText = loadFailedMessage
+                    AppNoticeBus.error(loadFailedMessage)
+                }
+            searching = false
+        }
+    }
+
+    fun loadMoreSearchResults() {
+        if (searching || searchLoadingMore || searchEndReached || activeSearchKeyword.isBlank()) return
+        searchLoadingMore = true
+        scope.launch {
+            val next = searchPage + 1
+            repository.searchPlaylists(keyword = activeSearchKeyword, page = next, pageSize = PAGE_SIZE, platform = platform)
+                .onSuccess {
+                    searchResults = searchResults + it
+                    searchPage = next
+                    searchEndReached = it.size < PAGE_SIZE
+                }
+                .onFailure { AppNoticeBus.error(loadFailedMessage) }
+            searchLoadingMore = false
+        }
+    }
+
+    // 当处于搜索模式并切换了平台时，自动使用新平台搜索当前关键词
+    LaunchedEffect(platform) {
+        if (isSearchMode && activeSearchKeyword.isNotBlank()) {
+            startSearchPlaylists(activeSearchKeyword)
+        }
+    }
 
     // 平台、分类段或重试令牌变化都要重新拉第一页，避免把上一个平台的数据留在列表里。
     LaunchedEffect(platform, selectedTagId, section, reloadToken) {
@@ -158,69 +232,126 @@ internal fun OnlinePlazaTab(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        OnlinePlazaSectionRow(selected = section, onSelect = { section = it })
-
-        if (section == OnlinePlazaSection.Categories && tags.isNotEmpty()) {
-            OnlineTagRow(
-                tags = tags,
-                selectedTagId = selectedTagId,
-                onSelect = { selectedTagId = it },
+        if (isSearchMode) {
+            OnlinePlaylistSearchBar(
+                query = searchKeyword,
+                onQueryChange = { searchKeyword = it },
+                onSearch = { startSearchPlaylists(searchKeyword) },
+                onCancel = { isSearchMode = false },
             )
+        } else {
+            OnlinePlazaSectionRow(
+                selected = section,
+                onSelect = { section = it },
+                onOpenSearch = { isSearchMode = true },
+            )
+
+            if (section == OnlinePlazaSection.Categories && tags.isNotEmpty()) {
+                OnlineTagRow(
+                    tags = tags,
+                    selectedTagId = selectedTagId,
+                    onSelect = { selectedTagId = it },
+                )
+            }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                loading -> LoadingState()
-                errorText != null -> ErrorState(
-                    message = errorText.orEmpty(),
-                    onRetry = { reloadToken++ },
-                )
-                section == OnlinePlazaSection.Leaderboards && leaderboards.isEmpty() ->
-                    EmptyState(stringResource(R.string.online_plaza_empty))
-                section != OnlinePlazaSection.Leaderboards && playlists.isEmpty() ->
-                    EmptyState(stringResource(R.string.online_plaza_empty))
-                section == OnlinePlazaSection.Leaderboards -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(leaderboards, key = { "${it.platform.id}_${it.id}" }) { board ->
-                        OnlineLeaderboardRow(board)
-                    }
-                }
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(
-                        playlists.chunked(GRID_COLUMNS),
-                        key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }
-                    ) { rowItems ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rowItems.forEach { playlist ->
-                                OnlinePlaylistCard(
-                                    playlist = playlist,
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
-                                )
-                            }
-                            // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。
-                            if (rowItems.size < GRID_COLUMNS) {
-                                Spacer(Modifier.weight(1f))
+            if (isSearchMode) {
+                when {
+                    searching -> LoadingState()
+                    searchErrorText != null -> ErrorState(
+                        message = searchErrorText.orEmpty(),
+                        onRetry = { startSearchPlaylists(activeSearchKeyword) },
+                    )
+                    activeSearchKeyword.isBlank() -> EmptyState(stringResource(R.string.online_plaza_search_initial))
+                    searchResults.isEmpty() -> EmptyState(stringResource(R.string.online_plaza_search_empty))
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(
+                            searchResults.chunked(GRID_COLUMNS),
+                            key = { row -> "search_" + row.joinToString("_") { "${it.platform.id}_${it.id}" } }
+                        ) { rowItems ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                rowItems.forEach { playlist ->
+                                    OnlinePlaylistCard(
+                                        playlist = playlist,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
+                                    )
+                                }
+                                if (rowItems.size < GRID_COLUMNS) {
+                                    Spacer(Modifier.weight(1f))
+                                }
                             }
                         }
+                        item {
+                            LoadMoreFooter(
+                                loadingMore = searchLoadingMore,
+                                endReached = searchEndReached,
+                                onLoadMore = ::loadMoreSearchResults,
+                            )
+                        }
                     }
-                    item {
-                        LoadMoreFooter(
-                            loadingMore = loadingMore,
-                            endReached = endReached,
-                            onLoadMore = ::loadNextPage,
-                        )
+                }
+            } else {
+                when {
+                    loading -> LoadingState()
+                    errorText != null -> ErrorState(
+                        message = errorText.orEmpty(),
+                        onRetry = { reloadToken++ },
+                    )
+                    section == OnlinePlazaSection.Leaderboards && leaderboards.isEmpty() ->
+                        EmptyState(stringResource(R.string.online_plaza_empty))
+                    section != OnlinePlazaSection.Leaderboards && playlists.isEmpty() ->
+                        EmptyState(stringResource(R.string.online_plaza_empty))
+                    section == OnlinePlazaSection.Leaderboards -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(leaderboards, key = { "${it.platform.id}_${it.id}" }) { board ->
+                            OnlineLeaderboardRow(board)
+                        }
+                    }
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(
+                            playlists.chunked(GRID_COLUMNS),
+                            key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }
+                        ) { rowItems ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                rowItems.forEach { playlist ->
+                                    OnlinePlaylistCard(
+                                        playlist = playlist,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
+                                    )
+                                }
+                                // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。
+                                if (rowItems.size < GRID_COLUMNS) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        item {
+                            LoadMoreFooter(
+                                loadingMore = loadingMore,
+                                endReached = endReached,
+                                onLoadMore = ::loadNextPage,
+                            )
+                        }
                     }
                 }
             }
@@ -229,9 +360,95 @@ internal fun OnlinePlazaTab(
 }
 
 @Composable
+private fun OnlinePlaylistSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val colors = themeColors()
+    val keyboard = LocalSoftwareKeyboardController.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = TextStyle(color = colors.onSurface, fontSize = 14.sp),
+            cursorBrush = SolidColor(colors.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    keyboard?.hide()
+                    onSearch()
+                }
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.surface)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            decorationBox = { inner ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Search,
+                        contentDescription = null,
+                        tint = colors.secondaryText,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (query.isBlank()) {
+                            Text(
+                                text = stringResource(R.string.online_plaza_search_hint),
+                                color = colors.secondaryText,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        inner()
+                    }
+                    if (query.isNotBlank()) {
+                        Icon(
+                            imageVector = MiuixIcons.Regular.Close,
+                            contentDescription = stringResource(R.string.online_plaza_search_cancel),
+                            tint = colors.secondaryText,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onQueryChange("") },
+                        )
+                    }
+                }
+            }
+        )
+        TextButton(
+            text = stringResource(R.string.online_plaza_search_action),
+            onClick = {
+                keyboard?.hide()
+                onSearch()
+            },
+        )
+        TextButton(
+            text = stringResource(R.string.online_plaza_search_cancel),
+            onClick = {
+                keyboard?.hide()
+                onCancel()
+            },
+        )
+    }
+}
+
+@Composable
 private fun OnlinePlazaSectionRow(
     selected: OnlinePlazaSection,
     onSelect: (OnlinePlazaSection) -> Unit,
+    onOpenSearch: () -> Unit,
 ) {
     val colors = themeColors()
     Row(
@@ -258,6 +475,28 @@ private fun OnlinePlazaSectionRow(
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 )
             }
+        }
+        Spacer(Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.surface)
+                .clickable(onClick = onOpenSearch)
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = MiuixIcons.Regular.Search,
+                contentDescription = stringResource(R.string.online_plaza_search_action),
+                tint = colors.secondaryText,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = stringResource(R.string.online_plaza_search_action),
+                color = colors.secondaryText,
+                fontSize = 12.sp,
+            )
         }
     }
 }

@@ -59,11 +59,27 @@ object PlaylistGroupStore {
 
     private fun database(context: Context) = MusicDatabase.getInstance(context.applicationContext)
 
+    private val SEED_EMPTY_GROUPS = setOf(
+        "🚗 车载专用", "📱 手机精选", "长途自驾", "睡前轻音乐", "QQ 音乐"
+    )
+
     /** 重新查询分组与歌单归属并发布。所有写操作之后都必须调它。 */
     suspend fun refresh(context: Context) {
         val db = database(context)
-        val stored = withContext(Dispatchers.IO) { db.playlistGroupDao().getAllBySortOrder() }
+        val storedRaw = withContext(Dispatchers.IO) { db.playlistGroupDao().getAllBySortOrder() }
         val playlists = withContext(Dispatchers.IO) { db.userPlaylistDao().getPlaylists() }
+
+        // 自动清理没有任何歌单引用的预设种子空分组，避免云端恢复带来的无用空分组长期残留
+        val usedGroupNames = playlists.map { it.groupName }.toSet()
+        val emptySeedGroups = storedRaw.filter { it.name in SEED_EMPTY_GROUPS && it.name !in usedGroupNames }
+        val stored = if (emptySeedGroups.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                emptySeedGroups.forEach { db.playlistGroupDao().delete(it.name) }
+                db.playlistGroupDao().getAllBySortOrder()
+            }
+        } else {
+            storedRaw
+        }
 
         _groups.value = buildList {
             // 「默认」永远在最前，且 order 固定为 -1，避免用户排序后它被挤到中间。

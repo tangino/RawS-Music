@@ -4,6 +4,7 @@ import android.content.Context
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
+import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.model.toUserPlaylistSong
 import com.rawsmusic.module.data.prefs.PlaylistStore
@@ -41,14 +42,24 @@ fun attitudePlaylistView(
     dislikedKeys: Set<String>,
 ): UserPlaylist? = when (playlistId) {
     ATTITUDE_FAVORITES_PLAYLIST_ID -> {
-        // 喜欢沿用既有系统歌单，走它自己的解析路径（文件被删时还能回落到存储条目）。
+        // 喜欢沿用既有系统歌单：完整保留在线曲目与存储条目，本地曲按曲库更新信息，不误删任何歌曲
         val favorites = playlistStore.playlists.value.firstOrNull { it.isFavorites }
+        val storedSongs = favorites?.songs.orEmpty()
+        val byIdentity = librarySongs.associateBy { it.playlistIdentityKey() }
+        val resolvedSongs = storedSongs.map { stored ->
+            if (stored.isOnlineEntry()) {
+                stored
+            } else {
+                val matched = byIdentity[stored.key]
+                matched?.toUserPlaylistSong() ?: stored
+            }
+        }
         UserPlaylist(
             id = ATTITUDE_FAVORITES_PLAYLIST_ID,
             name = context.getString(R.string.playlist_attitude_favorites_title),
-            songs = playlistStore.resolveSongs(favorites, librarySongs).map { it.toUserPlaylistSong() },
-            createdAt = 0L,
-            updatedAt = 0L,
+            songs = resolvedSongs,
+            createdAt = favorites?.createdAt ?: 0L,
+            updatedAt = favorites?.updatedAt ?: 0L,
         )
     }
 

@@ -3,6 +3,7 @@ package com.rawsmusic.module.online.playback
 import android.content.Context
 import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.utils.AppLogger
+import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.module.data.source.LxSourcePluginStore
 import com.rawsmusic.module.data.source.MusicSourcePluginStore
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
@@ -91,12 +92,34 @@ object OnlinePlaybackLauncher {
         queue: List<OnlineSongItem> = listOf(item),
         index: Int = 0,
     ): OnlinePlayResult = try {
-        val rawQueue = if (queue.isNotEmpty()) {
+        val rawQueue = if (queue.isNotEmpty() && queue.size > 1) {
             queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
         } else {
-            listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
+            val existingQueue = MusicSourcePlaybackController.snapshot.value.queue
+            if (existingQueue.size > 1) {
+                val matchIdx = existingQueue.indexOfFirst {
+                    it.remoteId == item.id ||
+                        (it.title.equals(item.title, ignoreCase = true) &&
+                            it.artists.contains(item.artist))
+                }
+                if (matchIdx >= 0) {
+                    val targetMedia = OnlineSourceMediaMapper.toRawSourceMediaItem(item)
+                    existingQueue.toMutableList().apply { set(matchIdx, targetMedia) }
+                } else if (queue.isNotEmpty()) {
+                    queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+                } else {
+                    listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
+                }
+            } else if (queue.isNotEmpty()) {
+                queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+            } else {
+                listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
+            }
         }
-        val resolvedIndex = if (index in rawQueue.indices) index else 0
+        val targetMediaItem = OnlineSourceMediaMapper.toRawSourceMediaItem(item)
+        val resolvedIndex = rawQueue.indexOfFirst { it.stableIdentity == targetMediaItem.stableIdentity }
+            .takeIf { it >= 0 }
+            ?: if (index in rawQueue.indices) index else 0
 
         // 1. 优先走 OrBitPlayer 寻源核心（LRU 缓存 -> 原平台优先通道 -> 跨平台并发搜救 -> 官方兜底直链 -> 探活）
         val resolved = OnlineAudioSourceResolver.resolvePlayableSource(
@@ -107,6 +130,7 @@ object OnlinePlaybackLauncher {
             artist = item.artist,
             album = item.album,
             expectedDurationMs = item.durationMs,
+            explicitQuality = AppPreferences.Source.preferredQuality,
         )
 
         if (resolved != null) {

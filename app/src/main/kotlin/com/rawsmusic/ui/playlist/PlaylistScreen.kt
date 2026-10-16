@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import top.yukonga.miuix.kmp.icon.extended.CloudFill
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -91,6 +92,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button as MiuixButton
 import top.yukonga.miuix.kmp.basic.ButtonDefaults as MiuixButtonDefaults
+import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
+import com.rawsmusic.module.data.db.entity.PlaylistGroupEntity
+import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
 import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
 
 @Composable
@@ -98,11 +103,13 @@ fun PlaylistScreen(
     playlistStore: PlaylistStore,
     onBack: () -> Unit,
     virtualListState: ComposeVirtualListState? = null,
-    onPlaylistClick: (String, String) -> Unit
+    onPlaylistClick: (String, String) -> Unit,
+    onOnlinePlaylistClick: (OnlinePlatform, String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val withSystemFileAccess = rememberSystemFileAccessGate()
     val playlists by playlistStore.playlists.collectAsState()
+    val onlineFavorites by OnlinePlaylistFavoriteStore.favorites.collectAsState()
     val librarySongs by MusicRepository.songs.collectAsState()
     // 「不喜欢」不在任何歌单里，状态只在 song_attitude 表；进入页面刷一次即可，
     // 之后每次写入由 SongAttitudeRepository 自己 refresh（见其类注释）。
@@ -116,6 +123,9 @@ fun PlaylistScreen(
     }
     LaunchedEffect(Unit) {
         PlaylistGroupStore.refresh(context)
+    }
+    LaunchedEffect(Unit) {
+        OnlinePlaylistFavoriteStore.refresh(context)
     }
     val scope = rememberCoroutineScope()
     val colors = themeColors()
@@ -134,7 +144,11 @@ fun PlaylistScreen(
     // 两张伪歌单卡：本地曲的「喜欢」沿用既有系统歌单（PlaylistStore），「不喜欢」走
     // SongAttitudeRepository（决策见 AGENTS.MD §9 D14）。它们排在真实歌单之前，
     // 并复用同一套网格 / 行高 / 卡片写法，不另起样式。
-    val favoriteKeyCount = remember(playlists) { playlistStore.favoriteSongKeys().size }
+    val onlineFavoriteKeys by SongAttitudeRepository.onlineFavoriteKeys.collectAsState()
+    val favoriteKeyCount = remember(playlists, onlineFavoriteKeys) {
+        val favPlaylistSongs = playlists.firstOrNull { it.isFavorites }?.songs?.size ?: 0
+        maxOf(favPlaylistSongs, (playlistStore.favoriteSongKeys() + onlineFavoriteKeys).size)
+    }
     val attitudePlaylists = remember(playlists, dislikedKeys, librarySongs) {
         listOfNotNull(
             attitudePlaylistView(context, playlistStore, librarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys),
@@ -169,23 +183,69 @@ fun PlaylistScreen(
     }
     // 分组只影响真实歌单：伪卡是系统入口，不属于任何分组，固定排在所有分区之上（默认选择，
     // 理由见汇报）；同一分组内保持既有「先 chunked、再交给虚拟列表」的网格排布。
-    // Store 首帧还没刷回来时按「只有默认」处理，否则真实歌单会整个消失一帧。
-    val orderedGroupNames = remember(playlistGroups) {
+    // 分组筛选状态：null 表示「全部」
+    var selectedGroup by remember { mutableStateOf<String?>(null) }
+    val filteredPlaylists = remember(playlists) { playlists.filterNot { it.isFavorites } }
+    val allGroupNames = remember(playlistGroups) {
         playlistGroups.map { it.name }.ifEmpty { listOf(DEFAULT_PLAYLIST_GROUP) }
     }
-    val filteredPlaylists = remember(playlists) { playlists.filterNot { it.isFavorites } }
+
+    // 结合本地自建歌单与在线收藏歌单统计分组计数
+    val groupCounts = remember(filteredPlaylists, onlineFavorites, playlistGroupMap, playlistGroups) {
+        val map = mutableMapOf<String, Int>()
+        filteredPlaylists.forEach { pl ->
+            val g = playlistGroupMap[pl.id] ?: DEFAULT_PLAYLIST_GROUP
+            map[g] = (map[g] ?: 0) + 1
+        }
+        onlineFavorites.forEach { fav ->
+            val g = fav.groupName.ifEmpty { DEFAULT_PLAYLIST_GROUP }
+            map[g] = (map[g] ?: 0) + 1
+        }
+        map
+    }
+
+    // 仅保留实际含有歌单的非空分组用于 Chip 筛选，若在线歌单有未建分组则动态补充显示
+    val nonEmptyGroups = remember(playlistGroups, groupCounts) {
+        val existing = playlistGroups.filter { (groupCounts[it.name] ?: 0) > 0 }
+        val existingNames = playlistGroups.map { it.name }.toSet()
+        val extraGroups = groupCounts.keys.filter { it !in existingNames && (groupCounts[it] ?: 0) > 0 }
+            .map { PlaylistGroupEntity(name = it, sortOrder = 999) }
+        existing + extraGroups
+    }
+
+    LaunchedEffect(nonEmptyGroups) {
+        if (selectedGroup != null && nonEmptyGroups.none { it.name == selectedGroup }) {
+            selectedGroup = null
+        }
+    }
+
+    val displayedItemsForGrid = remember(filteredPlaylists, onlineFavorites, selectedGroup, playlistGroupMap) {
+        val localItems = filteredPlaylists.map { pl ->
+            val g = playlistGroupMap[pl.id] ?: DEFAULT_PLAYLIST_GROUP
+            PlaylistItemCardModel.Local(pl, g)
+        }
+        val onlineItems = onlineFavorites.map { fav ->
+            PlaylistItemCardModel.Online(fav)
+        }
+        val combined = localItems + onlineItems
+        if (selectedGroup == null) {
+            combined
+        } else {
+            combined.filter { it.groupName == selectedGroup }
+        }
+    }
+    val displayedAttitudePlaylists = remember(attitudePlaylists, selectedGroup) {
+        if (selectedGroup == null || selectedGroup == DEFAULT_PLAYLIST_GROUP) attitudePlaylists else emptyList()
+    }
+
     val playlistGridPlan = remember(
-        attitudePlaylists,
-        filteredPlaylists,
-        orderedGroupNames,
-        playlistGroupMap,
+        displayedAttitudePlaylists,
+        displayedItemsForGrid,
         playlistColumns,
     ) {
         buildPlaylistGridPlan(
-            attitudePlaylists = attitudePlaylists,
-            playlists = filteredPlaylists,
-            groupNames = orderedGroupNames,
-            playlistGroups = playlistGroupMap,
+            attitudePlaylists = displayedAttitudePlaylists,
+            items = displayedItemsForGrid,
             columns = playlistColumns,
         )
     }
@@ -200,6 +260,8 @@ fun PlaylistScreen(
         attitudeSongCounts = attitudeSongCounts,
         onPlaylistClick = onPlaylistClick,
         onPlaylistActions = { groupChrome.playlistActionsTarget = it },
+        onOnlinePlaylistClick = onOnlinePlaylistClick,
+        onOnlinePlaylistActions = { groupChrome.onlinePlaylistActionsTarget = it },
         onGroupLongPress = { groupChrome.groupMenuTarget = it },
     )
 
@@ -225,55 +287,89 @@ fun PlaylistScreen(
         }
     }
 
-    // 「清空所有不喜欢」只在确实有不喜欢时出现，避免常驻一个无意义的入口。
-    // 没有更好的归属：歌单页没有「更多」菜单槽位，只有顶栏尾部这个插槽。
-    val clearDislikesHeaderAction: (@Composable () -> Unit)? = if (dislikedKeys.isEmpty()) {
-        null
-    } else {
-        {
+    var showCloudPlaylistSyncDialog by remember { mutableStateOf(false) }
+
+    // 顶栏右侧快捷插槽：歌单多端云同步入口 +（若有不喜欢时）清空所有不喜欢
+    val headerTrailingAction: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
-                onClick = { clearDislikesConfirm = true },
+                onClick = { showCloudPlaylistSyncDialog = true },
                 modifier = Modifier.size(42.dp),
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_delete_bin_6_fill),
-                    contentDescription = stringResource(R.string.playlist_attitude_clear_dislikes),
-                    tint = colors.onSurface,
+                    imageVector = top.yukonga.miuix.kmp.icon.MiuixIcons.Regular.CloudFill,
+                    contentDescription = "歌单多端云同步",
+                    tint = colors.primary,
                     modifier = Modifier.size(22.dp),
                 )
+            }
+            if (dislikedKeys.isNotEmpty()) {
+                IconButton(
+                    onClick = { clearDislikesConfirm = true },
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_delete_bin_6_fill),
+                        contentDescription = stringResource(R.string.playlist_attitude_clear_dislikes),
+                        tint = colors.onSurface,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     }
 
+    val totalPlaylistsCount = filteredPlaylists.size + onlineFavorites.size
+    val totalSongsCount = playlists.sumOf { it.songs.size } + onlineFavorites.sumOf { it.trackCount }
+
     LibraryListScaffold(
         title = stringResource(com.rawsmusic.core.ui.R.string.library_title_playlists),
         sceneId = NavScene.PLAYLISTS.name,
-        statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_playlists, playlists.size, playlists.sumOf { it.songs.size }),
+        statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_playlists, totalPlaylistsCount, totalSongsCount),
         onBack = onBack,
         onCreatePlaylist = { createDialog = true },
         onImportPlaylist = { importDialog = true },
-        headerTrailingContent = clearDislikesHeaderAction,
+        headerTrailingContent = headerTrailingAction,
         virtualListState = listState,
         contentOverlap = 0.dp
     ) { topPadding, backdropSource ->
-        CompositionLocalProvider(LocalVirtualListCustomProvider provides playlistCustomProvider) {
-            ComposeVirtualList(
-                songs = playlistGridPlan.virtualItems,
-                state = listState,
-                pinchEnabled = false,
-                contentTopPadding = topPadding + 12.dp,
-                contentBottomPadding = 150.dp,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(backdropSource),
-            )
+        val hasMultiGroups = nonEmptyGroups.size > 1
+        val chipBarHeight = if (hasMultiGroups) 44.dp else 0.dp
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            CompositionLocalProvider(LocalVirtualListCustomProvider provides playlistCustomProvider) {
+                ComposeVirtualList(
+                    songs = playlistGridPlan.virtualItems,
+                    state = listState,
+                    pinchEnabled = false,
+                    contentTopPadding = topPadding + chipBarHeight + 12.dp,
+                    contentBottomPadding = 150.dp,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(backdropSource),
+                )
+            }
+
+            if (hasMultiGroups) {
+                PlaylistGroupFilterBar(
+                    groups = nonEmptyGroups,
+                    totalPlaylistCount = totalPlaylistsCount,
+                    selectedGroup = selectedGroup,
+                    onSelectGroup = { selectedGroup = it },
+                    groupCounts = groupCounts,
+                    onGroupLongPress = { groupChrome.groupMenuTarget = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = topPadding),
+                )
+            }
         }
     }
 
     // 分组长按菜单、新建/改名/删除分组、歌单卡动作菜单的装配都在这里（见 PlaylistGroupDialogs.kt）。
     PlaylistGroupDialogHost(
         state = groupChrome,
-        groupNames = orderedGroupNames,
+        groupNames = allGroupNames,
         playlistGroupMap = playlistGroupMap,
         // 改名与删除歌单沿用页面既有的确认弹窗，行为不变。
         onRenamePlaylist = { renameTarget = it },
@@ -360,6 +456,12 @@ fun PlaylistScreen(
         )
     }
 
+    if (showCloudPlaylistSyncDialog) {
+        CloudPlaylistSyncDialog(
+            onDismiss = { showCloudPlaylistSyncDialog = false },
+        )
+    }
+
     // 危险操作：清空所有「不喜欢」。按规范用 RawMiuixOverlayDialog 做二次确认。
     if (clearDislikesConfirm) {
         RawMiuixOverlayDialog(
@@ -432,7 +534,7 @@ private val playlistArtworkSlots = listOf(
     PlaylistArtworkSlot(0.49f, 0.72f, 0.19f, 0.20f, 1.8f, 13.dp, 5f),
 )
 
-private object PlaylistOrganicFrameShape : Shape {
+internal object PlaylistOrganicFrameShape : Shape {
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
@@ -665,6 +767,186 @@ internal fun PlaylistFrameCard(
                 }
             } else {
                 Spacer(Modifier.width(32.dp))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun OnlinePlaylistFrameCard(
+    favorite: OnlinePlaylistFavoriteEntity,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onActions: () -> Unit,
+) {
+    val colors = themeColors()
+    val platform = remember(favorite.platform) { OnlinePlatform.fromId(favorite.platform) }
+    val accent = remember(favorite.platform, favorite.playlistKey) {
+        when (favorite.platform.lowercase()) {
+            "netease" -> Color(0xFFE53935)
+            "qq" -> Color(0xFF00C853)
+            "kugou" -> Color(0xFF2979FF)
+            "kuwo" -> Color(0xFFFF9800)
+            "migu" -> Color(0xFFE040FB)
+            else -> {
+                val palette = listOf(
+                    Color(0xFF8997C6),
+                    Color(0xFF8BAE97),
+                    Color(0xFFD4A574),
+                    Color(0xFF9E8DB5),
+                    Color(0xFF6B9EA8),
+                    Color(0xFFC78B8B),
+                )
+                val idx = (favorite.playlistKey.hashCode() and Int.MAX_VALUE) % palette.size
+                palette[idx]
+            }
+        }
+    }
+    val frameShape = PlaylistOrganicFrameShape
+
+    BoxWithConstraints(
+        modifier = modifier
+            .aspectRatio(0.86f)
+            .shadow(
+                elevation = 10.dp,
+                shape = frameShape,
+                clip = false,
+                ambientColor = accent.copy(alpha = 0.18f),
+                spotColor = accent.copy(alpha = 0.24f),
+            )
+            .clip(frameShape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.26f),
+                        colors.surface.copy(alpha = 0.96f),
+                        Color.Black.copy(alpha = 0.78f),
+                    )
+                )
+            )
+            .border(1.dp, accent.copy(alpha = 0.42f), frameShape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onActions,
+            )
+    ) {
+        val collageHeight = maxHeight - 64.dp
+
+        Box(
+            modifier = Modifier
+                .padding(start = 8.dp, top = 8.dp, end = 8.dp)
+                .fillMaxWidth()
+                .height(collageHeight.coerceAtLeast(96.dp))
+                .clip(RoundedCornerShape(26.dp))
+                .background(Color.Black.copy(alpha = 0.26f))
+        ) {
+            val coverUrl = favorite.coverUrl
+            if (coverUrl.isNotBlank()) {
+                BitmapImage(
+                    key = coverUrl,
+                    contentDescription = favorite.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 512,
+                    targetHeight = 512,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(accent.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_play_list_fill),
+                            contentDescription = null,
+                            tint = accent.copy(alpha = 0.92f),
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 下方磨砂底条
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
+                .fillMaxWidth()
+                .height(52.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            accent.copy(alpha = 0.20f),
+                            colors.surface.copy(alpha = 0.82f),
+                            Color.Black.copy(alpha = 0.52f),
+                        )
+                    )
+                )
+                .border(0.8.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(24.dp))
+                .padding(start = 10.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 左侧平台小徽章
+            val platformLabel = platform?.displayName ?: favorite.platform.uppercase()
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = 0.22f))
+                    .border(0.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = platformLabel,
+                    color = accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = favorite.title,
+                    color = colors.onSurface,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = appFontFamily(),
+                )
+                Text(
+                    text = stringResource(R.string.playlist_song_count, favorite.trackCount),
+                    color = colors.onSurface.copy(alpha = 0.50f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    fontFamily = appFontFamily(),
+                )
+            }
+
+            IconButton(
+                onClick = onActions,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_more_vert),
+                    contentDescription = stringResource(R.string.playlist_group_playlist_actions),
+                    tint = colors.onSurface.copy(alpha = 0.44f),
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }

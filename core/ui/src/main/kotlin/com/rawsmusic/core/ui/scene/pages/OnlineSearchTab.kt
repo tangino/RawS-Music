@@ -17,11 +17,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -41,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -52,14 +56,20 @@ import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlineSongItem
+import com.rawsmusic.module.online.playback.OnlinePlayResult
+import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Playlist
 
 /** 单次请求条数。与仓库 `searchSongs` / `searchSongsAllPlatforms` 的默认值保持一致。 */
 private const val PAGE_SIZE = 20
@@ -114,6 +124,57 @@ internal fun OnlineSearchTab(modifier: Modifier = Modifier) {
     val emptyQueryMessage = stringResource(R.string.online_search_empty_query)
     val platformFailedMessage = stringResource(R.string.online_search_platform_failed)
     val platformEmptyMessage = stringResource(R.string.online_search_platform_empty)
+
+    val context = LocalContext.current
+    val playbackSnapshot by MusicSourcePlaybackController.snapshot.collectAsState()
+    var resolvingSongKey by remember { mutableStateOf<String?>(null) }
+    var addToPlaylistSong by remember { mutableStateOf<OnlineSongItem?>(null) }
+
+    LaunchedEffect(playbackSnapshot.status, playbackSnapshot.currentItem?.remoteId) {
+        if (playbackSnapshot.status == MusicSourcePlaybackStatus.Playing ||
+            playbackSnapshot.status == MusicSourcePlaybackStatus.Paused ||
+            playbackSnapshot.status == MusicSourcePlaybackStatus.Error ||
+            playbackSnapshot.status == MusicSourcePlaybackStatus.Idle
+        ) {
+            resolvingSongKey = null
+        }
+    }
+
+    fun playSong(item: OnlineSongItem, songs: List<OnlineSongItem>, index: Int) {
+        val songKey = "${item.platform.id}_${item.id}"
+        resolvingSongKey = songKey
+        scope.launch {
+            try {
+                when (val result = OnlinePlaybackLauncher.play(context, item, queue = songs, index = index)) {
+                    OnlinePlayResult.Started -> Unit
+                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_source)
+                    )
+                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
+                        context.getString(R.string.online_detail_no_match, item.title)
+                    )
+                    is OnlinePlayResult.Failed -> {
+                        val tip = when {
+                            result.reason.contains("Timeout", ignoreCase = true) ->
+                                context.getString(R.string.online_network_timeout)
+                            result.reason.contains("UnknownHost", ignoreCase = true) ||
+                                result.reason.contains("Connect", ignoreCase = true) ->
+                                context.getString(R.string.online_network_error)
+                            result.reason.isNotBlank() ->
+                                context.getString(R.string.online_detail_play_failed_with_reason, item.title, result.reason)
+                            else ->
+                                context.getString(R.string.online_detail_play_failed, item.title)
+                        }
+                        AppNoticeBus.error(tip)
+                    }
+                }
+            } finally {
+                if (resolvingSongKey == songKey) {
+                    resolvingSongKey = null
+                }
+            }
+        }
+    }
 
     var titleInput by rememberSaveable { mutableStateOf("") }
     var artistInput by rememberSaveable { mutableStateOf("") }
@@ -341,9 +402,29 @@ internal fun OnlineSearchTab(modifier: Modifier = Modifier) {
                     loadingMore = loadingMore,
                     endReached = endReached,
                     onLoadMore = { loadMore() },
+                    isSongLoading = { song ->
+                        val isResolvingThis = resolvingSongKey == "${song.platform.id}_${song.id}"
+                        val isPlayerResolvingThis = (playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving ||
+                            playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) &&
+                            (playbackSnapshot.currentItem?.remoteId == song.id ||
+                                (playbackSnapshot.currentItem?.title.equals(song.title, ignoreCase = true) &&
+                                    playbackSnapshot.currentItem?.artists?.contains(song.artist) == true))
+                        isResolvingThis || isPlayerResolvingThis
+                    },
+                    onSongClick = { songs, song, index ->
+                        playSong(song, songs, index)
+                    },
+                    onAddToPlaylist = { song ->
+                        addToPlaylistSong = song
+                    },
                 )
             }
         }
+
+        OnlineAddToPlaylistDialog(
+            song = addToPlaylistSong,
+            onDismiss = { addToPlaylistSong = null },
+        )
     }
 }
 
@@ -570,6 +651,9 @@ private fun OnlineSearchResultList(
     loadingMore: Boolean,
     endReached: Boolean,
     onLoadMore: () -> Unit,
+    isSongLoading: (OnlineSongItem) -> Boolean = { false },
+    onSongClick: (songs: List<OnlineSongItem>, song: OnlineSongItem, index: Int) -> Unit,
+    onAddToPlaylist: (OnlineSongItem) -> Unit = {},
 ) {
     val colors = themeColors()
     LazyColumn(
@@ -591,8 +675,13 @@ private fun OnlineSearchResultList(
                 }
             } else {
                 // key 带上平台 id：同一首歌在不同平台 id 可能相同，只用 id 会撞 key 崩溃。
-                items(group.songs, key = { "${it.platform.id}_${it.id}" }) { song ->
-                    OnlineSearchSongRow(song = song)
+                itemsIndexed(group.songs, key = { _, it -> "${it.platform.id}_${it.id}" }) { index, song ->
+                    OnlineSearchSongRow(
+                        song = song,
+                        isLoading = isSongLoading(song),
+                        onClick = { onSongClick(group.songs, song, index) },
+                        onAddToPlaylist = { onAddToPlaylist(song) },
+                    )
                 }
             }
         }
@@ -606,15 +695,21 @@ private fun OnlineSearchResultList(
     }
 }
 
-/** 结果项：歌名 + 「歌手 · 专辑」+ 平台标签 + 时长。 */
+/** 结果项：歌名 + 「歌手 · 专辑」+ 平台标签 + 时长 + 添加到歌单。 */
 @Composable
-private fun OnlineSearchSongRow(song: OnlineSongItem) {
+private fun OnlineSearchSongRow(
+    song: OnlineSongItem,
+    isLoading: Boolean = false,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val colors = themeColors()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(colors.surface)
+            .clickable(onClick = onClick)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -624,6 +719,7 @@ private fun OnlineSearchSongRow(song: OnlineSongItem) {
                 .size(44.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(colors.background),
+            contentAlignment = Alignment.Center,
         ) {
             // 搜索接口偶尔不给封面；只有非空时才真的发图片请求，避免用空 key 去查缓存。
             if (!cover.isNullOrBlank()) {
@@ -634,6 +730,21 @@ private fun OnlineSearchSongRow(song: OnlineSongItem) {
                     targetWidth = 96,
                     targetHeight = 96,
                 )
+            }
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White,
+                    )
+                }
             }
         }
         Spacer(Modifier.width(12.dp))
@@ -700,6 +811,23 @@ private fun OnlineSearchSongRow(song: OnlineSongItem) {
             if (duration.isNotEmpty()) {
                 Spacer(Modifier.height(3.dp))
                 Text(text = duration, color = colors.secondaryText, fontSize = 11.sp, maxLines = 1)
+            }
+        }
+        if (onAddToPlaylist != null) {
+            Spacer(Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onAddToPlaylist),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Playlist,
+                    contentDescription = stringResource(R.string.online_add_to_playlist),
+                    tint = colors.secondaryText,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     }

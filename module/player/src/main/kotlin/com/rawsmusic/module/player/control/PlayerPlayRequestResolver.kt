@@ -18,7 +18,15 @@ internal class PlayerPlayRequestResolver(
             left.cueTrackIndex == right.cueTrackIndex
         ) return true
         if (left.id != 0L && left.id == right.id) return true
-        if (left.title.isNotBlank() && left.title == right.title && left.artist == right.artist) return true
+        if (left.title.isNotBlank() && left.title.equals(right.title, ignoreCase = true)) {
+            val leftArtist = left.artist.trim()
+            val rightArtist = right.artist.trim()
+            if (leftArtist.equals(rightArtist, ignoreCase = true) ||
+                leftArtist.isBlank() || rightArtist.isBlank() ||
+                leftArtist.contains(rightArtist, ignoreCase = true) ||
+                rightArtist.contains(leftArtist, ignoreCase = true)
+            ) return true
+        }
         return false
     }
 
@@ -46,17 +54,24 @@ internal class PlayerPlayRequestResolver(
                 )
                 return ResolvedPlayRequest(requestedQueue, identityIndex)
             }
-            logWarning(
-                "play queue snapshot does not contain requested item; isolating selection " +
-                    "title=${song.title} path=${song.path} requested=$requestedIndex " +
-                    "queueSize=${requestedQueue.size}"
-            )
+            if (requestedQueue.size > 1) {
+                logWarning(
+                    "play queue snapshot item updated at index $safeIndex: title=${song.title} " +
+                        "previousTitle=${requestedQueue[safeIndex].title} queueSize=${requestedQueue.size}"
+                )
+                val updatedQueue = requestedQueue.toMutableList().apply {
+                    set(safeIndex, song)
+                }
+                return ResolvedPlayRequest(updatedQueue, safeIndex)
+            }
             return ResolvedPlayRequest(listOf(song), 0)
         }
 
         val existingIndex = currentQueue.indexOfFirst { sameItem(it, song) }
         return if (existingIndex >= 0) {
             ResolvedPlayRequest(currentQueue, existingIndex)
+        } else if (currentQueue.isNotEmpty()) {
+            ResolvedPlayRequest(currentQueue + song, currentQueue.size)
         } else {
             ResolvedPlayRequest(listOf(song), 0)
         }

@@ -8,11 +8,22 @@
     <string name="online_detail_empty">该歌单暂无歌曲</string>
     <string name="online_detail_load_failed">加载失败，请重试</string>
     <string name="online_detail_retry">重试</string>
-    <string name="online_detail_no_source">还没有可用的音源，无法解析播放地址</string>
-    <string name="online_detail_no_match">音源里没有找到匹配的歌曲</string>
-    <string name="online_detail_play_failed">播放失败</string>
+    <string name="online_detail_no_source">未导入音源，请前往「设置 - 音源管理」导入第三方音源</string>
+    <string name="online_detail_no_match">【%1$s】全平台均未找到可用歌源 (可能受版权保护或音源不支持)</string>
+    <string name="online_detail_play_failed">【%1$s】播放失败，请稍后重试</string>
+    <string name="online_detail_play_failed_with_reason">【%1$s】解析播放失败: %2$s</string>
+    <string name="online_network_timeout">网络请求超时，请稍后重试</string>
+    <string name="online_network_error">网络连接失败，请检查网络设置</string>
     <string name="online_detail_invalid_argument">歌单参数无效</string>
     <string name="online_detail_track_count">%1$d 首</string>
     <string name="online_detail_creator">创建者：%1$s</string>
     <string name="online_detail_play_count">%1$s 次播放</string>
+    <string name="online_add_to_playlist">添加到歌单</string>
+    <string name="online_add_to_playlist_title">添加至本地歌单</string>
+    <string name="online_create_playlist">新建歌单</string>
+    <string name="online_create_playlist_hint">请输入新歌单名称</string>
+    <string name="online_added_to_playlist">已添加「%1$s」至歌单「%2$s」</string>
+    <string name="online_already_in_playlist">歌曲已在歌单「%1$s」中</string>
+    <string name="online_already_added">已添加</string>
+    <string name="online_song_count_format">%1$d 首歌曲</string>
 </resources>

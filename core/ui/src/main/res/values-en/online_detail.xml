@@ -8,11 +8,22 @@
     <string name="online_detail_empty">This playlist has no songs</string>
     <string name="online_detail_load_failed">Failed to load, tap to retry</string>
     <string name="online_detail_retry">Retry</string>
-    <string name="online_detail_no_source">No enabled music source, cannot resolve a playable URL</string>
-    <string name="online_detail_no_match">No matching song found in your sources</string>
-    <string name="online_detail_play_failed">Playback failed</string>
+    <string name="online_detail_no_source">No music source installed. Please go to Settings - Source Management to import one.</string>
+    <string name="online_detail_no_match">【%1$s】No playable audio source found across all platforms</string>
+    <string name="online_detail_play_failed">【%1$s】Playback failed, please try again later</string>
+    <string name="online_detail_play_failed_with_reason">【%1$s】Failed to resolve audio: %2$s</string>
+    <string name="online_network_timeout">Network request timed out, please retry</string>
+    <string name="online_network_error">Network connection failed, please check your network settings</string>
     <string name="online_detail_invalid_argument">Invalid playlist argument</string>
     <string name="online_detail_track_count">%1$d tracks</string>
     <string name="online_detail_creator">By %1$s</string>
     <string name="online_detail_play_count">%1$s plays</string>
+    <string name="online_add_to_playlist">Add to playlist</string>
+    <string name="online_add_to_playlist_title">Add to Playlist</string>
+    <string name="online_create_playlist">New Playlist</string>
+    <string name="online_create_playlist_hint">Enter playlist name</string>
+    <string name="online_added_to_playlist">Added \"%1$s\" to playlist \"%2$s\"</string>
+    <string name="online_already_in_playlist">Song is already in playlist \"%1$s\"</string>
+    <string name="online_already_added">Added</string>
+    <string name="online_song_count_format">%1$d tracks</string>
 </resources>

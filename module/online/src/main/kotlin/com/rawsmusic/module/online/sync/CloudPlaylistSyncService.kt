@@ -185,6 +185,7 @@ object CloudPlaylistSyncService {
      * @param restoreFavorites 是否还原「我喜欢的音乐」。
      * @param restoreDisliked 是否还原「不喜欢的音乐」。
      * @param backup 已预拉取的云端备份；若为 null 则自动请求云端拉取。
+     * @param mode 还原模式，默认增量合并 [CloudSyncClient.MODE_MERGE]，或全量覆盖 [CloudSyncClient.MODE_OVERWRITE]。
      */
     suspend fun restore(
         context: Context,
@@ -193,6 +194,7 @@ object CloudPlaylistSyncService {
         restoreFavorites: Boolean = true,
         restoreDisliked: Boolean = true,
         backup: CloudPlaylistBackup? = null,
+        mode: String = CloudSyncClient.MODE_MERGE,
     ): CloudSyncResult<CloudRestoreReport> = try {
         val downloadedBackup = backup ?: when (val downloaded = CloudSyncClient.restorePlaylists(context)) {
             is CloudSyncResult.Failure -> return downloaded
@@ -206,6 +208,7 @@ object CloudPlaylistSyncService {
                 selectedOnlineFavoriteIds = selectedOnlineFavoriteIds,
                 restoreFavorites = restoreFavorites,
                 restoreDisliked = restoreDisliked,
+                mode = mode,
             ),
         )
     } catch (cancelled: CancellationException) {
@@ -222,6 +225,7 @@ object CloudPlaylistSyncService {
         selectedOnlineFavoriteIds: Set<String>? = null,
         restoreFavorites: Boolean = true,
         restoreDisliked: Boolean = true,
+        mode: String = CloudSyncClient.MODE_MERGE,
     ): CloudRestoreReport {
         val store = PlaylistStore.getInstance(context)
         store.awaitBackupReady()
@@ -231,14 +235,18 @@ object CloudPlaylistSyncService {
 
         val downloaded = CloudPlaylistJson.parsePlaylists(backup.playlistsJson)
 
-        // ① 先建分组：后面「把歌单移到分组」才有落点。
-        val wantedGroups = CloudPlaylistJson.parseGroups(backup.groupsJson)
-            .map { it.trim() }
+        // ① 先建分组：只为实际被歌单或在线收藏引用的分组建，避免把云端预置的空分组硬灌进本地。
+        val downloadedOnlineFavorites = CloudPlaylistJson.parseOnlineFavorites(backup.onlineFavoritesJson)
+        val usedGroupNames = (downloaded.map { it.groupName.trim() } + downloadedOnlineFavorites.map { it.customGroup.trim() })
             .filter {
                 it.isNotEmpty() &&
                     it != CloudPlaylistJson.SYSTEM_GROUP_NAME &&
                     it != CloudPlaylistJson.DEFAULT_GROUP_NAME
             }
+            .toSet()
+        val wantedGroups = CloudPlaylistJson.parseGroups(backup.groupsJson)
+            .map { it.trim() }
+            .filter { it in usedGroupNames }
             .distinct()
         var groupsCreated = 0
         wantedGroups.forEach { name ->
@@ -249,6 +257,7 @@ object CloudPlaylistSyncService {
 
         // ② 普通歌单（跳过两个系统歌单，并按用户选定名称筛选）。
         var playlistsWritten = 0
+        val isOverwrite = mode == CloudSyncClient.MODE_OVERWRITE
         downloaded
             .filter { CloudPlaylistJson.systemKindOf(it) == null && it.name.isNotBlank() }
             .filter { selectedLocalNames == null || it.name in selectedLocalNames }
@@ -262,6 +271,7 @@ object CloudPlaylistSyncService {
                     name = dto.name,
                     localSongs = localSongs,
                     onlineSongs = onlineRows,
+                    overwrite = isOverwrite,
                 )
                 if (imported != null) {
                     playlistsWritten++
@@ -283,19 +293,34 @@ object CloudPlaylistSyncService {
         var dislikedAppliedCount = 0
 
         if (restoreFavorites) {
-            val favoriteLocal = allSongs
-                .filter { it.isFavorite && !CloudPlaylistJson.isOnlineSong(it) && it.path.isNotBlank() }
-                .map(CloudPlaylistJson::toAudioFile)
-            if (favoriteLocal.isNotEmpty()) {
-                store.addSongsToPlaylist(FAVORITES_PLAYLIST_ID, favoriteLocal)
+            val favSystemPlaylist = downloaded.firstOrNull {
+                CloudPlaylistJson.systemKindOf(it) == CloudPlaylistJson.SystemPlaylistKind.FAVORITE
             }
-            val favoriteOnlineKeys = allSongs
-                .filter { it.isFavorite && CloudPlaylistJson.isOnlineSong(it) }
+            val favoriteSongDtos = (favSystemPlaylist?.songs.orEmpty() + allSongs.filter { it.isFavorite })
+                .distinctBy { CloudPlaylistJson.localSongKeyOf(it) }
+
+            val favoriteLocal = favoriteSongDtos
+                .filterNot(CloudPlaylistJson::isOnlineSong)
+                .filter { it.path.isNotBlank() }
+                .map(CloudPlaylistJson::toAudioFile)
+
+            val favoriteOnlineRows = favoriteSongDtos
+                .mapNotNull(CloudPlaylistJson::toOnlineSongRow)
+
+            // 将本地曲目与在线曲目完整写入 FAVORITES_PLAYLIST_ID 系统歌单中
+            store.importFavoritesPlaylist(
+                localSongs = favoriteLocal,
+                onlineSongs = favoriteOnlineRows,
+                overwrite = isOverwrite,
+            )
+
+            val favoriteOnlineKeys = favoriteSongDtos
+                .filter(CloudPlaylistJson::isOnlineSong)
                 .map(CloudPlaylistJson::localSongKeyOf)
             if (favoriteOnlineKeys.isNotEmpty()) {
                 SongAttitudeRepository.setOnlineFavorites(context, favoriteOnlineKeys, true)
             }
-            favoritesAppliedCount = favoriteLocal.size + favoriteOnlineKeys.size
+            favoritesAppliedCount = favoriteLocal.size + favoriteOnlineRows.size
         }
 
         if (restoreDisliked) {
@@ -400,5 +425,14 @@ object CloudPlaylistSyncService {
             deleteAll = false,
             localPlaylistNames = localPlaylistNames,
             onlinePlaylistIds = onlinePlaylistIds,
+        )
+
+    /**
+     * 清空云端所有歌单备份。
+     */
+    suspend fun clearAllCloudPlaylists(context: Context): CloudSyncResult<Int> =
+        CloudSyncClient.deletePlaylists(
+            context = context,
+            deleteAll = true,
         )
 }

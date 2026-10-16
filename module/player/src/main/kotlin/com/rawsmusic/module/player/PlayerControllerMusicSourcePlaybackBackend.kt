@@ -55,7 +55,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         )
 
         val song = request.toAudioFile()
-        val allSongs = if (request.queue.isNotEmpty()) {
+        val allSongs = if (request.queue.isNotEmpty() && request.queue.size > 1) {
             request.queue.mapIndexed { idx, mediaItem ->
                 if (idx == request.queueIndex) {
                     song
@@ -64,8 +64,30 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
                 }
             }
         } else {
-            listOf(song)
+            val existingSongs = controller.visibleQueue.value.songs
+            if (existingSongs.size > 1) {
+                val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+                val targetIndex = existingSongs.indexOfFirst { existing ->
+                    existing.path == targetKey ||
+                        existing.path == request.source.url ||
+                        existing.id == song.id ||
+                        (existing.title.equals(song.title, ignoreCase = true) &&
+                            existing.artist.equals(song.artist, ignoreCase = true))
+                }.takeIf { it >= 0 } ?: request.queueIndex.coerceIn(existingSongs.indices)
+
+                existingSongs.mapIndexed { idx, existing ->
+                    if (idx == targetIndex) song else existing
+                }
+            } else if (request.queue.isNotEmpty()) {
+                request.queue.mapIndexed { idx, mediaItem ->
+                    if (idx == request.queueIndex) song else mediaItem.toVirtualAudioFile()
+                }
+            } else {
+                listOf(song)
+            }
         }
+        val targetIndex = allSongs.indexOfFirst { it.path == song.path }
+            .takeIf { it >= 0 } ?: request.queueIndex.coerceIn(allSongs.indices)
         AppLogger.i(
             TAG,
             "${OnlinePlaybackDiagnostics.PREFIX} PLAY_START generation=${request.generation} " +
@@ -73,7 +95,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
                 "ua=${!request.source.userAgent.isNullOrBlank()} autoPlay=${request.autoPlay} " +
                 "startMs=${request.startPositionMs} queueSize=${allSongs.size} url=${OnlinePlaybackDiagnostics.safeUrl(request.source.url)}"
         )
-        controller.play(song, allSongs, request.queueIndex.coerceIn(allSongs.indices))
+        controller.play(song, allSongs, targetIndex)
     }
 
     override fun pause() {

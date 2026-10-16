@@ -36,6 +36,7 @@ import androidx.compose.ui.window.Dialog
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.scene.OnlinePortalTab
 import com.rawsmusic.core.ui.scene.OnlinePortalTabManager
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
@@ -70,7 +71,8 @@ fun OnlineMusicPortalPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .rawStableStatusBarsPadding(),
+            .rawStableStatusBarsPadding()
+            .bottomChromeNestedScroll(),
     ) {
         // 顶部操作栏：左侧返回 + 标题，右侧平台切换器胶囊
         Row(

@@ -217,9 +217,32 @@ object MusicSourcePlaybackController {
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
         backend?.stop()
-        releaseMediaPlayer(abandonFocus = false)
-        val activeQueue = if (queue.isNotEmpty()) queue else listOf(item)
-        val activeIndex = if (index in activeQueue.indices) index else 0
+        val activeQueue = if (queue.isNotEmpty() && queue.size > 1) {
+            queue
+        } else {
+            val currentQueue = mutableSnapshot.value.queue
+            if (currentQueue.size > 1) {
+                val matchIndex = currentQueue.indexOfFirst {
+                    it.stableIdentity == item.stableIdentity ||
+                        (it.title.equals(item.title, ignoreCase = true) &&
+                            it.artists == item.artists)
+                }
+                if (matchIndex >= 0) {
+                    currentQueue.toMutableList().apply { set(matchIndex, item) }
+                } else if (queue.isNotEmpty()) {
+                    queue
+                } else {
+                    listOf(item)
+                }
+            } else if (queue.isNotEmpty()) {
+                queue
+            } else {
+                listOf(item)
+            }
+        }
+        val activeIndex = activeQueue.indexOfFirst { it.stableIdentity == item.stableIdentity }
+            .takeIf { it >= 0 }
+            ?: if (index in activeQueue.indices) index else 0
         mutableSnapshot.value = MusicSourcePlaybackSnapshot(
             queue = activeQueue,
             currentIndex = activeIndex,
@@ -244,6 +267,13 @@ object MusicSourcePlaybackController {
     /** Persists quality and re-resolves the current item without losing position. */
     fun setPreferredQuality(quality: RawSourceQuality) {
         AppPreferences.storage.encode(PREFERRED_QUALITY_KEY, quality.name)
+        val orbitKey = when (quality) {
+            RawSourceQuality.HiRes -> "flac24bit"
+            RawSourceQuality.Lossless -> "flac"
+            RawSourceQuality.Super, RawSourceQuality.High -> "320k"
+            RawSourceQuality.Standard -> "128k"
+        }
+        AppPreferences.Source.preferredQuality = orbitKey
         val state = mutableSnapshot.value
         if (state.currentItem == null || state.currentIndex !in state.queue.indices) return
         if (state.requestedQuality == quality && state.status != MusicSourcePlaybackStatus.Error) return
@@ -915,9 +945,16 @@ object MusicSourcePlaybackController {
     }
 
     private fun loadPreferredQuality(): RawSourceQuality = runCatching {
-        RawSourceQuality.valueOf(
-            AppPreferences.storage.decodeString(PREFERRED_QUALITY_KEY, RawSourceQuality.Standard.name)
-                ?: RawSourceQuality.Standard.name
-        )
+        val rawName = AppPreferences.storage.decodeString(PREFERRED_QUALITY_KEY, null)
+        if (rawName != null) {
+            RawSourceQuality.valueOf(rawName)
+        } else {
+            when (AppPreferences.Source.preferredQuality) {
+                "flac24bit" -> RawSourceQuality.HiRes
+                "flac" -> RawSourceQuality.Lossless
+                "320k" -> RawSourceQuality.Super
+                else -> RawSourceQuality.Standard
+            }
+        }
     }.getOrDefault(RawSourceQuality.Standard)
 }

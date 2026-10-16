@@ -2258,6 +2258,10 @@ object AppPreferences {
     }
 
     object Source {
+        var preferredQuality: String
+            get() = kv.decodeString("preferred_quality", "128k") ?: "128k"
+            set(value) { kv.encode("preferred_quality", value) }
+
         var resolveStrategy: com.rawsmusic.module.data.source.ResolveStrategy
             get() = com.rawsmusic.module.data.source.ResolveStrategy.fromId(
                 kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.CLASSIC_POLLING.id)

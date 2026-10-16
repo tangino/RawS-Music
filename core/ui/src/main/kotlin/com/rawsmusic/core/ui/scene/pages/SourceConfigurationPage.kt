@@ -37,6 +37,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rawsmusic.core.common.source.RawSourceQuality
+import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
 import com.rawsmusic.module.data.prefs.AppPreferences
@@ -44,6 +46,7 @@ import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.InstalledMusicSource
 import com.rawsmusic.module.data.source.MusicSourceOrigin
 import com.rawsmusic.module.data.source.ResolveStrategy
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Switch
@@ -79,6 +82,30 @@ internal fun SourceConfigurationPage(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 174.dp),
         ) {
+            var currentQuality by remember { mutableStateOf(AppPreferences.Source.preferredQuality) }
+            QualityPreferenceCard(
+                currentQuality = currentQuality,
+                onSelectQuality = { newQuality ->
+                    currentQuality = newQuality
+                    AppPreferences.Source.preferredQuality = newQuality
+                    val rawQuality = when (newQuality) {
+                        "flac24bit" -> RawSourceQuality.HiRes
+                        "flac" -> RawSourceQuality.Lossless
+                        "320k" -> RawSourceQuality.Super
+                        else -> RawSourceQuality.Standard
+                    }
+                    MusicSourcePlaybackController.setPreferredQuality(rawQuality)
+                    val label = when (newQuality) {
+                        "flac24bit" -> "母带 (Hi-Res)"
+                        "flac" -> "无损 (FLAC)"
+                        "320k" -> "高品 (320K)"
+                        else -> "标准 (128K)"
+                    }
+                    AppNoticeBus.post("已设置网络默认偏好音质为【$label】")
+                },
+            )
+            Spacer(Modifier.height(14.dp))
+
             var currentStrategy by remember { mutableStateOf(AppPreferences.Source.resolveStrategy) }
             ResolveStrategyCard(
                 currentStrategy = currentStrategy,
@@ -514,6 +541,85 @@ private fun ResolveStrategyCard(
                             maxLines = 1,
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 首选音质偏好配置卡片（完整移植自 OrBitPlayer AudioSourceManagementScreen）
+ */
+@Composable
+private fun QualityPreferenceCard(
+    currentQuality: String,
+    onSelectQuality: (String) -> Unit,
+) {
+    val scheme = MiuixTheme.colorScheme
+    val qualities = listOf(
+        "128k" to "标准 (128K)",
+        "320k" to "高品 (320K)",
+        "flac" to "无损 (FLAC)",
+        "flac24bit" to "母带 (Hi-Res)",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(scheme.surface)
+            .border(0.5.dp, scheme.outline.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+            .padding(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "首选解析音质",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.onBackground,
+            )
+            Text(
+                text = "优先请求，失败自动降级",
+                fontSize = 11.sp,
+                color = scheme.primary,
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            qualities.forEach { (key, label) ->
+                val isSelected = currentQuality == key
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isSelected) scheme.primary.copy(alpha = 0.15f)
+                            else scheme.surfaceContainer.copy(alpha = 0.6f)
+                        )
+                        .border(
+                            width = if (isSelected) 1.5.dp else 0.5.dp,
+                            color = if (isSelected) scheme.primary else scheme.outline.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .clickable { onSelectQuality(key) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) scheme.primary else scheme.onSurfaceVariantSummary,
+                        maxLines = 1,
+                    )
                 }
             }
         }

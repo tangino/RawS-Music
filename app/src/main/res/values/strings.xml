@@ -1051,6 +1051,7 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="playlist_attitude_notice_disliked">Added to disliked songs</string>
     <string name="playlist_attitude_notice_undisliked">Removed from disliked songs</string>
     <string name="playlist_attitude_notice_failed">Failed to update the like state</string>
+    <string name="playlist_group_all">All</string>
     <string name="playlist_group_default_name">Default</string>
     <string name="playlist_group_menu_summary">Manage this group</string>
     <string name="playlist_group_action_create">New group</string>

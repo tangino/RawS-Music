@@ -199,7 +199,8 @@ fun AppMainLayout(
     val isOnlineMusicActive by remember {
         derivedStateOf {
             navState.currentScene == NavScene.ONLINE_MUSIC ||
-                navState.currentScene == NavScene.ONLINE_PLAYLIST_DETAIL
+                navState.currentScene == NavScene.ONLINE_PLAYLIST_DETAIL ||
+                navState.currentScene == NavScene.ONLINE_ARTIST_DETAIL
         }
     }
     LaunchedEffect(isOnlineMusicActive) {
@@ -845,7 +846,8 @@ private fun NavScene.supportsRawFlowBackground(): Boolean {
         NavScene.SEARCH,
         NavScene.SOURCE_IMPORT,
         NavScene.ONLINE_MUSIC,
-        NavScene.ONLINE_PLAYLIST_DETAIL -> true
+        NavScene.ONLINE_PLAYLIST_DETAIL,
+        NavScene.ONLINE_ARTIST_DETAIL -> true
         else -> false
     }
 }

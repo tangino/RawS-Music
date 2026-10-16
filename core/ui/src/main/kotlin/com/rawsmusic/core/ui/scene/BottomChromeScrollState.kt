@@ -3,13 +3,25 @@ package com.rawsmusic.core.ui.scene
 import android.view.Choreographer
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import kotlin.math.abs
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * One scroll/minimize owner for the complete bottom chrome.
@@ -229,3 +241,78 @@ class BottomChromeScrollState {
 }
 
 val LocalBottomChromeScrollState = compositionLocalOf<BottomChromeScrollState?> { null }
+
+/**
+ * 通用嵌套滚动连接器：使用户滑动任何 LazyColumn 或容器时，底部导航栏（包括 MiniPlayer 与 TabBar）
+ * 都能跟随手指移动并平滑收缩/展开，且自动遵从全局设置（BottomChromeScrollBehavior）。
+ */
+@Composable
+fun rememberBottomChromeNestedScrollConnection(
+    scrollState: BottomChromeScrollState? = LocalBottomChromeScrollState.current
+): NestedScrollConnection {
+    val coroutineScope = rememberCoroutineScope()
+    return remember(scrollState, coroutineScope) {
+        var settleJob: Job? = null
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (scrollState != null && available.y != 0f) {
+                    // available.y < 0 为手指向上滑动（内容向下滚动），底栏应收缩 (deltaY > 0)
+                    // available.y > 0 为手指向下滑动（内容向上滚动），底栏应展开 (deltaY < 0)
+                    scrollState.onContentScroll(-available.y)
+                    settleJob?.cancel()
+                    settleJob = coroutineScope.launch {
+                        delay(150L)
+                        scrollState.onScrollActivityChanged(false)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (scrollState != null && available.y != 0f) {
+                    scrollState.onContentScroll(-available.y)
+                    settleJob?.cancel()
+                    settleJob = coroutineScope.launch {
+                        delay(150L)
+                        scrollState.onScrollActivityChanged(false)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (scrollState != null) {
+                    settleJob?.cancel()
+                    if (available.y < -300f) {
+                        // 向上甩动快速收缩底栏
+                        scrollState.settleTo(BottomChromeStableMode.Minimized)
+                    } else if (available.y > 300f) {
+                        // 向下甩动快速展开底栏
+                        scrollState.settleTo(BottomChromeStableMode.Expanded)
+                    }
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                settleJob?.cancel()
+                settleJob = coroutineScope.launch {
+                    delay(50L)
+                    scrollState?.onScrollActivityChanged(false)
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+}
+
+/**
+ * 方便页面直接绑定的 Modifier 扩展方法。
+ */
+@Composable
+fun Modifier.bottomChromeNestedScroll(
+    scrollState: BottomChromeScrollState? = LocalBottomChromeScrollState.current
+): Modifier {
+    val connection = rememberBottomChromeNestedScrollConnection(scrollState)
+    return this.nestedScroll(connection)
+}

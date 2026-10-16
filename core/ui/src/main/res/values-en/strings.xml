@@ -43,6 +43,11 @@
     <string name="online_plaza_track_count">%1$d tracks</string>
     <string name="online_plaza_tag_all">All</string>
     <string name="online_plaza_loading">Loading…</string>
+    <string name="online_plaza_search_action">Search Playlists</string>
+    <string name="online_plaza_search_hint">Search online playlists…</string>
+    <string name="online_plaza_search_empty">No playlists found</string>
+    <string name="online_plaza_search_cancel">Cancel</string>
+    <string name="online_plaza_search_initial">Type keywords to search online playlists</string>
     <string name="side_rail_log_analysis">Log analysis</string>
     <string name="lyric_more_timing_editor_title">External timing tools</string>
     <string name="lyric_more_timing_editor_summary">Choose an installed lyric timing editor for this song</string>

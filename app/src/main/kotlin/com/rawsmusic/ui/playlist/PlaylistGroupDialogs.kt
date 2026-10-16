@@ -31,6 +31,10 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
+import kotlinx.coroutines.launch
+import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
+import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
 
 /**
  * 歌单分组相关的弹窗集合。
@@ -57,6 +61,9 @@ internal class PlaylistGroupChromeState {
     var playlistActionsTarget by mutableStateOf<UserPlaylist?>(null)
     var moveToGroupTarget by mutableStateOf<UserPlaylist?>(null)
     var exportPlaylistTarget by mutableStateOf<UserPlaylist?>(null)
+    var onlinePlaylistActionsTarget by mutableStateOf<OnlinePlaylistFavoriteEntity?>(null)
+    var moveOnlineToGroupTarget by mutableStateOf<OnlinePlaylistFavoriteEntity?>(null)
+    var deleteOnlineTarget by mutableStateOf<OnlinePlaylistFavoriteEntity?>(null)
 }
 
 @Composable
@@ -215,6 +222,113 @@ internal fun PlaylistGroupDialogHost(
                 }
             },
         )
+    }
+
+    state.onlinePlaylistActionsTarget?.let { favorite ->
+        OnlinePlaylistActionsDialog(
+            playlistName = favorite.title,
+            onDismiss = { state.onlinePlaylistActionsTarget = null },
+            onMoveToGroup = {
+                state.onlinePlaylistActionsTarget = null
+                state.moveOnlineToGroupTarget = favorite
+            },
+            onDelete = {
+                state.onlinePlaylistActionsTarget = null
+                state.deleteOnlineTarget = favorite
+            },
+        )
+    }
+
+    state.moveOnlineToGroupTarget?.let { favorite ->
+        PlaylistMoveToGroupDialog(
+            playlistName = favorite.title,
+            groupNames = groupNames,
+            currentGroupName = favorite.groupName.takeIf { it in groupNames } ?: DEFAULT_PLAYLIST_GROUP,
+            onDismiss = { state.moveOnlineToGroupTarget = null },
+            onSelect = { targetGroup ->
+                state.moveOnlineToGroupTarget = null
+                val targetLabel = if (targetGroup == DEFAULT_PLAYLIST_GROUP) {
+                    context.getString(R.string.playlist_group_default_name)
+                } else {
+                    targetGroup
+                }
+                scope.launch {
+                    try {
+                        OnlinePlaylistFavoriteStore.setGroup(context, favorite.playlistKey, targetGroup)
+                        AppNoticeBus.post(
+                            message = context.getString(R.string.playlist_group_moved, targetLabel),
+                            icon = com.rawsmusic.core.common.ui.AppNoticeIcon.PLAYLIST,
+                        )
+                    } catch (e: Exception) {
+                        AppNoticeBus.error(context.getString(R.string.playlist_group_op_failed))
+                    }
+                }
+            },
+        )
+    }
+
+    state.deleteOnlineTarget?.let { favorite ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { state.deleteOnlineTarget = null },
+            title = { androidx.compose.material3.Text(stringResource(R.string.playlist_delete_title), fontFamily = appFontFamily()) },
+            text = { androidx.compose.material3.Text(stringResource(R.string.playlist_delete_message), fontFamily = appFontFamily()) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    state.deleteOnlineTarget = null
+                    scope.launch {
+                        try {
+                            OnlinePlaylistFavoriteStore.remove(context, favorite.playlistKey)
+                            AppNoticeBus.post(
+                                message = context.getString(R.string.notice_playlist_deleted, favorite.title),
+                                icon = com.rawsmusic.core.common.ui.AppNoticeIcon.PLAYLIST,
+                                animation = com.rawsmusic.core.common.ui.AppNoticeAnimation.DELETE,
+                            )
+                        } catch (e: Exception) {
+                            AppNoticeBus.error(context.getString(R.string.notice_playlist_delete_failed))
+                        }
+                    }
+                }) { androidx.compose.material3.Text(stringResource(com.rawsmusic.core.ui.R.string.online_favorites_remove), color = androidx.compose.ui.graphics.Color.Red) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { state.deleteOnlineTarget = null }) {
+                    androidx.compose.material3.Text(stringResource(R.string.playlist_cancel_action))
+                }
+            }
+        )
+    }
+}
+
+/** 在线歌单卡的长按 / more 菜单：移动到分组、取消收藏。 */
+@Composable
+internal fun OnlinePlaylistActionsDialog(
+    playlistName: String,
+    onDismiss: () -> Unit,
+    onMoveToGroup: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = themeColors()
+    RawMiuixOverlayDialog(
+        show = true,
+        title = stringResource(R.string.playlist_group_playlist_actions),
+        summary = playlistName,
+        backgroundColor = colors.surface,
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(DIALOG_ITEM_GAP),
+        ) {
+            TextButton(
+                text = stringResource(R.string.playlist_group_move_title),
+                onClick = onMoveToGroup,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                text = stringResource(com.rawsmusic.core.ui.R.string.online_favorites_remove),
+                onClick = onDelete,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 

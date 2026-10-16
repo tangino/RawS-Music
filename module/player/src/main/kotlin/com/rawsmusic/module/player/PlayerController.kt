@@ -5637,22 +5637,51 @@ class PlayerController private constructor(context: Context) {
             return
         }
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
-            val mediaItems = queue.map { qSong ->
-                val rest = qSong.path.removePrefix("online://")
-                val platformId = rest.substringBefore('/', "netease")
-                val songId = rest.substringAfter('/', qSong.id.toString())
-                com.rawsmusic.core.common.source.RawSourceMediaItem(
-                    sourceId = platformId,
-                    remoteId = songId,
-                    mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
-                    title = qSong.title,
-                    artists = listOf(qSong.artist),
-                    album = qSong.album,
-                    durationMs = qSong.duration,
-                    artworkUrl = qSong.albumArtPath,
-                )
+            val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+            val finalQueue = if (effectiveQueue.isNotEmpty()) effectiveQueue else listOf(song)
+            val resolvedIndex = if (index in finalQueue.indices && finalQueue[index].path == song.path) {
+                index
+            } else {
+                finalQueue.indexOfFirst {
+                    it.path == song.path ||
+                        (it.title.equals(song.title, ignoreCase = true) &&
+                            it.artist.equals(song.artist, ignoreCase = true))
+                }.takeIf { it >= 0 } ?: 0
             }
-            MusicSourcePlaybackController.play(context, mediaItems, index)
+            val existingSnapshotQueue = MusicSourcePlaybackController.snapshot.value.queue
+            val mediaItems = finalQueue.map { qSong ->
+                if (com.rawsmusic.core.common.model.isOnlineSongKey(qSong.path)) {
+                    val rest = qSong.path.removePrefix("online://")
+                    val platformId = rest.substringBefore('/', "netease")
+                    val songId = rest.substringAfter('/', qSong.id.toString())
+                    com.rawsmusic.core.common.source.RawSourceMediaItem(
+                        sourceId = platformId,
+                        remoteId = songId,
+                        mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                        title = qSong.title,
+                        artists = listOf(qSong.artist),
+                        album = qSong.album,
+                        durationMs = qSong.duration,
+                        artworkUrl = qSong.albumArtPath,
+                    )
+                } else {
+                    val matchedItem = existingSnapshotQueue.firstOrNull {
+                        it.title.equals(qSong.title, ignoreCase = true) &&
+                            it.artists.contains(qSong.artist)
+                    }
+                    matchedItem ?: com.rawsmusic.core.common.source.RawSourceMediaItem(
+                        sourceId = "netease",
+                        remoteId = qSong.id.toString(),
+                        mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                        title = qSong.title,
+                        artists = listOf(qSong.artist),
+                        album = qSong.album,
+                        durationMs = qSong.duration,
+                        artworkUrl = qSong.albumArtPath,
+                    )
+                }
+            }
+            MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
             return
         }
         _playbackSourceOverride.value?.let { activeOverride ->

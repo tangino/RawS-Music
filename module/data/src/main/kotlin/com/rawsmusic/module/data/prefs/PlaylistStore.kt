@@ -186,12 +186,17 @@ class PlaylistStore private constructor(private val context: Context) {
         addSongsToPlaylistAndReportAddedKeys(playlistId, songs)
     }
 
-    suspend fun addSongsToPlaylistAndReportAddedKeys(playlistId: String, songs: Collection<AudioFile>): Set<String> = withDatabase {
-        val incoming = songs.map { it.toUserPlaylistSong() }
+    suspend fun addSongsToPlaylistAndReportAddedKeys(playlistId: String, songs: Collection<AudioFile>): Set<String> =
+        addOnlineSongsToPlaylistAndReportAddedKeys(playlistId, songs.map { it.toUserPlaylistSong() })
+
+    suspend fun addOnlineSongToPlaylist(playlistId: String, song: UserPlaylistSong): Boolean =
+        addOnlineSongsToPlaylistAndReportAddedKeys(playlistId, listOf(song)).isNotEmpty()
+
+    suspend fun addOnlineSongsToPlaylistAndReportAddedKeys(playlistId: String, songs: Collection<UserPlaylistSong>): Set<String> = withDatabase {
         mutationMutex.withLock {
             val playlist = _playlists.value.firstOrNull { it.id == playlistId } ?: return@withLock emptySet<String>()
             val keys = playlist.songs.mapTo(mutableSetOf()) { it.key }
-            val additions = incoming.filter { keys.add(it.key) }
+            val additions = songs.filter { keys.add(it.key) }
             if (additions.isEmpty()) return@withLock emptySet<String>()
 
             val now = System.currentTimeMillis()
@@ -328,6 +333,7 @@ class PlaylistStore private constructor(private val context: Context) {
         localSongs: List<AudioFile>,
         onlineSongs: List<UserPlaylistSong> = emptyList(),
         coverUrl: String? = null,
+        overwrite: Boolean = false,
     ): UserPlaylist? = withDatabase {
         mutationMutex.withLock {
             val baseName = name.trim().ifBlank { DEFAULT_IMPORT_PLAYLIST_NAME }
@@ -335,12 +341,12 @@ class PlaylistStore private constructor(private val context: Context) {
             val existing = _playlists.value.firstOrNull {
                 !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
             }
-            val existingKeys = existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf()
+            val existingKeys = if (overwrite) mutableSetOf() else (existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf())
             val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
                 .filter { existingKeys.add(it.key) }
-            if (incoming.isEmpty() && existing != null) return@withLock existing
+            if (incoming.isEmpty() && existing != null && !overwrite) return@withLock existing
 
-            val importedSongs = existing.orEmptySongs() + incoming
+            val importedSongs = if (overwrite) incoming else (existing.orEmptySongs() + incoming)
             val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
             val imported = UserPlaylist(
                 id = existing?.id ?: "playlist-${UUID.randomUUID()}",
@@ -362,6 +368,31 @@ class PlaylistStore private constructor(private val context: Context) {
                 _playlists.value.map { if (it.id == existing.id) imported else it }
             }
             imported
+        }
+    }
+
+    /**
+     * 导入/还原系统「我喜欢的音乐」歌单，支持本地曲与在线曲共同落库。
+     */
+    suspend fun importFavoritesPlaylist(
+        localSongs: List<AudioFile>,
+        onlineSongs: List<UserPlaylistSong> = emptyList(),
+        overwrite: Boolean = false,
+    ) = withDatabase {
+        mutationMutex.withLock {
+            val favorites = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock
+            val existingKeys = if (overwrite) mutableSetOf() else favorites.songs.mapTo(mutableSetOf()) { it.key }
+            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
+                .filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && !overwrite) return@withLock
+
+            val finalSongs = if (overwrite) incoming else (favorites.songs + incoming)
+            val now = System.currentTimeMillis()
+            dao.deleteSongsForPlaylist(favorites.id)
+            dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(favorites.id, index) })
+            dao.touchPlaylist(favorites.id, now)
+            val updated = favorites.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == favorites.id) updated else it }
         }
     }
 

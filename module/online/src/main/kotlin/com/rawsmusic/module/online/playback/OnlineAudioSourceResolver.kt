@@ -902,6 +902,7 @@ object OnlineAudioSourceResolver {
         expectedDurationMs: Long = 0L,
         explicitQuality: String? = null,
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
+        val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
         val strategy = AppPreferences.Source.resolveStrategy
         if (strategy == ResolveStrategy.CLASSIC_POLLING) {
             resolvePlayableSourceClassicPolling(
@@ -912,7 +913,7 @@ object OnlineAudioSourceResolver {
                 artist = artist,
                 album = album,
                 expectedDurationMs = expectedDurationMs,
-                explicitQuality = explicitQuality,
+                explicitQuality = targetQuality,
             )
         } else {
             resolvePlayableSourceConcurrent(
@@ -923,7 +924,7 @@ object OnlineAudioSourceResolver {
                 artist = artist,
                 album = album,
                 expectedDurationMs = expectedDurationMs,
-                explicitQuality = explicitQuality,
+                explicitQuality = targetQuality,
             )
         }
     }
@@ -951,7 +952,7 @@ object OnlineAudioSourceResolver {
         val qualityStr = when (requestedQuality) {
             RawSourceQuality.HiRes -> "flac24bit"
             RawSourceQuality.Lossless -> "flac"
-            RawSourceQuality.Super -> "320k"
+            RawSourceQuality.Super, RawSourceQuality.High -> "320k"
             else -> "128k"
         }
 
