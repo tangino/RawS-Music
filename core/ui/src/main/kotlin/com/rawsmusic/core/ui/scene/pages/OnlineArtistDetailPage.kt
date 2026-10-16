@@ -51,6 +51,7 @@ import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
+import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.module.online.model.OnlineAlbum
 import com.rawsmusic.module.online.model.OnlineArtist
 import com.rawsmusic.module.online.model.OnlineSongItem
@@ -229,6 +230,26 @@ internal fun OnlineArtistDetailPage(
     var resolvingSongKey by remember { mutableStateOf<String?>(null) }
 
     fun playSong(item: OnlineSongItem, index: Int, queue: List<OnlineSongItem>) {
+        val album = selectedAlbum
+        if (album != null) {
+            PlayedPlaylistManager.recordPlayedPlaylist(
+                id = album.id,
+                name = album.title,
+                isOnline = true,
+                platformId = platform.id,
+                coverUrl = album.coverUrl,
+                trackCount = queue.size.coerceAtLeast(album.songCount),
+            )
+        } else {
+            PlayedPlaylistManager.recordPlayedPlaylist(
+                id = "artist_${artist.id}",
+                name = "${artist.name} 热门歌曲",
+                isOnline = true,
+                platformId = platform.id,
+                coverUrl = artist.avatarUrl,
+                trackCount = queue.size,
+            )
+        }
         val songKey = "${item.platform.id}_${item.id}"
         resolvingSongKey = songKey
         scope.launch {

@@ -301,6 +301,9 @@ fun SourceImportPage(
                         onDeleteMusicFree = { pendingDelete = PendingSourceDelete.MusicFree(it) },
                         onDeleteLx = { pendingDelete = PendingSourceDelete.Lx(it) },
                         onOpenCloudSync = { navigateToTab(SourcePortalTab.CloudSync) },
+                        onSetPrimaryLx = LxSourcePluginStore::setPrimary,
+                        onEnableAllLx = LxSourcePluginStore::enableAll,
+                        onDisableAllLx = LxSourcePluginStore::disableAll,
                     )
 
                     SourcePortalTab.Downloads -> SourceDownloadsPage(

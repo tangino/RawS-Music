@@ -53,4 +53,7 @@
     <string name="nav_scene_library_analysis_detail">Library analysis details</string>
     <string name="nav_scene_artist_biography">Artist biography</string>
     <string name="nav_scene_artist_all_songs">All artist songs</string>
+    <string name="nav_scene_current_playlist">Current Playlist</string>
+    <string name="nav_scene_previous_playlist">Previous Playlist</string>
+    <string name="no_played_playlist_notice">No playlist history available</string>
 </resources>

@@ -50,11 +50,8 @@ object OnlinePlaybackProbe {
         }
 
         // 1. URL 关键字检测：识别各大平台的试听/预览标记
-        val lowerUrl = rawUrl.lowercase()
-        if (lowerUrl.contains("audition") || lowerUrl.contains("preview") || lowerUrl.contains("trial") ||
-            lowerUrl.contains("sample") || lowerUrl.contains("listen_part") || lowerUrl.contains("/short/")
-        ) {
-            AppLogger.w(TAG, "Audio probe rejected URL: URL contains preview/audition keyword for $rawUrl")
+        if (containsAuditionKeyword(rawUrl)) {
+            AppLogger.w(TAG, "Audio probe rejected URL: raw URL contains preview/audition keyword for $rawUrl")
             return@withContext null
         }
 
@@ -144,6 +141,12 @@ object OnlinePlaybackProbe {
 
             val validUrl = finalUrl ?: rawUrl
 
+            // 跟随 302 重定向后的真实 CDN URL 复检试听关键字
+            if (containsAuditionKeyword(validUrl)) {
+                AppLogger.w(TAG, "Audio probe rejected URL: redirect URL contains preview/audition keyword for $validUrl")
+                return@withContext null
+            }
+
             // 3. 流长度下限：按 64kbps 极限低码率估算，每秒至少 8KB
             if (expectedDurationMs >= 30_000L && totalContentLength > 0L) {
                 val minExpectedBytes = (expectedDurationMs / 1000L) * 8_000L
@@ -157,10 +160,10 @@ object OnlinePlaybackProbe {
                 }
             }
 
-            // 4. 用 MediaMetadataRetriever 探真实时长（超时 2500ms）
+            // 4. 用 MediaMetadataRetriever 探真实时长（超时设为 2200ms，对齐 OrBitPlayer 的轻量高效探活）
             var detectedDurationMs = 0L
             try {
-                withTimeoutOrNull(2500L) {
+                withTimeoutOrNull(2200L) {
                     val retriever = android.media.MediaMetadataRetriever()
                     try {
                         val headers = mutableMapOf("User-Agent" to UA_MOBILE)
@@ -189,10 +192,19 @@ object OnlinePlaybackProbe {
                 AppLogger.d(TAG, "MediaMetadataRetriever probe skipped for $validUrl: ${e.message}")
             }
 
-            // 5. 拦截 30s/45s 试听短流与严重残缺音频
+            // 5. 严格杜绝试听截断短流 (28s/30s/45s 试听片段)、残缺音频（完全对齐 OrBitPlayer 的科学规则）
             if (detectedDurationMs > 0L) {
-                // 实际 ≤45s，但预期 ≥60s 或未知时长 → 试听截断
-                if (detectedDurationMs <= 45_000L && (expectedDurationMs >= 60_000L || expectedDurationMs <= 0L)) {
+                // 若探测时长与预期时长相差过大（例如预期大于60秒但探测相差超过45秒且探测时长小于60秒），拦截试听
+                if (expectedDurationMs >= 60_000L && detectedDurationMs <= 45_000L) {
+                    AppLogger.w(
+                        TAG,
+                        "Audio probe rejected URL: preview snippet detected ($detectedDurationMs ms vs expected $expectedDurationMs ms) for $validUrl",
+                    )
+                    return@withContext null
+                }
+
+                // 实际 ≤45s（各大平台典型 28s/30s/45s 试听截断），但预期 ≥50s 或未知时长 → 绝对试听截断，拦截
+                if (detectedDurationMs <= 45_000L && (expectedDurationMs >= 50_000L || expectedDurationMs <= 0L)) {
                     AppLogger.w(TAG, "Audio probe rejected URL: preview snippet detected ($detectedDurationMs ms) for $validUrl")
                     return@withContext null
                 }
@@ -215,7 +227,17 @@ object OnlinePlaybackProbe {
                     return@withContext null
                 }
             } else {
-                // 探不出时长、且流偏小（未知时长但 <1MB）→ 疑似试听片段
+                // 未探出真实时长时（超时或未解析出）的防试听防漏兜底防御：
+                // 1) 预期长歌（>=60s），但流体积偏小（<1.5MB，28秒试听一般在 300KB~900KB）：坚决拦截
+                if (expectedDurationMs >= 60_000L && totalContentLength in 1..1_500_000L) {
+                    AppLogger.w(
+                        TAG,
+                        "Audio probe rejected suspicious small stream without duration verification " +
+                            "($totalContentLength bytes for expected ${expectedDurationMs}ms) for $validUrl",
+                    )
+                    return@withContext null
+                }
+                // 2) 未知时长但文件流过小（<1MB）：疑似试听片段
                 if (expectedDurationMs <= 0L && totalContentLength in 1..1_000_000L) {
                     AppLogger.w(
                         TAG,
@@ -232,6 +254,13 @@ object OnlinePlaybackProbe {
             AppLogger.d(TAG, "Audio probe exception for $rawUrl: ${e.message}")
             null
         }
+    }
+
+    private fun containsAuditionKeyword(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("audition") || lower.contains("preview") || lower.contains("trial") ||
+            lower.contains("sample") || lower.contains("listen_part") || lower.contains("/short/") ||
+            lower.contains("试听") || lower.contains("snippet")
     }
 
     /**

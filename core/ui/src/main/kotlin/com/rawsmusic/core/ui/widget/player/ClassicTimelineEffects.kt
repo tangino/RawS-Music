@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.SideEffect
@@ -363,8 +365,32 @@ internal fun ClassicTimelineEffects(
 
 @Composable
 private fun ClassicTimelineTimeLabels(frame: State<ClassicTimelineFrame>, durationMs: Long, color: Color) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
+    val isOnlineBusy = onlineSnapshot.isBusy
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
         Text(AudioUtils.formatDuration(frame.value.displayedMs), color = color, fontSize = 12.sp)
+        if (isOnlineBusy) {
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = androidx.compose.ui.Modifier.size(11.dp),
+                    strokeWidth = 1.6.dp,
+                    color = color
+                )
+                Text(
+                    text = if (onlineSnapshot.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving) "正在寻源..." else "正在缓冲...",
+                    color = color,
+                    fontSize = 11.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                )
+            }
+        }
         Text(AudioUtils.formatDuration(durationMs), color = color, fontSize = 12.sp)
     }
 }

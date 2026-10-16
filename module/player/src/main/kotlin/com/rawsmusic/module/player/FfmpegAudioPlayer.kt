@@ -2169,6 +2169,7 @@ class FfmpegAudioPlayer(private val context: Context) {
     fun play(path: String) {
         AppLogger.w(TAG, "=== play() called, path=$path")
         RealtimePlaybackPcmProcessorRegistry.reset("new_play_request")
+        runCatching { dspEngine?.resetReverb() }
         resetUsbBitPerfectPolicyLog()
         resetUsbHardRecoveryFuse("new_play_request")
         if (isReleased.get()) return
@@ -3004,6 +3005,7 @@ class FfmpegAudioPlayer(private val context: Context) {
         )
         playbackStopStateCoordinator.reset("stop")
         playbackResourceStopCoordinator.stop("stop")
+        runCatching { dspEngine?.resetReverb() }
     }
 
     fun seekTo(positionMs: Long, usbPrepareAlreadyDone: Boolean = false, keepPaused: Boolean = false) {

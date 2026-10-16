@@ -97,6 +97,7 @@ object OnlinePlaylistImportService {
                 name = name,
                 localSongs = emptyList(),
                 onlineSongs = onlineRows,
+                coverUrl = playlist.coverUrl,
             )
             if (imported == null) {
                 OnlineImportOutcome.Failed("写入本地歌单失败")

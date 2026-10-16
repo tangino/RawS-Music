@@ -7,6 +7,7 @@ import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.OnlinePlaybackDiagnostics
 import android.os.SystemClock
+import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.LxSourcePluginStore
 import com.rawsmusic.module.data.source.MusicSourcePluginStore
 import com.rawsmusic.module.data.source.runtime.LxCatalogSearchService
@@ -61,8 +62,31 @@ object MusicSourceAudioResolver {
         ): RawResolvedAudioSource?
     }
 
+    fun interface AudioUrlValidator {
+        suspend fun validate(
+            url: String,
+            expectedDurationMs: Long,
+            sourceId: String,
+        ): Pair<String, Long>?
+    }
+
+    fun interface QuickJsLxAudioResolver {
+        suspend fun resolveQuickJs(
+            context: Context,
+            source: InstalledLxSource,
+            item: RawSourceMediaItem,
+            quality: RawSourceQuality,
+        ): RawResolvedAudioSource?
+    }
+
     @Volatile
     var onlineFallbackResolver: OnlineAudioFallbackResolver? = null
+
+    @Volatile
+    var audioUrlValidator: AudioUrlValidator? = null
+
+    @Volatile
+    var quickJsLxAudioResolver: QuickJsLxAudioResolver? = null
 
     suspend fun resolve(
         context: Context,
@@ -139,6 +163,27 @@ object MusicSourceAudioResolver {
             )
             throw cancelled
         } catch (error: Throwable) {
+            // 当插件解析失败或因返回试听短音频被拦截时，唤起全网多源并发搜救兜底
+            val fallback = onlineFallbackResolver
+            if (fallback != null) {
+                try {
+                    val resolvedFallback = fallback.resolveOnline(context, item, requestedQuality)
+                    if (resolvedFallback != null) {
+                        AppLogger.i(
+                            TAG,
+                            "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK fallback=online after plugin failure sourceId=${item.sourceId} " +
+                                "quality=${resolvedFallback.quality} url=${OnlinePlaybackDiagnostics.safeUrl(resolvedFallback.url)} " +
+                                "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                        )
+                        return resolvedFallback
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Throwable) {
+                    AppLogger.w(TAG, "onlineFallbackResolver failed after plugin failure for ${item.title}: ${e.message}")
+                }
+            }
+
             val message = error.message.orEmpty().ifBlank { "音频地址解析失败" }.take(1_024)
             musicFreeSource?.let { MusicSourcePluginStore.setLastError(it.id, message) }
             lxSource?.let { LxSourcePluginStore.setLastError(it.id, message) }
@@ -170,7 +215,21 @@ object MusicSourceAudioResolver {
                     "sourceId=$sourceId quality=$quality"
             )
             try {
-                return MusicSourceRuntimeClient.resolveAudio(context, source, item, quality)
+                val resolved = MusicSourceRuntimeClient.resolveAudio(context, source, item, quality)
+                val validator = audioUrlValidator
+                if (validator != null && item.durationMs > 0L) {
+                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId)
+                    if (validatedPair == null) {
+                        AppLogger.w(
+                            TAG,
+                            "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_ATTEMPT_REJECTED backend=musicfree " +
+                                "sourceId=$sourceId quality=$quality url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)} - 疑似试听片段或时长不一致"
+                        )
+                        throw IllegalStateException("解析的音频流未通过时长或完整性校验（疑似试听片段）")
+                    }
+                    return resolved.copy(url = validatedPair.first)
+                }
+                return resolved
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -204,7 +263,23 @@ object MusicSourceAudioResolver {
                     "sourceId=$sourceId quality=$quality"
             )
             try {
-                return MusicSourceRuntimeClient.resolveLxAudio(context, source, item, quality)
+                val qjsResolver = quickJsLxAudioResolver
+                val resolved = qjsResolver?.resolveQuickJs(context, source, item, quality)
+                    ?: MusicSourceRuntimeClient.resolveLxAudio(context, source, item, quality)
+                val validator = audioUrlValidator
+                if (validator != null && item.durationMs > 0L) {
+                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId)
+                    if (validatedPair == null) {
+                        AppLogger.w(
+                            TAG,
+                            "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_ATTEMPT_REJECTED backend=lx " +
+                                "sourceId=$sourceId quality=$quality url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)} - 疑似试听片段或时长不一致"
+                        )
+                        throw IllegalStateException("解析的音频流未通过时长或完整性校验（疑似试听片段）")
+                    }
+                    return resolved.copy(url = validatedPair.first)
+                }
+                return resolved
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {

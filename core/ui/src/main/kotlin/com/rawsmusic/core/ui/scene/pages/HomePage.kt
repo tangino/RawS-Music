@@ -3,6 +3,7 @@ package com.rawsmusic.core.ui.scene.pages
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
@@ -80,10 +81,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.ui.AppNoticeIcon
+import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
+import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.core.ui.theme.FontScaleLayoutReporter
 import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.core.common.model.AudioFile
@@ -162,6 +167,7 @@ fun HomePage(
     carouselState: HomeArtworkCarouselState,
     renderBackdrop: Boolean = true,
     onNavigate: (NavScene) -> Unit,
+    onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     onSearchClick: () -> Unit,
     showSettingsShortcut: Boolean = false,
     onSettingsClick: () -> Unit = {},
@@ -279,6 +285,7 @@ fun HomePage(
                 showAddCardDialog = true
             },
             onNavigate = onNavigate,
+            onNavigatePlaylist = onNavigatePlaylist,
             onSearchClick = onSearchClick,
             showSettingsShortcut = showSettingsShortcut,
             onSettingsClick = onSettingsClick,
@@ -465,6 +472,7 @@ private fun HomePageContent(
     onAddHomeCard: (HomeCardGroup) -> Unit,
     listState: ScrollState = rememberScrollState(),
     onNavigate: (NavScene) -> Unit,
+    onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     onSearchClick: () -> Unit,
     weatherVisible: Boolean,
     onHeaderMenuClick: () -> Unit,
@@ -607,6 +615,7 @@ private fun HomePageContent(
                 onEnterEdit = { onHomeCardEditModeChange(true) },
                 onAdd = { onAddHomeCard(HomeCardGroup.LIBRARY) },
                 onNavigate = onNavigate,
+                onNavigatePlaylist = onNavigatePlaylist,
                 columns = homeCardColumns,
                 modifier = Modifier
                     .widthIn(max = homeCardRowMaxWidth)
@@ -869,9 +878,11 @@ private fun HomeCardSlotRow(
     onEnterEdit: () -> Unit,
     onAdd: () -> Unit,
     onNavigate: (NavScene) -> Unit,
+    onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     columns: Int = 2,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -891,7 +902,33 @@ private fun HomeCardSlotRow(
                         visibleOrder = visibleOrder,
                         dragPreview = dragPreview,
                         onMoveTo = { target -> layoutState.moveVisibleTo(card.scene, target) },
-                        onClick = { onNavigate(card.scene) },
+                        onClick = {
+                            if (card.scene == NavScene.CURRENT_PLAYLIST || card.scene == NavScene.PREVIOUS_PLAYLIST) {
+                                val target = if (card.scene == NavScene.CURRENT_PLAYLIST) {
+                                    PlayedPlaylistManager.currentPlaylist.value
+                                } else {
+                                    PlayedPlaylistManager.previousPlaylist.value
+                                }
+                                if (target == null) {
+                                    AppNoticeBus.post(
+                                        context.getString(R.string.no_played_playlist_notice),
+                                        AppNoticeIcon.PLAYLIST,
+                                    )
+                                } else {
+                                    if (target.isOnline) {
+                                        val platform = OnlinePlatform.fromId(target.platformId.orEmpty()) ?: OnlinePlatform.NETEASE
+                                        onNavigatePlaylist(
+                                            NavScene.ONLINE_PLAYLIST_DETAIL,
+                                            onlinePlaylistDetailArgument(platform, target.id)
+                                        )
+                                    } else {
+                                        onNavigatePlaylist(NavScene.PLAYLIST_DETAIL_PAGE, target.id)
+                                    }
+                                }
+                            } else {
+                                onNavigate(card.scene)
+                            }
+                        },
                     )
                 }
                 HomeCardSlot.Add -> {
@@ -968,6 +1005,12 @@ private fun LibraryTile(
     onClick: () -> Unit,
 ) {
     var removing by remember(scene) { mutableStateOf(false) }
+    val playedInfo = when (scene) {
+        NavScene.CURRENT_PLAYLIST -> PlayedPlaylistManager.currentPlaylist.collectAsState().value
+        NavScene.PREVIOUS_PLAYLIST -> PlayedPlaylistManager.previousPlaylist.collectAsState().value
+        else -> null
+    }
+    val isPlayedScene = scene == NavScene.CURRENT_PLAYLIST || scene == NavScene.PREVIOUS_PLAYLIST
     val dragging = dragPreview.activeScene == scene
     val previewDisplacement = dragPreview.displacementFor(scene)
     val committedReleaseEpoch = dragPreview.committedReleaseEpoch
@@ -1057,31 +1100,11 @@ private fun LibraryTile(
                 .clip(RoundedCornerShape(13.dp))
                 .background(pastelColorFor(scene.tag)),
         ) {
-            val fixedIconRes = scene.homeCardFixedIconResOrNull()
-            if (fixedIconRes != null) {
-                Image(
-                    painter = painterResource(fixedIconRes),
-                    contentDescription = null,
-                    colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.94f)),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(58.dp),
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.05f),
-                                    Color.Black.copy(alpha = 0.18f),
-                                )
-                            )
-                        ),
-                )
-            } else if (song?.coverKey?.isNotBlank() == true) {
+            val playedCover = playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
+
+            if (playedCover != null) {
                 BitmapImage(
-                    key = song.coverKey,
+                    key = playedCover,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -1093,6 +1116,44 @@ private fun LibraryTile(
                         .fillMaxSize()
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
                 )
+            } else {
+                val fixedIconRes = scene.homeCardFixedIconResOrNull()
+                if (fixedIconRes != null) {
+                    Image(
+                        painter = painterResource(fixedIconRes),
+                        contentDescription = null,
+                        colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.94f)),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(58.dp),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color.White.copy(alpha = 0.05f),
+                                        Color.Black.copy(alpha = 0.18f),
+                                    )
+                                )
+                            ),
+                    )
+                } else if (song?.coverKey?.isNotBlank() == true) {
+                    BitmapImage(
+                        key = song.coverKey,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        targetWidth = 360,
+                        targetHeight = 360,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
+                    )
+                }
             }
 
             if (editMode) {
@@ -1124,7 +1185,13 @@ private fun LibraryTile(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        val statistics = homeCardStatisticsText(scene, contentCount)
+        val statistics = if (isPlayedScene) {
+            playedInfo?.let {
+                if (it.trackCount > 0) "${it.name} · ${it.trackCount}" else it.name
+            } ?: stringResource(R.string.no_played_playlist_notice)
+        } else {
+            homeCardStatisticsText(scene, contentCount)
+        }
         if (statistics.isNotBlank()) {
             Text(
                 text = statistics,
@@ -1149,6 +1216,8 @@ private fun LibraryTile(
 private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
+    NavScene.CURRENT_PLAYLIST -> R.drawable.ic_playlist_play
+    NavScene.PREVIOUS_PLAYLIST -> R.drawable.ic_schedule
     else -> null
 }
 
@@ -1536,6 +1605,7 @@ internal fun rememberHomeVirtualListProviderSpec(
     onHomeCardEditModeChange: (Boolean) -> Unit,
     onAddHomeCard: (HomeCardGroup) -> Unit,
     onNavigate: (NavScene) -> Unit,
+    onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     onSearchClick: () -> Unit,
     showSettingsShortcut: Boolean,
     onSettingsClick: () -> Unit,
@@ -1847,6 +1917,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                 onEnterEdit = { onHomeCardEditModeChange(true) },
                                 onAdd = { onAddHomeCard(HomeCardGroup.LIBRARY) },
                                 onNavigate = onNavigate,
+                                onNavigatePlaylist = onNavigatePlaylist,
                                 columns = homeCardColumns,
                                 modifier = Modifier.widthIn(max = homeCardRowMaxWidth),
                             )

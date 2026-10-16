@@ -102,9 +102,12 @@ fun onlineUserPlaylistSong(
     artist: String,
     album: String = "",
     durationMs: Long = 0L,
+    albumArtUrl: String = "",
     addedAt: Long = System.currentTimeMillis(),
+    isVip: Boolean = false,
 ): UserPlaylistSong {
     val key = onlineSongKey(platformId, songId)
+    val entryFormat = if (isVip) "VIP" else ONLINE_ENTRY_FORMAT
     return UserPlaylistSong(
         key = key,
         id = generateVirtualSongId(platformId, songId),
@@ -115,14 +118,24 @@ fun onlineUserPlaylistSong(
         duration = durationMs,
         path = key,
         fileSize = 0L,
-        format = ONLINE_ENTRY_FORMAT,
+        format = entryFormat,
         sampleRate = 0,
         bitRate = 0,
         bitsPerSample = 0,
-        albumArtPath = "",
+        albumArtPath = albumArtUrl,
         addedAt = addedAt,
     )
 }
+
+/** 判断该歌曲是否带有 VIP 标识。 */
+fun AudioFile.isVipSong(): Boolean =
+    format.equals("VIP", ignoreCase = true) ||
+        format.contains("VIP", ignoreCase = true) ||
+        encodingFormat.contains("VIP", ignoreCase = true)
+
+/** 判断歌单歌曲行是否带有 VIP 标识。 */
+fun UserPlaylistSong.isVipSong(): Boolean =
+    format.equals("VIP", ignoreCase = true) || format.contains("VIP", ignoreCase = true)
 
 fun AudioFile.toUserPlaylistSong(): UserPlaylistSong {
     return UserPlaylistSong(

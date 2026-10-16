@@ -267,10 +267,13 @@ object CloudPlaylistSyncService {
                     .filterNot(CloudPlaylistJson::isOnlineSong)
                     .filter { it.path.isNotBlank() }
                     .map(CloudPlaylistJson::toAudioFile)
+                val playlistCover = onlineRows.firstOrNull { it.albumArtPath.isNotBlank() }?.albumArtPath
+                    ?: dto.songs.firstOrNull { it.coverUrl.isNotBlank() }?.coverUrl
                 val imported = store.importResolvedPlaylist(
                     name = dto.name,
                     localSongs = localSongs,
                     onlineSongs = onlineRows,
+                    coverUrl = playlistCover,
                     overwrite = isOverwrite,
                 )
                 if (imported != null) {

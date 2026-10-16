@@ -51,8 +51,8 @@ class OnlinePlaybackMatcherTest {
     }
 
     @Test
-    fun testDurationThreshold_fiveSeconds() {
-        // 误差 <= 5秒 允许匹配
+    fun testDurationThreshold_twoSeconds() {
+        // 误差 <= 2.5秒（允许误差2秒左右）允许匹配
         assertTrue(
             OnlinePlaybackMatcher.isMatched(
                 targetTitle = "夜曲",
@@ -64,7 +64,17 @@ class OnlinePlaybackMatcherTest {
             )
         )
 
-        // 误差 > 5秒 严格拦截
+        // 误差 > 2.5秒（如 3s、6s）严格拦截
+        assertFalse(
+            OnlinePlaybackMatcher.isMatched(
+                targetTitle = "夜曲",
+                targetArtist = "周杰伦",
+                candidateTitle = "夜曲",
+                candidateArtist = "周杰伦",
+                targetDurationMs = 226_000L,
+                candidateDurationMs = 229_000L, // 误差 3s
+            )
+        )
         assertFalse(
             OnlinePlaybackMatcher.isMatched(
                 targetTitle = "夜曲",

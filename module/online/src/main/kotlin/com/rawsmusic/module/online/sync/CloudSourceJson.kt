@@ -174,8 +174,7 @@ object CloudSourceJson {
             scriptContent = scriptContent.orEmpty(),
             sourceUrl = source.sourceUrl,
             enabled = source.enabled,
-            // RawS 没有「主音源」概念，固定 false（OrBit 还原时忽略）。
-            isPrimary = false,
+            isPrimary = source.isPrimary,
             // ⚠️ 取的是 Map 的 **key**（平台码）；value 是音质集合，OrBit 不认，别带过去。
             supportPlatforms = source.platforms.keys.toList(),
             importedAt = source.installedAtMs,

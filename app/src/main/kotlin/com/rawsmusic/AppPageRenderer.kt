@@ -46,6 +46,7 @@ import com.rawsmusic.ui.playlist.isAttitudePlaylistId
 import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
 import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.model.playlistIdentityKey
+import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.module.data.repository.SongAttitudeRepository
 import com.rawsmusic.ui.playlist.PlaylistScreen
 import com.rawsmusic.ui.search.GlobalSearchScreen
@@ -174,6 +175,18 @@ class AppPageRendererImpl(
                     onPlaySong = { songs, index ->
                         val clicked = songs.getOrNull(index) ?: return@PlaylistDetailScreen
                         pc?.play(clicked, songs, index)
+                        val coverPath = playlist?.coverUrl?.takeIf { it.isNotBlank() }
+                            ?: songs.firstOrNull { it.albumArtPath.isNotBlank() }?.albumArtPath.orEmpty()
+                        if (playlist != null) {
+                            PlayedPlaylistManager.recordPlayedPlaylist(
+                                id = playlist.id,
+                                name = playlist.name,
+                                isOnline = false,
+                                platformId = "",
+                                coverUrl = coverPath,
+                                trackCount = songs.size,
+                            )
+                        }
                     },
                     onRemoveSong = { song ->
                         val targetId = argument

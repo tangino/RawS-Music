@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -1437,18 +1438,32 @@ private fun MiniPlayerTransportCluster(
             if (controlGap > 0.dp) Spacer(Modifier.width(controlGap))
         }
 
-        Box(
-            modifier = Modifier
-                .size(playPauseTouchSize)
-                .controlClick(controlsEnabled, onPlayPause),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = painterResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
-                contentDescription = stringResource(if (isPlaying) R.string.common_pause else R.string.common_play),
-                tint = textColor,
-                modifier = Modifier.size(playPauseVisualSize),
-            )
+        val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
+        if (onlineSnapshot.isBusy) {
+            Box(
+                modifier = Modifier.size(playPauseTouchSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(playPauseVisualSize * 0.9f),
+                    strokeWidth = 2.dp,
+                    color = textColor,
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(playPauseTouchSize)
+                    .controlClick(controlsEnabled, onPlayPause),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
+                    contentDescription = stringResource(if (isPlaying) R.string.common_pause else R.string.common_play),
+                    tint = textColor,
+                    modifier = Modifier.size(playPauseVisualSize),
+                )
+            }
         }
 
 

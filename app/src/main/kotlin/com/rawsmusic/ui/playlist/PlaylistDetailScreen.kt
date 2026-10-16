@@ -42,9 +42,8 @@ fun PlaylistDetailScreen(
     // 本地曲与在线曲**并列**取（见 PlaylistStore.playlistEntries / P2-05b）：
     // 只用 resolveSongs 的话，在线曲目会被静默丢掉 —— 导入的 QQ/酷狗歌单会"看起来成功但列表是空的"。
     val entries = playlistStore.playlistEntries(playlist, librarySongs)
-    // 在线条目用 toAudioFile() 就能进同一个虚拟列表：它的 id 是负数虚拟 id、path 就是 online:// 串，
-    // 都不会与本地曲冲突；播放时由调用方按 path 前缀分流（见 AppPageRenderer）。
-    val songs = entries.local + entries.online.map { it.toAudioFile() }
+    // 混合歌单保持原顺序，在线歌曲若在本地曲库有同名同歌手同时间音源，优先匹配为本地音源
+    val songs = playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
     val state = rememberComposeVirtualListState("playlist-${playlist?.id.orEmpty()}")
     var exportDialog by remember { mutableStateOf(false) }
     val colors = themeColors()
@@ -79,6 +78,7 @@ fun PlaylistDetailScreen(
             statisticsText = statsText,
             onBack = onBack,
             virtualListState = state,
+            onPlay = { if (songs.isNotEmpty()) onPlaySong(songs, 0) },
             onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
         headerTrailingContent = exportHeaderAction,
         contentOverlap = 0.dp,

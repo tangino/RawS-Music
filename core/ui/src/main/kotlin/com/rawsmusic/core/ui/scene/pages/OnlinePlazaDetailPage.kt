@@ -54,6 +54,7 @@ import com.rawsmusic.module.online.playback.OnlinePlayResult
 import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
+import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
@@ -144,6 +145,16 @@ internal fun OnlinePlaylistDetailPage(
     var resolvingSongKey by remember { mutableStateOf<String?>(null) }
 
     fun playSong(item: OnlineSongItem, index: Int) {
+        if (playlist != null) {
+            PlayedPlaylistManager.recordPlayedPlaylist(
+                id = playlist.id,
+                name = playlist.title,
+                isOnline = true,
+                platformId = playlist.platform.id,
+                coverUrl = playlist.coverUrl,
+                trackCount = playlist.trackCount.coerceAtLeast(songs.size),
+            )
+        }
         val songKey = "${item.platform.id}_${item.id}"
         resolvingSongKey = songKey
         scope.launch {

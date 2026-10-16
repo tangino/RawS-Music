@@ -842,7 +842,18 @@ internal fun ImmersivePlayerMainPage(
                         verticalAlignment = Alignment.CenterVertically) {
                         IconCircle(iconRes = playModeIconRes, size = 34.dp, tint = tone.iconSoft, onClick = onPlayMode)
                         IconCircle(iconRes = previousIconRes, size = 42.dp, tint = tone.icon, onClick = onPrevious)
-                        IconCircle(iconRes = if (isPlaying) pauseIconRes else playIconRes, size = 52.dp, tint = tone.icon, onClick = onPlayPause)
+                        val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
+                        if (onlineSnapshot.isBusy) {
+                            Box(modifier = Modifier.size(52.dp), contentAlignment = Alignment.Center) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(26.dp),
+                                    strokeWidth = 2.5.dp,
+                                    color = tone.icon
+                                )
+                            }
+                        } else {
+                            IconCircle(iconRes = if (isPlaying) pauseIconRes else playIconRes, size = 52.dp, tint = tone.icon, onClick = onPlayPause)
+                        }
                         IconCircle(iconRes = nextIconRes, size = 42.dp, tint = tone.icon, onClick = onNext)
                         ImmersiveQueueButton(queueVisible, if (queueVisible) tone.icon else tone.iconSoft, onToggleQueue)
                     }

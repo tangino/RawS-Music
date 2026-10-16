@@ -1072,6 +1072,12 @@ class PlayerController private constructor(context: Context) {
             pauseBackend = ffmpegPlayer::pause,
             transitionToPaused = { reason ->
                 smTransition(PlayState.PAUSED, reason)
+                PlayerService.syncUsbMediaIdentityFromController(
+                    song = _currentSong.value,
+                    playing = false,
+                    position = _position.value.coerceAtLeast(0L),
+                    reason = reason,
+                )
                 Unit
             },
             stopProgressUpdate = ::stopProgressUpdate,
@@ -5637,6 +5643,27 @@ class PlayerController private constructor(context: Context) {
             return
         }
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
+            // 混合歌单特征：当本地存在同名同歌手且时长基本一致的歌曲时，优先播放本地音源
+            val searchPool = (queue + _queue.value.songs).filter { !com.rawsmusic.core.common.model.isOnlineSongKey(it.path) }
+            val localMatch = com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, searchPool)
+            if (localMatch != null) {
+                Log.i(TAG, "play() 混合歌单优先使用本地音源: title=${song.title} -> ${localMatch.path}")
+                val resolvedQueue = if (queue.isNotEmpty()) {
+                    queue.map { if (it.path == song.path) localMatch else it }
+                } else {
+                    _queue.value.songs.map { if (it.path == song.path) localMatch else it }
+                }
+                play(localMatch, resolvedQueue, index)
+                return
+            }
+            // 即将进入网络寻源。如果当前底层正在播放/准备，立即停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
+            val isRendererBusy = _playState.value == PlayState.PLAYING ||
+                _playState.value == PlayState.PREPARING ||
+                ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
+                ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING
+            if (isRendererBusy) {
+                ffmpegPlayer.stop()
+            }
             val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
             val finalQueue = if (effectiveQueue.isNotEmpty()) effectiveQueue else listOf(song)
             val resolvedIndex = if (index in finalQueue.indices && finalQueue[index].path == song.path) {
@@ -6231,6 +6258,9 @@ class PlayerController private constructor(context: Context) {
      * resume 前主动检测 AudioTrack 有效性，无论什么触发 resume 都保证 track 可用
      */
     private fun resumeSystemAudio() {
+        // 确保音频焦点在恢复播放前就位
+        ensureAudioFocusForService("resume_system_audio")
+
         // 1. SOS: 先检查并修复 AudioTrack，确保恢复播放时 track 有效
         // 无论 resume 来源（UI、通知栏、蓝牙、音频焦点），都经过此检查
         val wasRebuilt = ffmpegPlayer.ensureTrackValidAfterBackground()
@@ -6243,6 +6273,15 @@ class PlayerController private constructor(context: Context) {
         if (!ffmpegPlayer.resume()) {
             Log.w(TAG, "=== resume: ffmpegPlayer.resume() failed, falling back to play() ===")
             _currentSong.value?.let { play(it) }
+        } else {
+            smForceTransition(PlayState.PLAYING, "resume_system_audio")
+            startProgressUpdate()
+            PlayerService.syncUsbMediaIdentityFromController(
+                song = _currentSong.value,
+                playing = true,
+                position = _position.value.coerceAtLeast(0L),
+                reason = "resume_system_audio",
+            )
         }
     }
 
@@ -6685,7 +6724,9 @@ class PlayerController private constructor(context: Context) {
                 val pathOnlyCrossfadeIsSafe = current != null &&
                     current.path != song.path &&
                     current.cueOffsetMs == 0L && current.cueTrackIndex == 0 &&
-                    song.cueOffsetMs == 0L && song.cueTrackIndex == 0
+                    song.cueOffsetMs == 0L && song.cueTrackIndex == 0 &&
+                    !com.rawsmusic.core.common.model.isOnlineSongKey(song.path) &&
+                    !com.rawsmusic.core.common.model.isOnlineSongKey(current.path)
                 // Library metadata is not the renderer geometry. The pending FFmpeg decoder is
                 // opened against the active output format, so a 44.1 kHz source followed by a
                 // 96 kHz source may still produce matching decoded PCM for this live renderer.

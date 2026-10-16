@@ -45,6 +45,15 @@
 -keep class com.rawsmusic.module.player.dsp.NativeDSPEngine { *; }
 -keep class com.rawsmusic.core.common.ffmpeg.FFmpegBridge { *; }
 
+# QuickJS Native JNI Wrapper — 防止 C++ JNI 反射调用类被混淆导致 ClassNotFoundException 闪退
+-keep class com.whl.quickjs.wrapper.** { *; }
+-keep interface com.whl.quickjs.wrapper.** { *; }
+-keepclasseswithmembernames class com.whl.quickjs.wrapper.** {
+    native <methods>;
+}
+-keep class com.rawsmusic.module.online.engine.** { *; }
+
+
 # AI separation callbacks are resolved by their source-level names from native code.
 -keepclassmembers,allowoptimization class com.rawsmusic.separation.AiOnnxRuntimeSession {
     public boolean runModelFromNative();

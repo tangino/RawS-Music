@@ -29,6 +29,7 @@ data class InstalledLxSource(
     val scriptSha256: String,
     val origin: MusicSourceOrigin,
     val enabled: Boolean = true,
+    val isPrimary: Boolean = false,
     val format: String = "userApi",
     val platforms: Map<String, Set<String>> = emptyMap(),
     val actions: Set<String> = setOf("musicUrl"),
@@ -142,12 +143,83 @@ object LxSourcePluginStore {
         mutableSources.value = mutableSources.value.map { source ->
             if (source.id == id && source.enabled != enabled) {
                 changed = true
-                source.copy(enabled = enabled, updatedAtMs = System.currentTimeMillis())
+                source.copy(
+                    enabled = enabled,
+                    isPrimary = if (!enabled) false else source.isPrimary,
+                    updatedAtMs = System.currentTimeMillis(),
+                )
             } else {
                 source
             }
         }
         if (changed) persist()
+    }
+
+    /**
+     * 设置为主选音源 (优先走该源，其余启用的音源自动成为备用协同源)
+     */
+    fun setPrimary(id: String) {
+        var changed = false
+        mutableSources.value = mutableSources.value.map { source ->
+            if (source.id == id) {
+                if (!source.isPrimary || !source.enabled) {
+                    changed = true
+                    source.copy(isPrimary = true, enabled = true, updatedAtMs = System.currentTimeMillis())
+                } else {
+                    source
+                }
+            } else if (source.isPrimary) {
+                changed = true
+                source.copy(isPrimary = false, updatedAtMs = System.currentTimeMillis())
+            } else {
+                source
+            }
+        }
+        if (changed) persist()
+    }
+
+    /**
+     * 获取当前有效的主音源 (优先取已启用且被标记为 Primary 的源，若未指定则取首个已启用源)
+     */
+    fun primarySource(): InstalledLxSource? {
+        val list = mutableSources.value.filter { it.enabled }
+        return list.firstOrNull { it.isPrimary } ?: list.firstOrNull()
+    }
+
+    /**
+     * 获取除主音源外的所有备用协同音源池
+     */
+    fun backupSources(): List<InstalledLxSource> {
+        val primary = primarySource()
+        return mutableSources.value.filter { it.enabled && it != primary }
+    }
+
+    /**
+     * 一键启用所有音源（若无主音源则默认设第 1 个为主音源）
+     */
+    fun enableAll() {
+        val list = mutableSources.value
+        if (list.isEmpty()) return
+        var hasPrimary = list.any { it.isPrimary && it.enabled }
+        mutableSources.value = list.mapIndexed { idx, source ->
+            if (!hasPrimary && idx == 0) {
+                hasPrimary = true
+                source.copy(enabled = true, isPrimary = true, updatedAtMs = System.currentTimeMillis())
+            } else {
+                source.copy(enabled = true, updatedAtMs = System.currentTimeMillis())
+            }
+        }
+        persist()
+    }
+
+    /**
+     * 一键停用所有音源
+     */
+    fun disableAll() {
+        mutableSources.value = mutableSources.value.map {
+            it.copy(enabled = false, isPrimary = false, updatedAtMs = System.currentTimeMillis())
+        }
+        persist()
     }
 
     fun remove(context: Context, id: String) {
@@ -206,6 +278,7 @@ object LxSourcePluginStore {
             scriptSha256 = metadata.sha256,
             origin = origin,
             enabled = existing?.enabled ?: true,
+            isPrimary = existing?.isPrimary ?: false,
             format = metadata.format.wireName,
             platforms = descriptor.platforms.associate { it.platform to it.qualities },
             actions = descriptor.platforms.flatMapTo(linkedSetOf()) { capability ->

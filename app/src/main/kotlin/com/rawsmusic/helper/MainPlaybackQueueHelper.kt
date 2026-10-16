@@ -13,6 +13,9 @@ class MainPlaybackQueueHelper(
     private val playerControllerProvider: () -> PlayerController
 ) {
     fun playSongFromScene(song: AudioFile, scene: NavScene) {
+        if (scene != NavScene.PLAYLIST_DETAIL_PAGE && scene != NavScene.ONLINE_PLAYLIST_DETAIL) {
+            com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
+        }
         val queue = when (scene) {
             NavScene.SONGS -> MusicRepository.songs.value
             NavScene.RECENTLY_ADDED -> recentSongs()

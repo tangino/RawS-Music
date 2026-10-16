@@ -150,7 +150,7 @@ internal class AndroidAudioInterruptionController(
     }
 
     fun requestAudioFocus(): Boolean {
-        if (focusGranted) return true
+        if (focusGranted && !transientFocusLossActive) return true
         val manager = audioManager ?: return true
 
         val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

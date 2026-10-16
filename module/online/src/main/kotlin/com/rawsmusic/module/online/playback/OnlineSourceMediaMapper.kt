@@ -77,16 +77,17 @@ object OnlineSourceMediaMapper {
             album = song.album,
             albumId = null,
             durationMs = song.duration,
-            coverUrl = null,
+            coverUrl = song.albumArtPath.takeIf {
+                it.startsWith("http://", true) || it.startsWith("https://", true)
+            },
         )
     }
 
     /**
      * 在线歌曲 → 本地歌单行（P2-05b 约定的落库形态）。
      *
-     * 具体约定（`key`/`path` 用同一个 `online://` 串、负数虚拟 id、`albumArtPath` 留空）
-     * **统一由 `core:common` 的 `onlineUserPlaylistSong` 定义** —— 这里只是把
-     * [OnlineSongItem] 的字段喂进去，不要在本文件里重新拼一份。
+     * 具体约定（`key`/`path` 用同一个 `online://` 串、负数虚拟 id、`albumArtPath` 携带在线封面）
+     * **统一由 `core:common` 的 `onlineUserPlaylistSong` 定义**。
      */
     fun toUserPlaylistSong(item: OnlineSongItem): UserPlaylistSong =
         com.rawsmusic.core.common.model.onlineUserPlaylistSong(
@@ -96,6 +97,8 @@ object OnlineSourceMediaMapper {
             artist = item.artist,
             album = item.album,
             durationMs = item.durationMs,
+            albumArtUrl = item.coverUrl.orEmpty(),
+            isVip = item.isVip,
         )
 
     /** 在线歌单的稳定标识，取值约定 `<platformId>_<remoteId>`（与 `online_playlist_favorites.playlist_key` 一致）。 */

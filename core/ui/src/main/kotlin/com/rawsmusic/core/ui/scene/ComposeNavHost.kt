@@ -440,6 +440,7 @@ fun ComposeNavHost(
                 carouselState = homeCarouselState,
                 renderBackdrop = renderHomeBackdrop,
                 onNavigate = { targetScene -> state.navigateTo(targetScene) },
+                onNavigatePlaylist = { targetScene, arg -> state.navigateTo(targetScene, arg) },
                 onSearchClick = { callbacks.onSearchClick(null) },
                 showSettingsShortcut = showHomeSettingsShortcut,
                 onSettingsClick = onSettingsClick,

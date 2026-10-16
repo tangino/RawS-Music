@@ -71,6 +71,9 @@ internal fun SourceConfigurationPage(
     onDeleteMusicFree: (InstalledMusicSource) -> Unit,
     onDeleteLx: (InstalledLxSource) -> Unit,
     onOpenCloudSync: () -> Unit = {},
+    onSetPrimaryLx: (String) -> Unit = {},
+    onEnableAllLx: () -> Unit = {},
+    onDisableAllLx: () -> Unit = {},
 ) {
     val scheme = MiuixTheme.colorScheme
     Column(modifier = Modifier.fillMaxSize()) {
@@ -212,11 +215,59 @@ internal fun SourceConfigurationPage(
             if (installedLxSources.isEmpty()) {
                 SourceEmptyPanel(stringResource(R.string.source_empty_lx), stringResource(R.string.source_empty_lx_summary))
             } else {
+                val enabledCount = installedLxSources.count { it.enabled }
+                val primarySource = installedLxSources.firstOrNull { it.isPrimary && it.enabled }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(scheme.surfaceContainer.copy(alpha = 0.6f))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (enabledCount > 1) {
+                                "🚀 主音源【${primarySource?.name ?: "首选音源"}】失效时，其余 ${enabledCount - 1} 个备用源自动并发搜救"
+                            } else if (enabledCount == 1) {
+                                "支持同时开启多个，主源失效自动切备用源"
+                            } else {
+                                "所有音源已停用，在线播放将无法寻源"
+                            },
+                            color = if (enabledCount > 0) scheme.primary else Color(0xFFE15B64),
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "全启用",
+                        color = scheme.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clickable(onClick = onEnableAllLx)
+                            .padding(4.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "全停用",
+                        color = scheme.onSurfaceVariantSummary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clickable(onClick = onDisableAllLx)
+                            .padding(4.dp),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+
                 installedLxSources.forEach { source ->
                     InstalledLxSourceCard(
                         source = source,
                         onToggle = { onToggleLx(source.id, it) },
                         onDelete = { onDeleteLx(source) },
+                        onSetPrimary = { onSetPrimaryLx(source.id) },
                     )
                     Spacer(Modifier.height(10.dp))
                 }
@@ -329,6 +380,7 @@ private fun InstalledLxSourceCard(
     source: InstalledLxSource,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    onSetPrimary: () -> Unit,
 ) {
     val platformText = source.platforms.entries
         .sortedBy { it.key }
@@ -346,9 +398,11 @@ private fun InstalledLxSourceCard(
         origin = source.origin,
         sha256 = source.scriptSha256,
         enabled = source.enabled,
+        isPrimary = source.isPrimary,
         lastError = source.lastError,
         onToggle = onToggle,
         onDelete = onDelete,
+        onSetPrimary = if (source.enabled && !source.isPrimary) onSetPrimary else null,
     )
 }
 
@@ -360,9 +414,11 @@ private fun InstalledSourceCardShell(
     origin: MusicSourceOrigin,
     sha256: String,
     enabled: Boolean,
+    isPrimary: Boolean = false,
     lastError: String,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    onSetPrimary: (() -> Unit)? = null,
 ) {
     val scheme = MiuixTheme.colorScheme
     Column(
@@ -377,7 +433,7 @@ private fun InstalledSourceCardShell(
                 modifier = Modifier
                     .size(46.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(scheme.primary.copy(alpha = 0.12f)),
+                    .background(if (isPrimary) scheme.primary.copy(alpha = 0.22f) else scheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
@@ -389,8 +445,60 @@ private fun InstalledSourceCardShell(
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(name, color = scheme.onBackground, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(versionAuthor, color = scheme.onSurfaceVariantSummary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        name,
+                        color = scheme.onBackground,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    if (isPrimary && enabled) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(scheme.primary.copy(alpha = 0.20f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text("★ 主选音源", color = scheme.primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else if (enabled) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(scheme.onSurfaceVariantSummary.copy(alpha = 0.12f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text("备用协同", color = scheme.onSurfaceVariantSummary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        versionAuthor,
+                        color = scheme.onSurfaceVariantSummary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (onSetPrimary != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "设为主源",
+                            color = scheme.primary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clickable(onClick = onSetPrimary)
+                                .padding(vertical = 2.dp),
+                        )
+                    }
+                }
             }
             Switch(checked = enabled, onCheckedChange = onToggle)
             IconButton(onClick = onDelete) {

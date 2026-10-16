@@ -1256,7 +1256,7 @@ class MainActivity : ComponentActivity() {
         songActionSheetHelper.setup()
         setupEdgeToEdge()
 
-        // 使用StateFlow和SharedFlow来管理状态       observePlayerActions()
+        observePlayerActions()
 
         LyriconProviderManager.onProviderConnected = {
             lyricsCoordinator.resendToLyricon()
@@ -1961,6 +1961,10 @@ class MainActivity : ComponentActivity() {
             onPlayAll = { songs ->
                 songs.firstOrNull()?.let { first ->
                     primePlayerUi(first)
+                    if (mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.PLAYLIST_DETAIL_PAGE &&
+                        mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.ONLINE_PLAYLIST_DETAIL) {
+                        com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
+                    }
                     playbackQueueHelper.playQueue(songs, 0)
                     openPlayPageWithSharedElement()
                 }
@@ -1973,6 +1977,10 @@ class MainActivity : ComponentActivity() {
                 ).orEmpty()
                 shuffledSongs.firstOrNull()?.let { first ->
                     primePlayerUi(first)
+                    if (mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.PLAYLIST_DETAIL_PAGE &&
+                        mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.ONLINE_PLAYLIST_DETAIL) {
+                        com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
+                    }
                     controller?.playPlannedShuffleQueue(shuffledSongs)
                     openPlayPageWithSharedElement()
                 }
@@ -4839,6 +4847,9 @@ class MainActivity : ComponentActivity() {
         }
 
         playbackStatsHelper.start()
+
+        updateMiniPlayerBarSong()
+        updateMiniPlayerBarPlayback()
 
         playerSceneController.resetInteractionState()
 

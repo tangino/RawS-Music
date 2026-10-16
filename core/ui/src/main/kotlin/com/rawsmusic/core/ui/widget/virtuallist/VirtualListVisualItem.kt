@@ -1,6 +1,7 @@
 package com.rawsmusic.core.ui.widget.virtuallist
 
 import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.common.model.isVipSong
 import com.rawsmusic.core.common.utils.SampleRateNormalizer
 import java.io.File
 import java.util.Locale
@@ -81,8 +82,11 @@ data class SongVirtualListItem(
     override val coverKey: String get() = song.coverKey
 
     override val title: String
-        get() = song.displayName.ifBlank {
-            File(song.path).nameWithoutExtension.ifBlank { "Unknown" }
+        get() {
+            val base = song.displayName.ifBlank {
+                File(song.path).nameWithoutExtension.ifBlank { "Unknown" }
+            }
+            return if (song.isVipSong()) "VIP ｜ $base" else base
         }
 
     override val subtitle: String

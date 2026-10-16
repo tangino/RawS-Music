@@ -826,7 +826,15 @@ class PlayerService : LifecycleService() {
             return
         }
         if (!shouldOwnPlaybackForeground()) {
-            stopForegroundCompat(removeNotification = true)
+            // Android 14+ 严格要求 startForegroundService() 启动后必须维持前台服务契约，
+            // 严禁在 onCreate() 毫秒级立刻调用 stopForeground()，否则会触发
+            // ForegroundServiceDidNotStartInTimeException 致命闪退。
+            // 此处留出 5 秒安全窗口供冷启动网络寻源/准备加载，超时仍空闲才安全撤销前台。
+            mediaPublicationHandler?.postDelayed({
+                if (!shouldOwnPlaybackForeground() && isForegroundStarted) {
+                    stopForegroundCompat(removeNotification = !hasPublishedMediaIdentity())
+                }
+            }, 5000L)
         }
         notifyPlaybackWidgetIfChanged(force = true)
 

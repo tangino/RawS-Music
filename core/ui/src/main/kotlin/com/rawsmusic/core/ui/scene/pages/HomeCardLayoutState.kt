@@ -29,6 +29,8 @@ val HomeLibraryCardScenes: List<NavScene> = listOf(
     NavScene.ALBUMS,
     NavScene.ARTISTS,
     NavScene.PLAYLISTS,
+    NavScene.CURRENT_PLAYLIST,
+    NavScene.PREVIOUS_PLAYLIST,
     NavScene.QUEUE,
     NavScene.RECENTLY_ADDED,
     NavScene.GENRE,

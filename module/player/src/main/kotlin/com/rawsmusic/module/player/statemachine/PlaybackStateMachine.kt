@@ -42,6 +42,7 @@ class PlaybackStateMachine {
             ),
             PlaybackState.PLAYING to setOf(
                 PlaybackState.PREPARING,
+                PlaybackState.PAUSED,
                 PlaybackState.STOPPED
             ),
             PlaybackState.PAUSED to setOf(

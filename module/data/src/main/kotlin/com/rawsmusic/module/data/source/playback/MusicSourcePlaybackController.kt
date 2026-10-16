@@ -12,10 +12,12 @@ import android.os.Looper
 import com.rawsmusic.core.common.source.RawResolvedAudioSource
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.OnlinePlaybackDiagnostics
+import com.rawsmusic.core.common.model.PlayMode
 import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceMediaType
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.module.data.prefs.AppPreferences
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -65,10 +67,10 @@ data class MusicSourcePlaybackSnapshot(
         get() = !originalPlatform.isNullOrBlank() && !resolvedPlatform.isNullOrBlank() && originalPlatform != resolvedPlatform
 
     val canGoPrevious: Boolean
-        get() = currentIndex > 0 || positionMs > 5_000L
+        get() = queue.size > 1 || positionMs > 5_000L || currentIndex > 0
 
     val canGoNext: Boolean
-        get() = currentIndex >= 0 && currentIndex < queue.lastIndex
+        get() = queue.isNotEmpty() && (queue.size > 1 || status == MusicSourcePlaybackStatus.Playing)
 
     val progressFraction: Float
         get() = if (durationMs > 0L) {
@@ -105,12 +107,17 @@ object MusicSourcePlaybackController {
     private var mediaPlayerGeneration = Long.MIN_VALUE
     private var mediaPlayerProgressJob: Job? = null
     private var mediaFallbackJob: Job? = null
+    private var preloadJob: Job? = null
+    private val preloadedResolvedMap = java.util.concurrent.ConcurrentHashMap<String, RawResolvedAudioSource>()
+    private var plannedNextShuffleIndex: Int? = null
+    private val playHistory = ArrayDeque<Int>()
+    private const val MAX_HISTORY_SIZE = 50
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
     private var resumeOnFocusGain = false
     private var backendReachedPlayingGeneration = Long.MIN_VALUE
     private var fallbackAttemptedGeneration = Long.MIN_VALUE
-    private var activeResolvedSource: RawResolvedAudioSource? = null
+    private var activeResolvedSource = null as RawResolvedAudioSource?
     private var activeStartPositionMs = 0L
     private var activeAutoPlay = true
 
@@ -304,17 +311,67 @@ object MusicSourcePlaybackController {
         }
     }
 
-    fun next() {
+    fun calculateNextIndex(
+        queue: List<RawSourceMediaItem>,
+        currentIndex: Int,
+        automatic: Boolean = false,
+    ): Int {
+        if (queue.isEmpty()) return -1
+        if (queue.size == 1) return 0
+
+        val isShuffle = AppPreferences.Player.isShuffle
+        val playMode = AppPreferences.Player.playMode
+
+        if (playMode == PlayMode.REPEAT_ONE && automatic) {
+            return currentIndex
+        }
+
+        if (isShuffle || playMode == PlayMode.SHUFFLE_ALL || playMode == PlayMode.SHUFFLE_ONCE) {
+            val planned = plannedNextShuffleIndex
+            if (planned != null && planned in queue.indices && planned != currentIndex) {
+                return planned
+            }
+            return pickNextShuffleIndex(queue.size, currentIndex)
+        }
+
+        return (currentIndex + 1) % queue.size
+    }
+
+    private fun pickNextShuffleIndex(queueSize: Int, currentIndex: Int): Int {
+        if (queueSize <= 1) return 0
+        val candidates = (0 until queueSize).filter { it != currentIndex }
+        return if (candidates.isNotEmpty()) candidates.random() else 0
+    }
+
+    fun next(automatic: Boolean = false) {
         val state = mutableSnapshot.value
-        if (state.canGoNext) startQueueIndex(state.queue, state.currentIndex + 1)
+        val targetIndex = calculateNextIndex(state.queue, state.currentIndex, automatic)
+        plannedNextShuffleIndex = null
+        if (targetIndex in state.queue.indices) {
+            startQueueIndex(state.queue, targetIndex)
+        }
     }
 
     fun previous() {
         val state = mutableSnapshot.value
         if (state.positionMs > 5_000L && prepared) {
             seekTo(0L)
-        } else if (state.currentIndex > 0) {
-            startQueueIndex(state.queue, state.currentIndex - 1)
+            return
+        }
+        while (playHistory.isNotEmpty()) {
+            val prevIndex = playHistory.removeLast()
+            if (prevIndex in state.queue.indices && prevIndex != state.currentIndex) {
+                plannedNextShuffleIndex = null
+                startQueueIndex(state.queue, prevIndex)
+                return
+            }
+        }
+        val prevIndex = if (state.queue.isNotEmpty()) {
+            (state.currentIndex - 1 + state.queue.size) % state.queue.size
+        } else -1
+        if (prevIndex in state.queue.indices) {
+            plannedNextShuffleIndex = null
+            startQueueIndex(state.queue, prevIndex)
         } else if (prepared) {
             seekTo(0L)
         }
@@ -349,6 +406,11 @@ object MusicSourcePlaybackController {
         mediaFallbackJob = null
         cacheJob?.cancel()
         cacheJob = null
+        preloadJob?.cancel()
+        preloadJob = null
+        preloadedResolvedMap.clear()
+        plannedNextShuffleIndex = null
+        playHistory.clear()
         prepared = false
         completionHandledGeneration = Long.MIN_VALUE
         activeResolvedSource = null
@@ -375,6 +437,17 @@ object MusicSourcePlaybackController {
         if (index !in queue.indices) return
         val item = queue[index]
 
+        val currentState = mutableSnapshot.value
+        if (currentState.currentIndex in currentState.queue.indices && currentState.currentIndex != index) {
+            if (playHistory.peekLast() != currentState.currentIndex) {
+                playHistory.addLast(currentState.currentIndex)
+                if (playHistory.size > MAX_HISTORY_SIZE) {
+                    playHistory.removeFirst()
+                }
+            }
+        }
+        plannedNextShuffleIndex = null
+
         val generation = generations.incrementAndGet()
         resolveJob?.cancel()
         mediaFallbackJob?.cancel()
@@ -388,6 +461,28 @@ object MusicSourcePlaybackController {
         activeResolvedSource = null
         backend?.stop()
         releaseMediaPlayer(abandonFocus = false)
+        val preloadedSource = preloadedResolvedMap.remove(item.stableIdentity)
+        if (preloadedSource != null) {
+            AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_HIT title=${item.title} quality=${preloadedSource.quality}")
+            mutableSnapshot.value = MusicSourcePlaybackSnapshot(
+                queue = queue,
+                currentIndex = index,
+                currentItem = item,
+                status = MusicSourcePlaybackStatus.Preparing,
+                requestedQuality = preloadedSource.quality,
+                resolvedQuality = preloadedSource.quality,
+                durationMs = item.durationMs,
+            )
+            prepareResolved(
+                generation = generation,
+                item = item,
+                source = preloadedSource,
+                startPositionMs = startPositionMs.coerceAtLeast(0L),
+                autoPlay = autoPlay,
+            )
+            return
+        }
+
         val requestedQuality = MusicSourceAudioResolver.preferredQuality(
             item = item,
             preferred = requestedQualityOverride ?: loadPreferredQuality(),
@@ -418,6 +513,55 @@ object MusicSourcePlaybackController {
             } catch (error: Throwable) {
                 if (generation != generations.get()) return@launch
                 fail(error.message.orEmpty().ifBlank { "在线播放失败" }.take(1_024))
+            }
+        }
+    }
+
+    private fun schedulePreloadNext() {
+        preloadJob?.cancel()
+        val context = applicationContext ?: return
+        val state = mutableSnapshot.value
+        val queue = state.queue
+        if (queue.isEmpty() || state.currentIndex !in queue.indices) return
+
+        val isShuffle = AppPreferences.Player.isShuffle
+        val playMode = AppPreferences.Player.playMode
+
+        if (playMode == PlayMode.REPEAT_ONE) {
+            // 单曲循环无需跨曲目预加载
+            return
+        }
+
+        val nextIndex = if (isShuffle || playMode == PlayMode.SHUFFLE_ALL || playMode == PlayMode.SHUFFLE_ONCE) {
+            val next = pickNextShuffleIndex(queue.size, state.currentIndex)
+            plannedNextShuffleIndex = next
+            next
+        } else {
+            plannedNextShuffleIndex = null
+            if (queue.size > 1) (state.currentIndex + 1) % queue.size else -1
+        }
+
+        if (nextIndex !in queue.indices || nextIndex == state.currentIndex) return
+        val nextItem = queue[nextIndex]
+
+        preloadJob = scope.launch(Dispatchers.IO) {
+            delay(500L) // 缩短起播后等待延迟（由2000ms降至500ms），让下一首更早进入预解析
+            if (!isActive) return@launch
+            try {
+                val preferredQuality = MusicSourceAudioResolver.preferredQuality(
+                    item = nextItem,
+                    preferred = loadPreferredQuality(),
+                )
+                val resolved = preloadedResolvedMap[nextItem.stableIdentity]
+                    ?: MusicSourceAudioResolver.resolve(context, nextItem, preferredQuality).also {
+                        preloadedResolvedMap[nextItem.stableIdentity] = it
+                    }
+                AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_RESOLVED nextTitle=${nextItem.title} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)}")
+                // 轻量化预加载：仅提前寻源直链并缓存，不发起整首歌曲的全量下载阻塞网络带宽
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Throwable) {
+                AppLogger.w(TAG, "预加载下一首【${nextItem.title}】失败: ${e.message}")
             }
         }
     }
@@ -609,6 +753,7 @@ object MusicSourcePlaybackController {
                     bufferedPercent = 100,
                     error = "",
                 )
+                schedulePreloadNext()
             }
             MusicSourceBackendStatus.Paused -> {
                 prepared = true
@@ -625,7 +770,7 @@ object MusicSourcePlaybackController {
                 completionHandledGeneration = generation
                 prepared = false
                 if (state.canGoNext) {
-                    startQueueIndex(state.queue, state.currentIndex + 1)
+                    next(automatic = true)
                 } else {
                     mutableSnapshot.value = state.copy(
                         status = MusicSourcePlaybackStatus.Completed,
@@ -792,6 +937,7 @@ object MusicSourcePlaybackController {
                             "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_PLAYING generation=$generation"
                         )
                         startMediaPlayerProgressUpdates(generation)
+                        schedulePreloadNext()
                     }
                     .onFailure { error -> fail(error.message ?: "无法开始在线播放") }
             }
@@ -807,7 +953,7 @@ object MusicSourcePlaybackController {
                 val state = mutableSnapshot.value
                 prepared = false
                 if (state.canGoNext) {
-                    startQueueIndex(state.queue, state.currentIndex + 1)
+                    next(automatic = true)
                 } else {
                     mutableSnapshot.value = state.copy(
                         status = MusicSourcePlaybackStatus.Completed,

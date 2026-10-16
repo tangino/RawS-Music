@@ -161,9 +161,11 @@ object CloudPlaylistJson {
             // ⚠️ 这是**本地文件路径**，只在同设备还原时有用；跨设备还原时接收端会重新取封面。
             // 契约允许这里是空串，所以没有封面时填 ""。
             albumArtUri = song.albumArtPath,
-            // RawS 的歌单行里没有 http 封面地址（见 P2-05b：不能把 URL 塞进 albumArtPath），
-            // 因此恒为空串 —— 这是"没有该字段"而不是"忘了填"。
-            coverUrl = "",
+            coverUrl = if (online) {
+                song.albumArtPath.takeIf {
+                    it.startsWith("http://", true) || it.startsWith("https://", true)
+                }.orEmpty()
+            } else "",
             isOnline = online,
             sourcePlatform = if (online) platformIdOfPath(song.path)?.let(::uppercaseOrEmpty) ?: "" else "",
             isFavorite = isFavorite,
@@ -294,6 +296,9 @@ object CloudPlaylistJson {
      */
     fun toOnlineSongRow(song: CloudSongDto): UserPlaylistSong? {
         val parts = onlinePartsOf(song.path) ?: return null
+        val cover = song.coverUrl.ifBlank { song.albumArtUri }.takeIf {
+            it.startsWith("http://", true) || it.startsWith("https://", true)
+        }.orEmpty()
         return onlineUserPlaylistSong(
             platformId = parts.first,
             songId = parts.second,
@@ -301,6 +306,7 @@ object CloudPlaylistJson {
             artist = song.artist,
             album = song.album,
             durationMs = song.durationMs,
+            albumArtUrl = cover,
         )
     }
 

@@ -127,6 +127,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
             )
         }
         val ownsCurrent = ownsCurrentSong()
+        val hadActiveRequest = activeRequest != null
         activeRequest = null
         pendingSeekMs = 0L
         pendingSeekApplied = false
@@ -136,7 +137,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         request?.let {
             MusicSourceResolvedStreamRegistry.remove(it.source.url, it.generation)
         }
-        if (ownsCurrent) {
+        if (ownsCurrent || hadActiveRequest) {
             controller.stop()
         }
         mutableSnapshot.value = MusicSourceBackendSnapshot()
@@ -264,6 +265,11 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         val completedPath = completionConsumePath ?: return false
         if (controller.currentSong.value?.path != completedPath) return false
         completionConsumePath = null
+        val queue = controller.queue.value
+        val hasContinuation = queue.songs.size > 1 || controller.playMode.value == com.rawsmusic.core.common.model.PlayMode.REPEAT_ONE
+        if (hasContinuation) {
+            return false
+        }
         return true
     }
 

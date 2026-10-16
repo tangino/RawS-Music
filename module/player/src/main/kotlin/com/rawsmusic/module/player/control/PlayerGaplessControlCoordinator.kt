@@ -55,13 +55,18 @@ internal class PlayerGaplessControlCoordinator(
                 peekShuffleIndex = callbacks.peekShuffleIndex,
             )
             val nextSong = queue.songs.getOrNull(nextIndex)
-            if (nextSong == null || nextSong.path.isBlank()) {
+            if (nextSong == null || nextSong.path.isBlank() || com.rawsmusic.core.common.model.isOnlineSongKey(nextSong.path)) {
                 // A mode change can remove the previously planned next item (for example,
                 // sequential playback at the end of the list). Clear the native pending slot;
                 // leaving the old path alive would make the renderer crossfade into a song that
                 // no longer belongs to the current Reference-style cursor.
+                // 虚拟在线音源（online://）不支持作为裸文件预加载，避免向底层 FFmpeg 喂入虚拟协议导致报错
                 callbacks.applyPlan(GaplessPlaybackPlan(null, false))
-                callbacks.logInfo("Gapless: no next item for mode=${callbacks.currentPlayMode()}")
+                if (nextSong != null && com.rawsmusic.core.common.model.isOnlineSongKey(nextSong.path)) {
+                    callbacks.logInfo("Gapless: skip virtual online path for ${nextSong.title}")
+                } else {
+                    callbacks.logInfo("Gapless: no next item for mode=${callbacks.currentPlayMode()}")
+                }
                 return
             }
 

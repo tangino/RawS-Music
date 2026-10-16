@@ -196,10 +196,11 @@ object CloudSourceSyncService {
                     } else {
                         installed++
                     }
-                    // installFromScript 对新装的一律给 enabled = true，
-                    // 云端记录「已停用」的要补一次，否则还原后会被意外启用。
                     if (source.enabled != isEnabled) {
                         LxSourcePluginStore.setEnabled(source.id, isEnabled)
+                    }
+                    if (entry.isPrimarySource && isEnabled) {
+                        LxSourcePluginStore.setPrimary(source.id)
                     }
                 }
             }

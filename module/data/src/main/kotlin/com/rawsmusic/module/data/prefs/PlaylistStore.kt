@@ -12,6 +12,7 @@ import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.model.toUserPlaylistSong
+import com.rawsmusic.core.common.utils.SongMatcher
 import com.rawsmusic.module.data.db.MusicDatabase
 import com.rawsmusic.module.data.db.entity.UserPlaylistEntity
 import com.rawsmusic.module.data.db.entity.UserPlaylistSongEntity
@@ -252,27 +253,55 @@ class PlaylistStore private constructor(private val context: Context) {
 
     /**
      * 一个歌单里的**在线曲目**（P2-05b）。
-     *
-     * 为什么不把它们塞进 [resolveSongs]：那个函数返回 `List<AudioFile>`，而在线的曲目既不在曲库、
-     * 也没有本地文件，它的第三层回退 `File(it.path).exists()` **必然落空** → 在线曲会被静默丢弃。
-     * 改它的返回类型会波及全仓 16 处调用，回归面太大，所以这里给一个**并列的**访问器，
-     * 由调用方决定怎么合并两条路。
      */
     fun onlineSongsOf(playlist: UserPlaylist?): List<UserPlaylistSong> =
         playlist?.songs?.filter { it.isOnlineEntry() }.orEmpty()
 
     /**
-     * 歌单的合并视图：本地曲（可直接交给播放器 / 虚拟列表）与在线曲（必须走在线解析层）。
+     * 混合歌单的曲目智能解析：保留歌单原本的排列顺序。
      *
-     * ⚠️ **歌单详情页应当用这个而不是 [resolveSongs]**，否则在线曲目根本不显示。
+     * 特征（规则 3）：当在线歌曲在本地曲库中存在同名、同歌手且时长基本一致（误差不超过 5 秒）的本地歌曲时，
+     * 优先将其解析为本地音源（同时保留在线网络封面），实现本地音源优先播放。
+     */
+    fun resolveOrderedPlaylistSongs(
+        playlist: UserPlaylist?,
+        librarySongs: List<AudioFile>,
+    ): List<AudioFile> {
+        playlist ?: return emptyList()
+        val byIdentity = librarySongs.associateBy { it.playlistIdentityKey() }
+        val byPath = buildMap<String, AudioFile> {
+            librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
+        }
+
+        return playlist.songs.mapNotNull { stored ->
+            if (stored.isOnlineEntry()) {
+                val onlineAudioFile = stored.toAudioFile()
+                // 优先在本地曲库中匹配同名、同歌手、时长误差不超过 5 秒的本地音源
+                val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs)
+                matchedLocal ?: onlineAudioFile
+            } else {
+                byIdentity[stored.key]
+                    ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
+                    ?: stored.toAudioFile().takeIf { File(it.path).exists() }
+            }
+        }
+    }
+
+    /**
+     * 歌单的合并视图：本地曲（包含已匹配到本地的在线音源）与在线曲。
      */
     fun playlistEntries(
         playlist: UserPlaylist?,
         librarySongs: List<AudioFile>,
-    ): PlaylistEntries = PlaylistEntries(
-        local = resolveSongs(playlist, librarySongs),
-        online = onlineSongsOf(playlist),
-    )
+    ): PlaylistEntries {
+        val resolved = resolveOrderedPlaylistSongs(playlist, librarySongs)
+        val (local, online) = resolved.partition { !it.path.startsWith("online://") }
+        val onlineRows = playlist?.songs?.filter { it.isOnlineEntry() }.orEmpty()
+        return PlaylistEntries(
+            local = local,
+            online = onlineRows,
+        )
+    }
 
     fun getPlaylistCoverUrl(playlistId: String): String? =
         AppPreferences.storage.decodeString("playlist_cover_url_$playlistId")
@@ -348,6 +377,7 @@ class PlaylistStore private constructor(private val context: Context) {
 
             val importedSongs = if (overwrite) incoming else (existing.orEmptySongs() + incoming)
             val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
+                ?: incoming.firstOrNull { it.albumArtPath.startsWith("http://", true) || it.albumArtPath.startsWith("https://", true) }?.albumArtPath
             val imported = UserPlaylist(
                 id = existing?.id ?: "playlist-${UUID.randomUUID()}",
                 name = existing?.name ?: baseName,

@@ -2188,13 +2188,28 @@ private fun StandardTransportButtons(
     ) {
         PlayerTransportIcon(iconRes = playModeIconRes, size = 40.dp * controlScale, iconSize = 30.dp * controlScale, tint = tone.tertiary, onClick = onPlayMode)
         PlayerTransportIcon(iconRes = previousIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onPrevious)
-        PlayerTransportIcon(
-            iconRes = if (isPlaying) pauseIconRes else playIconRes,
-            size = 56.dp * controlScale,
-            iconSize = 42.dp * controlScale,
-            tint = tone.icon,
-            onClick = onPlayPause
-        )
+        val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
+        val isOnlineBusy = onlineSnapshot.isBusy
+        if (isOnlineBusy) {
+            Box(
+                modifier = Modifier.size(56.dp * controlScale),
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(28.dp * controlScale),
+                    strokeWidth = 2.5.dp * controlScale,
+                    color = tone.icon,
+                )
+            }
+        } else {
+            PlayerTransportIcon(
+                iconRes = if (isPlaying) pauseIconRes else playIconRes,
+                size = 56.dp * controlScale,
+                iconSize = 42.dp * controlScale,
+                tint = tone.icon,
+                onClick = onPlayPause
+            )
+        }
         PlayerTransportIcon(iconRes = nextIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onNext)
         PlayerQueuePlaceholder(size = 40.dp * controlScale, tint = if (queueVisible) tone.icon else tone.tertiary, selected = queueVisible, onClick = onQueuePlaceholder)
     }

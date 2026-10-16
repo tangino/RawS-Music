@@ -173,10 +173,10 @@ object OnlinePlaybackMatcher {
             return false
         }
 
-        // 两者都有有效时长（>5 秒）时，误差不得超过 5 秒
+        // 两者都有有效时长（>5 秒）时，时长必须与之前返回的严格一致（允许误差2秒左右，即 <= 2500ms）
         if (targetDurationMs > 5000L && candidateDurationMs > 5000L) {
             val diffMs = kotlin.math.abs(targetDurationMs - candidateDurationMs)
-            if (diffMs > 5000L) {
+            if (diffMs > 2500L) {
                 return false
             }
         }
@@ -208,8 +208,8 @@ object OnlinePlaybackMatcher {
         if (targetDurationMs > 5000L && candidateDurationMs > 5000L) {
             val diffMs = kotlin.math.abs(targetDurationMs - candidateDurationMs)
             if (diffMs <= 1000L) score += 20
-            else if (diffMs <= 3000L) score += 12
-            else if (diffMs <= 5000L) score += 6
+            else if (diffMs <= 2500L) score += 12
+            else score -= 30
         } else {
             score += 10
         }

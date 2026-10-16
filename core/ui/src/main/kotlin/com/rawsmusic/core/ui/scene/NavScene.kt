@@ -62,7 +62,9 @@ enum class NavScene(
     HDR_SETTINGS(53, "hdr_settings", "HDR 显示", "display_settings"),
     ONLINE_MUSIC(54, "online_music", "在线音乐", "public"),
     ONLINE_PLAYLIST_DETAIL(55, "online_playlist_detail", "在线歌单详情", "queue_music"),
-    ONLINE_ARTIST_DETAIL(56, "online_artist_detail", "在线歌手详情", "person");
+    ONLINE_ARTIST_DETAIL(56, "online_artist_detail", "在线歌手详情", "person"),
+    CURRENT_PLAYLIST(57, "current_playlist", "当前播放歌单", "queue_music"),
+    PREVIOUS_PLAYLIST(58, "previous_playlist", "上次播放歌单", "history");
 
     companion object {
         private val idMap = entries.associateBy { it.id }
