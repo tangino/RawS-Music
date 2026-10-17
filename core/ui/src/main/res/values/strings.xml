@@ -978,4 +978,17 @@
     <string name="songs_action_delete_confirm">删除</string>
     <string name="songs_selection_selected_count">已选择 %1$d 首</string>
     <string name="songs_action_batch_manage">批量管理</string>
+    <string name="ui_scale_title">界面与车机缩放</string>
+    <string name="ui_scale_subtitle">智能自适应车机低 DPI 高分屏（如 2.5K@160DPI），或手动调节 UI 大小与触控面积</string>
+    <string name="ui_scale_auto">智能自适应 (推荐)</string>
+    <string name="ui_scale_080">紧凑 (0.8x)</string>
+    <string name="ui_scale_090">轻巧 (0.9x)</string>
+    <string name="ui_scale_100">标准 (1.0x 原生)</string>
+    <string name="ui_scale_110">舒适 (1.1x)</string>
+    <string name="ui_scale_125">适中 (1.25x)</string>
+    <string name="ui_scale_150">大号 (1.5x)</string>
+    <string name="ui_scale_175">特大 (1.75x 推荐 2K/2.5K 车机)</string>
+    <string name="ui_scale_200">超大 (2.0x)</string>
+    <string name="ui_scale_225">巨大 (2.25x 推荐 4K 车机)</string>
+    <string name="ui_scale_status_format">原始: %1$d DPI (%2$.1fx) · 生效: %3$d DPI (%4$.2fx) · %5$d × %6$d dp</string>
 </resources>

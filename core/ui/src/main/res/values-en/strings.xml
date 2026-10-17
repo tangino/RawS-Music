@@ -502,4 +502,17 @@
     <string name="songs_action_delete_confirm">Delete</string>
     <string name="songs_selection_selected_count">%1$d selected</string>
     <string name="songs_action_batch_manage">Batch manage</string>
+    <string name="ui_scale_title">UI &amp; Display Scale</string>
+    <string name="ui_scale_subtitle">Auto-adapt low-DPI high-res car displays (e.g. 2.5K@160DPI) or customize UI scaling</string>
+    <string name="ui_scale_auto">Auto Adapt (Recommended)</string>
+    <string name="ui_scale_080">Compact (0.8x)</string>
+    <string name="ui_scale_090">Light (0.9x)</string>
+    <string name="ui_scale_100">Standard (1.0x)</string>
+    <string name="ui_scale_110">Comfort (1.1x)</string>
+    <string name="ui_scale_125">Medium (1.25x)</string>
+    <string name="ui_scale_150">Large (1.5x)</string>
+    <string name="ui_scale_175">Extra Large (1.75x - 2K Car)</string>
+    <string name="ui_scale_200">Huge (2.0x)</string>
+    <string name="ui_scale_225">Ultra (2.25x - 4K Car)</string>
+    <string name="ui_scale_status_format">Raw: %1$d DPI (%2$.1fx) · Effective: %3$d DPI (%4$.2fx) · %5$d × %6$d dp</string>
 </resources>

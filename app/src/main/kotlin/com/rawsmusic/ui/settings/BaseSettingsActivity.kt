@@ -80,6 +80,15 @@ abstract class BaseSettingsActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val savedUiScaleMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.uiScaleMode
+        val rawMetrics = com.rawsmusic.core.common.utils.UiScaleHelper.getRawDisplayMetrics(this)
+        val uiScaleFactor = com.rawsmusic.core.common.utils.UiScaleHelper.calculateScaleFactor(
+            savedUiScaleMode,
+            rawMetrics.widthPixels,
+            rawMetrics.heightPixels,
+            rawMetrics.densityDpi
+        )
+        com.rawsmusic.core.common.utils.UiScaleHelper.applyActivityDensity(this, uiScaleFactor)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER
         super.onCreate(savedInstanceState)
         // LocaleManager recreates settings Activities on Android 13+. Establish edge-to-edge
@@ -97,6 +106,19 @@ abstract class BaseSettingsActivity : ComponentActivity() {
             isAppearanceLightStatusBars = !isDark
             isAppearanceLightNavigationBars = !isDark
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val savedUiScaleMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.uiScaleMode
+        val rawMetrics = com.rawsmusic.core.common.utils.UiScaleHelper.getRawDisplayMetrics(this)
+        val uiScaleFactor = com.rawsmusic.core.common.utils.UiScaleHelper.calculateScaleFactor(
+            savedUiScaleMode,
+            rawMetrics.widthPixels,
+            rawMetrics.heightPixels,
+            rawMetrics.densityDpi
+        )
+        com.rawsmusic.core.common.utils.UiScaleHelper.applyActivityDensity(this, uiScaleFactor)
     }
 
     /** Android 11+ hard gate before opening a system file/document picker. */

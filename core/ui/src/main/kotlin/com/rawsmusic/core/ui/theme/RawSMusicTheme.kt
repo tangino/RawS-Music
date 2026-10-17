@@ -1,12 +1,16 @@
 package com.rawsmusic.core.ui.theme
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Typography
+import androidx.compose.ui.platform.LocalConfiguration
+import com.rawsmusic.core.common.utils.UiScaleHelper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -145,68 +149,75 @@ fun RawSMusicTheme(
         ColorThemeMode.fromValue(UIPreferences.colorThemeMode)
     }
 
-    if (colorThemeMode == ColorThemeMode.MIUIX) {
-        val controller = remember(
-            activeThemeMode,
-            accentColor,
-            isDark,
-            runtimeVersion,
-            key
-        ) {
-            ThemeController(
-                colorSchemeMode = ColorSchemeMode.System,
-                keyColor = accentColor,
-                isDark = isDark
-            )
-        }
+    val currentContext = LocalContext.current
+    val rawMetrics = remember(currentContext) {
+        UiScaleHelper.getRawDisplayMetrics(currentContext)
+    }
+    val uiScaleMode = remember(runtimeVersion) {
+        AppPreferences.UI.uiScaleMode
+    }
+    val scaleFactor = remember(uiScaleMode, rawMetrics.widthPixels, rawMetrics.heightPixels, rawMetrics.densityDpi) {
+        UiScaleHelper.calculateScaleFactor(
+            mode = uiScaleMode,
+            widthPixels = rawMetrics.widthPixels,
+            heightPixels = rawMetrics.heightPixels,
+            systemDensityDpi = rawMetrics.densityDpi
+        )
+    }
 
-        MiuixTheme(
-            controller = controller,
-            textStyles = miuixTextStyles
-        ) {
-            val cs = MiuixTheme.colorScheme
-            val pageBg = cs.background
-            val cardBg = pageBg.blendForRawTheme(cs.primary, if (isDark) 0.12f else 0.06f)
-            PageColors.updateFromPalette(
-                pageBg = pageBg,
-                cardBg = cardBg,
-                textPrimary = cs.onBackground,
-                textSecondary = cs.onSurfaceVariantSummary,
-                textMeta = cs.onSurfaceVariantSummary.copy(alpha = if (isDark) 0.72f else 0.68f),
-                accent = cs.primary,
-                divider = cs.onSurfaceVariantSummary.copy(alpha = if (isDark) 0.20f else 0.14f)
-            )
-            RawSystemBars(background = pageBg, isDark = isDark)
-            GlobalFontScope(globalFontScale, materialTypography, content)
+    LaunchedEffect(scaleFactor) {
+        (currentContext as? Activity)?.let { act ->
+            UiScaleHelper.applyActivityDensity(act, scaleFactor)
         }
-    } else {
-        RawMonetTheme(
-            isDark = isDark,
-            colorThemeMode = colorThemeMode,
-            forceDarkPalette = albumColorThemeActive,
-            applySystemBars = true
-        ) {
-            val monet = RawMonet
+    }
 
-            /**
-             * 关键点：
-             *
-             * MiuixTheme 不会自动读取 MaterialTheme.colorScheme。
-             * 所以必须把 Monet accent 喂给 MiuixTheme 的 keyColor。
-             *
-             * 这样项目里大量 MiuixTheme.colorScheme.primary / surfaceContainer
-             * 才会跟着 Monet 变化。
-             */
+    val baseDensity = LocalDensity.current
+    val effectiveDensity = remember(rawMetrics.density, scaleFactor, baseDensity.fontScale) {
+        Density(
+            density = rawMetrics.density * scaleFactor,
+            fontScale = baseDensity.fontScale
+        )
+    }
+
+    val systemConfig = LocalConfiguration.current
+    val updatedConfig = remember(
+        systemConfig.orientation,
+        rawMetrics.widthPixels,
+        rawMetrics.heightPixels,
+        rawMetrics.densityDpi,
+        scaleFactor
+    ) {
+        val targetDensityDpi = (rawMetrics.densityDpi * scaleFactor).toInt()
+        val targetDensity = rawMetrics.density * scaleFactor
+        val isPortrait = systemConfig.orientation == Configuration.ORIENTATION_PORTRAIT
+        val wPx = if (isPortrait) minOf(rawMetrics.widthPixels, rawMetrics.heightPixels) else maxOf(rawMetrics.widthPixels, rawMetrics.heightPixels)
+        val hPx = if (isPortrait) maxOf(rawMetrics.widthPixels, rawMetrics.heightPixels) else minOf(rawMetrics.widthPixels, rawMetrics.heightPixels)
+
+        Configuration(systemConfig).apply {
+            densityDpi = targetDensityDpi
+            if (targetDensity > 0f) {
+                screenWidthDp = (wPx / targetDensity).toInt()
+                screenHeightDp = (hPx / targetDensity).toInt()
+                smallestScreenWidthDp = minOf(screenWidthDp, screenHeightDp)
+            }
+        }
+    }
+
+    CompositionLocalProvider(
+        LocalDensity provides effectiveDensity,
+        LocalConfiguration provides updatedConfig,
+    ) {
+        if (colorThemeMode == ColorThemeMode.MIUIX) {
             val controller = remember(
+                activeThemeMode,
+                accentColor,
                 isDark,
-                monet.accent,
-                colorThemeMode,
                 runtimeVersion,
                 key
             ) {
                 ThemeController(
-                    colorSchemeMode = ColorSchemeMode.MonetSystem,
-                    keyColor = monet.accent,
+                    colorSchemeMode = ColorSchemeMode.System,
+                    keyColor = accentColor,
                     isDark = isDark
                 )
             }
@@ -215,16 +226,59 @@ fun RawSMusicTheme(
                 controller = controller,
                 textStyles = miuixTextStyles
             ) {
+                val cs = MiuixTheme.colorScheme
+                val pageBg = cs.background
+                val cardBg = pageBg.blendForRawTheme(cs.primary, if (isDark) 0.12f else 0.06f)
                 PageColors.updateFromPalette(
-                    pageBg = monet.background,
-                    cardBg = monet.card,
-                    textPrimary = monet.textPrimary,
-                    textSecondary = monet.textSecondary,
-                    textMeta = monet.textSecondary.copy(alpha = if (monet.isDark) 0.72f else 0.68f),
-                    accent = monet.accent,
-                    divider = monet.divider
+                    pageBg = pageBg,
+                    cardBg = cardBg,
+                    textPrimary = cs.onBackground,
+                    textSecondary = cs.onSurfaceVariantSummary,
+                    textMeta = cs.onSurfaceVariantSummary.copy(alpha = if (isDark) 0.72f else 0.68f),
+                    accent = cs.primary,
+                    divider = cs.onSurfaceVariantSummary.copy(alpha = if (isDark) 0.20f else 0.14f)
                 )
+                RawSystemBars(background = pageBg, isDark = isDark)
                 GlobalFontScope(globalFontScale, materialTypography, content)
+            }
+        } else {
+            RawMonetTheme(
+                isDark = isDark,
+                colorThemeMode = colorThemeMode,
+                forceDarkPalette = albumColorThemeActive,
+                applySystemBars = true
+            ) {
+                val monet = RawMonet
+
+                val controller = remember(
+                    isDark,
+                    monet.accent,
+                    colorThemeMode,
+                    runtimeVersion,
+                    key
+                ) {
+                    ThemeController(
+                        colorSchemeMode = ColorSchemeMode.MonetSystem,
+                        keyColor = monet.accent,
+                        isDark = isDark
+                    )
+                }
+
+                MiuixTheme(
+                    controller = controller,
+                    textStyles = miuixTextStyles
+                ) {
+                    PageColors.updateFromPalette(
+                        pageBg = monet.background,
+                        cardBg = monet.card,
+                        textPrimary = monet.textPrimary,
+                        textSecondary = monet.textSecondary,
+                        textMeta = monet.textSecondary.copy(alpha = if (monet.isDark) 0.72f else 0.68f),
+                        accent = monet.accent,
+                        divider = monet.divider
+                    )
+                    GlobalFontScope(globalFontScale, materialTypography, content)
+                }
             }
         }
     }

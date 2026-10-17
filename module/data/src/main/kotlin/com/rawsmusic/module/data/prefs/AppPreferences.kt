@@ -608,6 +608,10 @@ object AppPreferences {
     }
 
     object UI {
+        var uiScaleMode: String
+            get() = kv.decodeString("ui_scale_mode", "auto") ?: "auto"
+            set(value) { kv.encode("ui_scale_mode", value) }
+
         var themeMode: Int
             get() = kv.decodeInt("ui_theme_mode", 1)  // 默认亮色主题
             set(value) { kv.encode("ui_theme_mode", value) }

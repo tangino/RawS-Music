@@ -665,6 +665,15 @@ class MainActivity : ComponentActivity() {
         if (playerController == null) {
             ensureRuntimeController("main_activity_on_create")
         }
+        val savedUiScaleMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.uiScaleMode
+        val rawMetrics = com.rawsmusic.core.common.utils.UiScaleHelper.getRawDisplayMetrics(this)
+        val uiScaleFactor = com.rawsmusic.core.common.utils.UiScaleHelper.calculateScaleFactor(
+            savedUiScaleMode,
+            rawMetrics.widthPixels,
+            rawMetrics.heightPixels,
+            rawMetrics.densityDpi
+        )
+        com.rawsmusic.core.common.utils.UiScaleHelper.applyActivityDensity(this, uiScaleFactor)
         ThemeManager.applyTheme(ThemeManager.getCurrentTheme())
         super.onCreate(savedInstanceState)
         // Phones and tablets reflow this same Activity while respecting the system rotation lock.
@@ -877,6 +886,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        val savedUiScaleMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.uiScaleMode
+        val rawMetrics = com.rawsmusic.core.common.utils.UiScaleHelper.getRawDisplayMetrics(this)
+        val uiScaleFactor = com.rawsmusic.core.common.utils.UiScaleHelper.calculateScaleFactor(
+            savedUiScaleMode,
+            rawMetrics.widthPixels,
+            rawMetrics.heightPixels,
+            rawMetrics.densityDpi
+        )
+        com.rawsmusic.core.common.utils.UiScaleHelper.applyActivityDensity(this, uiScaleFactor)
         if (!::playerSceneController.isInitialized) return
         val currentScene = playerSceneController.currentScene
         if (currentScene == PlayerSceneController.Scene.PLAYER ||

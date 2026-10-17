@@ -14,6 +14,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.preference.WindowSpinnerPreference
+import top.yukonga.miuix.kmp.basic.DropdownItem
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import com.rawsmusic.core.common.utils.UiScaleHelper
+import com.rawsmusic.module.data.prefs.AppPreferences
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -168,6 +175,81 @@ fun LiquidGlassAppearanceScreen(
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
+        }
+
+        SettingsCard {
+            SectionHeader(stringResource(R.string.ui_scale_title))
+            Text(
+                text = stringResource(R.string.ui_scale_subtitle),
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontFamily = fontFamily
+            )
+            Spacer(Modifier.height(8.dp))
+            val rawMetrics = remember(context) { UiScaleHelper.getRawDisplayMetrics(context) }
+            val effectiveDensity = LocalDensity.current
+            val currentConfiguration = LocalConfiguration.current
+            val targetDensityDpi = (effectiveDensity.density * 160).roundToInt()
+            val scaleStatusText = remember(rawMetrics, effectiveDensity, currentConfiguration) {
+                context.getString(
+                    R.string.ui_scale_status_format,
+                    rawMetrics.densityDpi,
+                    rawMetrics.density,
+                    targetDensityDpi,
+                    effectiveDensity.density,
+                    currentConfiguration.screenWidthDp,
+                    currentConfiguration.screenHeightDp
+                )
+            }
+            Text(
+                text = scaleStatusText,
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.primary,
+                fontFamily = fontFamily
+            )
+            Spacer(Modifier.height(12.dp))
+            val scaleModes = listOf(
+                UiScaleHelper.MODE_AUTO to stringResource(R.string.ui_scale_auto),
+                UiScaleHelper.MODE_080 to stringResource(R.string.ui_scale_080),
+                UiScaleHelper.MODE_090 to stringResource(R.string.ui_scale_090),
+                UiScaleHelper.MODE_100 to stringResource(R.string.ui_scale_100),
+                UiScaleHelper.MODE_110 to stringResource(R.string.ui_scale_110),
+                UiScaleHelper.MODE_125 to stringResource(R.string.ui_scale_125),
+                UiScaleHelper.MODE_150 to stringResource(R.string.ui_scale_150),
+                UiScaleHelper.MODE_175 to stringResource(R.string.ui_scale_175),
+                UiScaleHelper.MODE_200 to stringResource(R.string.ui_scale_200),
+                UiScaleHelper.MODE_225 to stringResource(R.string.ui_scale_225),
+            )
+            val scaleDropdownItems = remember(scaleModes) {
+                scaleModes.map { DropdownItem(title = it.second) }
+            }
+            var currentScaleMode by remember(themeRuntimeVersion) {
+                mutableStateOf(AppPreferences.UI.uiScaleMode)
+            }
+            val selectedIndex = scaleModes.indexOfFirst { it.first == currentScaleMode }.let {
+                if (it >= 0) it else 0
+            }
+            WindowSpinnerPreference(
+                title = stringResource(R.string.ui_scale_title),
+                summary = scaleModes.getOrNull(selectedIndex)?.second ?: stringResource(R.string.ui_scale_auto),
+                items = scaleDropdownItems,
+                selectedIndex = selectedIndex,
+                onSelectedIndexChange = { index ->
+                    val newMode = scaleModes.getOrNull(index)?.first ?: UiScaleHelper.MODE_AUTO
+                    currentScaleMode = newMode
+                    AppPreferences.UI.uiScaleMode = newMode
+                    val newFactor = UiScaleHelper.calculateScaleFactor(
+                        newMode,
+                        rawMetrics.widthPixels,
+                        rawMetrics.heightPixels,
+                        rawMetrics.densityDpi
+                    )
+                    (context as? Activity)?.let {
+                        UiScaleHelper.applyActivityDensity(it, newFactor)
+                    }
+                    RawThemeRuntimeState.invalidate()
+                }
+            )
         }
 
         SettingsCard {
