@@ -843,7 +843,8 @@ internal fun ImmersivePlayerMainPage(
                         IconCircle(iconRes = playModeIconRes, size = 34.dp, tint = tone.iconSoft, onClick = onPlayMode)
                         IconCircle(iconRes = previousIconRes, size = 42.dp, tint = tone.icon, onClick = onPrevious)
                         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-                        if (onlineSnapshot.isBusy) {
+                        val isOnlineBusy = currentSong?.path?.startsWith("online://") == true && onlineSnapshot.isBusy
+                        if (isOnlineBusy) {
                             Box(modifier = Modifier.size(52.dp), contentAlignment = Alignment.Center) {
                                 androidx.compose.material3.CircularProgressIndicator(
                                     modifier = Modifier.size(26.dp),

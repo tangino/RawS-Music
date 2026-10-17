@@ -5735,6 +5735,7 @@ class PlayerController private constructor(context: Context) {
                 _playbackSourceOverride.value = null
             }
         }
+        MusicSourcePlaybackController.resetForLocalPlayback()
         val rendererSong = PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
         val playbackPath = rendererSong.path
         if (_usbExclusiveActive.value) {
@@ -6629,6 +6630,9 @@ class PlayerController private constructor(context: Context) {
         var playInternalAfterSwitch = true
         var deferUiCommitToRenderer = rendererOwnedCurrentAtRequest
         transportTransitioning = true
+        if (!com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
+            MusicSourcePlaybackController.resetForLocalPlayback()
+        }
         try {
             cancelPendingRestoreSeek(reason)
             // 清除 pending seek，确保 playInternal 不会恢复旧位置

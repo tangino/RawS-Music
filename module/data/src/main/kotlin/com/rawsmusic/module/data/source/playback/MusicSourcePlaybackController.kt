@@ -419,6 +419,32 @@ object MusicSourcePlaybackController {
         mutableSnapshot.value = MusicSourcePlaybackSnapshot()
     }
 
+    /**
+     * 当本地歌曲开始播放或切歌时调用此方法。
+     * 立即取消所有正在进行的异步网络寻源、文件缓存与预加载协程，
+     * 并将快照状态重置为 Idle（isBusy = false），阻断任何网络寻源状态对本地歌曲 UI 的污染。
+     * 注意：不调用 backend?.stop()，避免打断当前正准备起播的本地音频引擎。
+     */
+    fun resetForLocalPlayback() {
+        generations.incrementAndGet()
+        resolveJob?.cancel()
+        resolveJob = null
+        mediaFallbackJob?.cancel()
+        mediaFallbackJob = null
+        cacheJob?.cancel()
+        cacheJob = null
+        preloadJob?.cancel()
+        preloadJob = null
+        preloadedResolvedMap.clear()
+        plannedNextShuffleIndex = null
+        playHistory.clear()
+        prepared = false
+        completionHandledGeneration = Long.MIN_VALUE
+        activeResolvedSource = null
+        releaseMediaPlayer(abandonFocus = false)
+        mutableSnapshot.value = MusicSourcePlaybackSnapshot()
+    }
+
     private fun replayCurrent() {
         val state = mutableSnapshot.value
         if (state.currentIndex in state.queue.indices) {

@@ -1,6 +1,7 @@
 package com.rawsmusic.core.common.model
 
 const val FAVORITES_PLAYLIST_ID = "favorites"
+const val DISLIKED_PLAYLIST_ID = "disliked"
 
 data class UserPlaylist(
     val id: String,
@@ -11,6 +12,8 @@ data class UserPlaylist(
     val coverUrl: String? = null,
 ) {
     val isFavorites: Boolean get() = id == FAVORITES_PLAYLIST_ID
+    val isDisliked: Boolean get() = id == DISLIKED_PLAYLIST_ID
+    val isSystemPlaylist: Boolean get() = isFavorites || isDisliked
 }
 
 data class UserPlaylistSong(

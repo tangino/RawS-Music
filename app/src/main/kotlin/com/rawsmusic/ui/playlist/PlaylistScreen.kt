@@ -163,12 +163,16 @@ fun PlaylistScreen(
     // 注意伪卡的 id 是 "attitude:favorites"，`isFavorites` 判的是 id == "favorites"，所以
     // 这个 filterNot 不会误伤伪卡。过滤只影响**界面列表**，存储、WebDAV 备份与云同步都不受影响。
     val displayedPlaylists = remember(attitudePlaylists, playlists) {
-        attitudePlaylists + playlists.filterNot { it.isFavorites }
+        attitudePlaylists + playlists.filterNot { it.isSystemPlaylist }
     }
-    val attitudeSongCounts = remember(favoriteKeyCount, dislikedKeys) {
+    val dislikedKeyCount = remember(playlists, dislikedKeys) {
+        val disPlaylistSongs = playlists.firstOrNull { it.isDisliked }?.songs?.size ?: 0
+        maxOf(disPlaylistSongs, dislikedKeys.size)
+    }
+    val attitudeSongCounts = remember(favoriteKeyCount, dislikedKeyCount) {
         mapOf(
             ATTITUDE_FAVORITES_PLAYLIST_ID to favoriteKeyCount,
-            ATTITUDE_DISLIKED_PLAYLIST_ID to dislikedKeys.size,
+            ATTITUDE_DISLIKED_PLAYLIST_ID to dislikedKeyCount,
         )
     }
 
@@ -492,6 +496,7 @@ fun PlaylistScreen(
                         scope.launch {
                             try {
                                 SongAttitudeRepository.clearAllDislikes(context)
+                                playlistStore.clearDislikedPlaylist()
                                 AppNoticeBus.post(
                                     message = context.getString(R.string.playlist_attitude_cleared),
                                     icon = AppNoticeIcon.PLAYLIST,

@@ -568,6 +568,7 @@ fun PlayerMainPage(
                         Spacer(Modifier.height(if (isTabletWindow) 12.dp else 0.dp))
                         StandardTransportButtons(
                             compactHeight = !isTabletWindow,
+                            isOnline = currentSong?.path?.startsWith("online://") == true,
                             isPlaying = isPlaying,
                             previousIconRes = previousIconRes,
                             playIconRes = playIconRes,
@@ -1886,6 +1887,7 @@ private fun StandardPlayerBody(
         ) {
             StandardTransportButtons(
                 isPlaying = isPlaying,
+                isOnline = currentSong?.path?.startsWith("online://") == true,
                 previousIconRes = previousIconRes,
                 playIconRes = playIconRes,
                 pauseIconRes = pauseIconRes,
@@ -2177,6 +2179,7 @@ private fun StandardTransportButtons(
     onPlayMode: () -> Unit,
     onQueuePlaceholder: () -> Unit,
     compactHeight: Boolean = false,
+    isOnline: Boolean = false,
 ) {
     val tone = rememberStandardPlayerTone()
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -2189,7 +2192,7 @@ private fun StandardTransportButtons(
         PlayerTransportIcon(iconRes = playModeIconRes, size = 40.dp * controlScale, iconSize = 30.dp * controlScale, tint = tone.tertiary, onClick = onPlayMode)
         PlayerTransportIcon(iconRes = previousIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onPrevious)
         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-        val isOnlineBusy = onlineSnapshot.isBusy
+        val isOnlineBusy = isOnline && onlineSnapshot.isBusy
         if (isOnlineBusy) {
             Box(
                 modifier = Modifier.size(56.dp * controlScale),

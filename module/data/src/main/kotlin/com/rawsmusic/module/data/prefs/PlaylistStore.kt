@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
 import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.common.model.DISLIKED_PLAYLIST_ID
 import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
@@ -159,7 +160,7 @@ class PlaylistStore private constructor(private val context: Context) {
     }
 
     suspend fun deletePlaylist(id: String): Boolean = withDatabase {
-        if (id == FAVORITES_PLAYLIST_ID) return@withDatabase false
+        if (id == FAVORITES_PLAYLIST_ID || id == DISLIKED_PLAYLIST_ID) return@withDatabase false
         mutationMutex.withLock {
             if (_playlists.value.none { it.id == id }) return@withLock false
             dao.deletePlaylist(id)
@@ -175,7 +176,7 @@ class PlaylistStore private constructor(private val context: Context) {
             if (_playlists.value.any { it.id != id && it.name.equals(cleanName, ignoreCase = true) }) {
                 return@withLock false
             }
-            val current = _playlists.value.firstOrNull { it.id == id && !it.isFavorites }
+            val current = _playlists.value.firstOrNull { it.id == id && !it.isSystemPlaylist }
                 ?: return@withLock false
             val now = System.currentTimeMillis()
             dao.renamePlaylist(id, cleanName, now)
@@ -319,10 +320,20 @@ class PlaylistStore private constructor(private val context: Context) {
                     result
                 }
             } else {
-                byIdentity[stored.key]
+                val matched = byIdentity[stored.key]
                     ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
                     ?: stored.toAudioFile().takeIf { File(it.path).exists() }
                     ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
+                if (matched != null) {
+                    matched
+                } else {
+                    // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频）：
+                    // 具备混合歌单特征：不丢弃歌曲条目，平滑降级为可在线寻源试听的网络虚拟歌曲（保留完整元数据）
+                    val virtualId = if (stored.id > 0) stored.id.toString() else "${stored.title}_${stored.artist}".hashCode().toString()
+                    stored.toAudioFile().copy(
+                        path = "online://netease/$virtualId"
+                    )
+                }
             }
         }
     }
@@ -463,6 +474,87 @@ class PlaylistStore private constructor(private val context: Context) {
             dao.touchPlaylist(favorites.id, now)
             val updated = favorites.copy(songs = finalSongs, updatedAt = now)
             _playlists.value = _playlists.value.map { if (it.id == favorites.id) updated else it }
+        }
+    }
+
+    /**
+     * 导入/还原系统「我不喜欢的音乐」歌单，支持本地曲与在线曲共同落库。
+     */
+    suspend fun importDislikedPlaylist(
+        localSongs: List<AudioFile>,
+        onlineSongs: List<UserPlaylistSong> = emptyList(),
+        overwrite: Boolean = false,
+    ) = withDatabase {
+        mutationMutex.withLock {
+            val disliked = _playlists.value.firstOrNull { it.id == DISLIKED_PLAYLIST_ID }
+                ?: createDislikedPlaylist().also { created ->
+                    dao.upsertPlaylist(created.toEntity(_playlists.value.size))
+                    _playlists.value = _playlists.value + created
+                }
+            val existingKeys = if (overwrite) mutableSetOf() else disliked.songs.mapTo(mutableSetOf()) { it.key }
+            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
+                .filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && !overwrite) return@withLock
+
+            val finalSongs = if (overwrite) incoming else (disliked.songs + incoming)
+            val now = System.currentTimeMillis()
+            dao.deleteSongsForPlaylist(disliked.id)
+            dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(disliked.id, index) })
+            dao.touchPlaylist(disliked.id, now)
+            val updated = disliked.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == disliked.id) updated else it }
+        }
+    }
+
+    /**
+     * 将单曲添加至「我不喜欢的音乐」系统歌单。
+     */
+    suspend fun addSongToDisliked(song: AudioFile) = withDatabase {
+        mutationMutex.withLock {
+            val disliked = _playlists.value.firstOrNull { it.id == DISLIKED_PLAYLIST_ID }
+                ?: createDislikedPlaylist().also { created ->
+                    dao.upsertPlaylist(created.toEntity(_playlists.value.size))
+                    _playlists.value = _playlists.value + created
+                }
+            val songRow = song.toUserPlaylistSong()
+            if (disliked.songs.any { it.key == songRow.key }) return@withLock
+            val finalSongs = disliked.songs + songRow
+            val now = System.currentTimeMillis()
+            dao.insertSongs(listOf(songRow.toEntity(disliked.id, disliked.songs.size)))
+            dao.touchPlaylist(disliked.id, now)
+            val updated = disliked.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == disliked.id) updated else it }
+        }
+    }
+
+    /**
+     * 将单曲从「我不喜欢的音乐」系统歌单移除。
+     */
+    suspend fun removeSongFromDisliked(songKey: String) = withDatabase {
+        mutationMutex.withLock {
+            val disliked = _playlists.value.firstOrNull { it.id == DISLIKED_PLAYLIST_ID } ?: return@withLock
+            if (disliked.songs.none { it.key == songKey }) return@withLock
+            val finalSongs = disliked.songs.filterNot { it.key == songKey }
+            val now = System.currentTimeMillis()
+            dao.deleteSongsForPlaylist(disliked.id)
+            dao.insertSongs(finalSongs.mapIndexed { index, s -> s.toEntity(disliked.id, index) })
+            dao.touchPlaylist(disliked.id, now)
+            val updated = disliked.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == disliked.id) updated else it }
+        }
+    }
+
+    /**
+     * 清空「我不喜欢的音乐」系统歌单。
+     */
+    suspend fun clearDislikedPlaylist() = withDatabase {
+        mutationMutex.withLock {
+            val disliked = _playlists.value.firstOrNull { it.id == DISLIKED_PLAYLIST_ID } ?: return@withLock
+            dao.deleteSongsForPlaylist(disliked.id)
+            val now = System.currentTimeMillis()
+            dao.touchPlaylist(disliked.id, now)
+            val updated = disliked.copy(songs = emptyList(), updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == disliked.id) updated else it }
         }
     }
 
@@ -678,8 +770,15 @@ class PlaylistStore private constructor(private val context: Context) {
         return UserPlaylist(FAVORITES_PLAYLIST_ID, "我喜欢的音乐", emptyList(), now, now)
     }
 
-    private fun ensureFavorites(playlists: List<UserPlaylist>): List<UserPlaylist> =
-        if (playlists.any { it.isFavorites }) playlists else listOf(createFavoritesPlaylist()) + playlists
+    private fun createDislikedPlaylist(): UserPlaylist {
+        val now = System.currentTimeMillis()
+        return UserPlaylist(DISLIKED_PLAYLIST_ID, "我不喜欢的音乐", emptyList(), now, now)
+    }
+
+    private fun ensureFavorites(playlists: List<UserPlaylist>): List<UserPlaylist> {
+        val withFav = if (playlists.any { it.isFavorites }) playlists else listOf(createFavoritesPlaylist()) + playlists
+        return if (withFav.any { it.isDisliked }) withFav else withFav + createDislikedPlaylist()
+    }
 
     private fun playlistToJson(playlist: UserPlaylist): JSONObject = JSONObject()
         .put("id", playlist.id)

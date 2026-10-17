@@ -106,13 +106,22 @@ object CloudPlaylistSyncService {
             }
         }
 
-        // ③ 「不喜欢的音乐」：本地 + 在线的全部不喜欢（只有 key，故用 songOfKey）。
-        val dislikedSongs = if (!includeDisliked) emptyList() else dislikedKeys.map { key ->
-            CloudPlaylistJson.songOfKey(
-                key = key,
-                isFavorite = key in favoriteKeys || key in onlineFavoriteKeys,
-                isDisliked = true,
-            )
+        // ③ 「不喜欢的音乐」：持久化歌单完整行（有元数据）+ 仅有 key 的项（无元数据）。
+        val dislikedPlaylist = playlists.firstOrNull { it.id == com.rawsmusic.core.common.model.DISLIKED_PLAYLIST_ID }
+        val dislikedSongs = if (!includeDisliked) emptyList() else buildList {
+            dislikedPlaylist?.songs?.forEach { song ->
+                add(CloudPlaylistJson.songOf(song, isFavorite = song.key in favoriteKeys || song.key in onlineFavoriteKeys, isDisliked = true))
+            }
+            val alreadyIncluded = dislikedPlaylist?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf()
+            dislikedKeys.filterNot { it in alreadyIncluded }.forEach { key ->
+                add(
+                    CloudPlaylistJson.songOfKey(
+                        key = key,
+                        isFavorite = key in favoriteKeys || key in onlineFavoriteKeys,
+                        isDisliked = true,
+                    )
+                )
+            }
         }
 
         val allPlaylists = mutableListOf<CloudPlaylistDto>().apply {
@@ -327,8 +336,28 @@ object CloudPlaylistSyncService {
         }
 
         if (restoreDisliked) {
-            val dislikedKeys = allSongs
-                .filter { it.isDisliked }
+            val disSystemPlaylist = downloaded.firstOrNull {
+                CloudPlaylistJson.systemKindOf(it) == CloudPlaylistJson.SystemPlaylistKind.DISLIKED
+            }
+            val dislikedSongDtos = (disSystemPlaylist?.songs.orEmpty() + allSongs.filter { it.isDisliked })
+                .distinctBy { CloudPlaylistJson.localSongKeyOf(it) }
+
+            val dislikedLocal = dislikedSongDtos
+                .filterNot(CloudPlaylistJson::isOnlineSong)
+                .filter { it.path.isNotBlank() }
+                .map(CloudPlaylistJson::toAudioFile)
+
+            val dislikedOnlineRows = dislikedSongDtos
+                .mapNotNull(CloudPlaylistJson::toOnlineSongRow)
+
+            // 将本地曲目与在线曲目完整写入 DISLIKED_PLAYLIST_ID 系统歌单中
+            store.importDislikedPlaylist(
+                localSongs = dislikedLocal,
+                onlineSongs = dislikedOnlineRows,
+                overwrite = isOverwrite,
+            )
+
+            val dislikedKeys = dislikedSongDtos
                 .map(CloudPlaylistJson::localSongKeyOf)
                 .filter { it.isNotBlank() }
             dislikedKeys.forEach { key ->

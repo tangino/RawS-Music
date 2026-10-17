@@ -329,6 +329,7 @@ class SongActionSheetHelper(
         val songs = attitudeTargets()
         if (songs.isEmpty() || !pendingSongsSupportAttitude) return
         val removing = pendingSongsAreDisliked
+        val store = PlaylistStore.getInstance(context)
         getCoroutineScope().launch {
             var changed = 0
             var failed = false
@@ -337,8 +338,10 @@ class SongActionSheetHelper(
                 try {
                     if (removing) {
                         SongAttitudeRepository.removeDislike(context, key)
+                        store.removeSongFromDisliked(key)
                     } else {
                         SongAttitudeRepository.setDisliked(context, key, true)
+                        store.addSongToDisliked(song)
                     }
                     changed++
                 } catch (cancelled: CancellationException) {

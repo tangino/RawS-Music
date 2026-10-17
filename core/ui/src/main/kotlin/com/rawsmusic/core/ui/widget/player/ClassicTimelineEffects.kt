@@ -359,14 +359,19 @@ internal fun ClassicTimelineEffects(
             )
         }
         Spacer(Modifier.height(3.dp))
-        ClassicTimelineTimeLabels(frameState, totalDurationMs, timeColor)
+        ClassicTimelineTimeLabels(frameState, totalDurationMs, timeColor, isOnlineTrack = trackKey.startsWith("online://"))
     }
 }
 
 @Composable
-private fun ClassicTimelineTimeLabels(frame: State<ClassicTimelineFrame>, durationMs: Long, color: Color) {
+private fun ClassicTimelineTimeLabels(
+    frame: State<ClassicTimelineFrame>,
+    durationMs: Long,
+    color: Color,
+    isOnlineTrack: Boolean,
+) {
     val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-    val isOnlineBusy = onlineSnapshot.isBusy
+    val isOnlineBusy = isOnlineTrack && onlineSnapshot.isBusy
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,

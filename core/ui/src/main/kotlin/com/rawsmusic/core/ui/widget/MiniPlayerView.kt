@@ -1147,6 +1147,7 @@ private fun MiniPlayerSlidingContent(
         fun Controls() {
             MiniPlayerTransportCluster(
                 isPlaying = snapshot.isPlaying,
+                isOnline = snapshot.identity.startsWith("online://"),
                 textColor = textColor,
                 controlsEnabled = controlsEnabled,
                 showPrevious = showPreviousControl,
@@ -1411,6 +1412,7 @@ private fun MiniPlayerTransportCluster(
     secondaryVisualSize: androidx.compose.ui.unit.Dp,
     secondaryTouchSize: androidx.compose.ui.unit.Dp,
     controlGap: androidx.compose.ui.unit.Dp,
+    isOnline: Boolean = false,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         fun Modifier.controlClick(enabled: Boolean, action: () -> Unit): Modifier = then(
@@ -1439,7 +1441,8 @@ private fun MiniPlayerTransportCluster(
         }
 
         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-        if (onlineSnapshot.isBusy) {
+        val isOnlineBusy = isOnline && onlineSnapshot.isBusy
+        if (isOnlineBusy) {
             Box(
                 modifier = Modifier.size(playPauseTouchSize),
                 contentAlignment = Alignment.Center,
