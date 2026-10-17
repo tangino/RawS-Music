@@ -1720,6 +1720,7 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="ui_delete_cancelled">Deletion cancelled</string>
     <string name="ui_delete_result">Deleted %1$d songs</string>
     <string name="ui_delete_result_failed">Deleted %1$d songs; %2$d failed</string>
+    <string name="songs_removed_from_library_result">Removed %1$d songs from library</string>
     <string name="ui_no_exportable_logs">No playback logs to export</string>
     <string name="ui_no_email_app">No email app available</string>
     <string name="ui_metadata_save_state_expired">The save state expired. Please try again.</string>

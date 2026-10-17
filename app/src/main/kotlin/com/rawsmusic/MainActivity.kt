@@ -197,6 +197,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private val songDeletionCoordinator = SongDeletionCoordinator(this)
+
+    fun showPlaylistPickerForSongs(songs: List<AudioFile>) {
+        songActionSheetHelper.showPlaylistPickerForSongs(songs)
+    }
+
+    fun deleteSongs(songs: List<AudioFile>, callback: (SongDeletionCoordinator.Result) -> Unit) {
+        songDeletionCoordinator.delete(songs, callback)
+    }
     private val ioScope = CoroutineScope(Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
     // Keep the foreground volume keys on the original in-app overlay path. The
@@ -2056,6 +2064,53 @@ class MainActivity : ComponentActivity() {
                             message = message,
                             icon = AppNoticeIcon.AUDIO,
                         )
+                    }
+                }
+            },
+            onSelectionRemoveFromLibrary = { selected ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    com.rawsmusic.module.data.repository.MusicRepository.deleteSongsSuspend(selected, refreshLibrary = true)
+                    withContext(Dispatchers.Main) {
+                        playerController?.removeSongsFromQueue(selected)
+                        AppNoticeBus.post(
+                            message = getString(R.string.songs_removed_from_library_result, selected.size),
+                            icon = AppNoticeIcon.AUDIO,
+                        )
+                    }
+                }
+            },
+            onSelectionDeleteWithPhysical = { selected, deletePhysical ->
+                if (deletePhysical) {
+                    songDeletionCoordinator.delete(selected) { result ->
+                        if (result.deletedSongs.isNotEmpty()) {
+                            playerController?.removeSongsFromQueue(result.deletedSongs)
+                        }
+                        val message = when {
+                            result.cancelled && result.deleted == 0 -> getString(R.string.ui_delete_cancelled)
+                            result.failed > 0 -> getString(R.string.ui_delete_result_failed, result.deleted, result.failed)
+                            else -> getString(R.string.ui_delete_result, result.deleted)
+                        }
+                        if (result.failed > 0) {
+                            AppNoticeBus.error(message)
+                        } else if (result.cancelled) {
+                            Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                        } else {
+                            AppNoticeBus.post(
+                                message = message,
+                                icon = AppNoticeIcon.AUDIO,
+                            )
+                        }
+                    }
+                } else {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        com.rawsmusic.module.data.repository.MusicRepository.deleteSongsSuspend(selected, refreshLibrary = true)
+                        withContext(Dispatchers.Main) {
+                            playerController?.removeSongsFromQueue(selected)
+                            AppNoticeBus.post(
+                                message = getString(R.string.ui_delete_result, selected.size),
+                                icon = AppNoticeIcon.AUDIO,
+                            )
+                        }
                     }
                 }
             },

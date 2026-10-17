@@ -966,4 +966,16 @@
     <string name="scan_settings_automatic_summary">启动、音乐文件变化时核对已选文件夹；关闭后仍可手动扫描</string>
     <string name="scan_settings_immediate_title">快速响应文件变化</string>
     <string name="scan_settings_immediate_summary">缩短系统变化后的等待；大量文件复制时建议关闭</string>
+
+    <!-- 批量多选管理相关文案 -->
+    <string name="songs_action_remove_from_library">从歌曲库移除</string>
+    <string name="songs_action_remove_dialog_title">从歌曲库移除</string>
+    <string name="songs_action_remove_dialog_message">将从歌曲库中注销选中的 %1$d 首歌曲。\n\n这不会删除存储设备中的物理音频文件。</string>
+    <string name="songs_action_remove_confirm">移除</string>
+    <string name="songs_action_delete_dialog_title">删除歌曲</string>
+    <string name="songs_action_delete_dialog_message">确定要从歌曲库中删除选中的 %1$d 首歌曲吗？</string>
+    <string name="songs_action_delete_physical_checkbox">同时从本地存储彻底删除音频文件</string>
+    <string name="songs_action_delete_confirm">删除</string>
+    <string name="songs_selection_selected_count">已选择 %1$d 首</string>
+    <string name="songs_action_batch_manage">批量管理</string>
 </resources>

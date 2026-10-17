@@ -1697,6 +1697,7 @@
     <string name="ui_delete_cancelled">已取消删除</string>
     <string name="ui_delete_result">已删除 %1$d 首</string>
     <string name="ui_delete_result_failed">已删除 %1$d 首，%2$d 首失败</string>
+    <string name="songs_removed_from_library_result">已从歌曲库移除 %1$d 首</string>
     <string name="ui_no_exportable_logs">暂无可导出的播放日志</string>
     <string name="ui_no_email_app">未找到可用的邮箱应用</string>
     <string name="ui_metadata_save_state_expired">保存状态已失效，请重试</string>

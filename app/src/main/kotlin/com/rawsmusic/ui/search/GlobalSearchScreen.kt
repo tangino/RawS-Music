@@ -79,8 +79,18 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Sort
+import top.yukonga.miuix.kmp.icon.extended.ListView
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.rawsmusic.core.ui.systemui.rawStableNavigationBarsPadding
+import com.rawsmusic.core.ui.widget.selection.SongMultiSelectActionBar
+import com.rawsmusic.core.ui.widget.selection.rememberSongMultiSelectState
+import com.rawsmusic.MainActivity
+import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.ui.AppNoticeIcon
+import com.rawsmusic.core.ui.widget.player.shareSelectedAudio
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val ALBUM_KEY_SEPARATOR = "␟"
 
@@ -232,6 +242,28 @@ fun GlobalSearchScreen(
         visibleDimensions.flatMap { dimension -> results[dimension.scope].orEmpty() }
     }
     val resultItems = remember(flattenedResults) { flattenedResults.map(::SearchVirtualListItem) }
+    val multiSelectState = rememberSongMultiSelectState()
+    val scope = rememberCoroutineScope()
+    val searchSongs = remember(flattenedResults) {
+        flattenedResults.mapNotNull { it.song }
+    }
+    val selectedPositions = remember(resultItems, multiSelectState.isActive, multiSelectState.selectedKeys) {
+        if (!multiSelectState.isActive) {
+            emptySet()
+        } else {
+            val positions = resultItems.indices.filter { idx ->
+                val song = (resultItems[idx] as? SearchVirtualListItem)?.entry?.song
+                song != null && multiSelectState.isSelected(song)
+            }.toSet()
+            if (positions.isEmpty()) setOf(-1) else positions
+        }
+    }
+
+    LaunchedEffect(debouncedQuery) {
+        if (multiSelectState.isActive) {
+            multiSelectState.exit()
+        }
+    }
     val sectionHeaders = remember(results, visibleDimensions) {
         var itemOffset = 0
         visibleDimensions.map { dimension ->
@@ -371,6 +403,20 @@ fun GlobalSearchScreen(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (searchSongs.isNotEmpty()) {
+                    IconButton(
+                        onClick = {
+                            if (multiSelectState.isActive) multiSelectState.exit() else multiSelectState.enter()
+                        }
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Regular.ListView,
+                            contentDescription = stringResource(com.rawsmusic.core.ui.R.string.songs_action_batch_manage),
+                            tint = if (multiSelectState.isActive) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
                 IconButton(
                     onClick = {
                         saveCurrentQuery()
@@ -441,13 +487,31 @@ fun GlobalSearchScreen(
                     // results below the fixed search/filter chrome instead of drawing through it.
                     .clipToBounds()
                     .padding(horizontal = 14.dp),
+                selectedPositions = selectedPositions,
                 onItemClick = { item, _, _ ->
                     val entry = (item as? SearchVirtualListItem)?.entry ?: return@ComposeGenericVirtualList
-                    val localIndex = results[entry.scope].orEmpty().indexOf(entry)
-                    saveCurrentQuery()
-                    session.saveFocusedEntry(entry.scope, entry.key, localIndex)
-                    entry.song?.let(onSongClick)
-                        ?: onCategoryClick(entry.scope, entry.key)
+                    if (multiSelectState.isActive) {
+                        val song = entry.song
+                        if (song != null) {
+                            multiSelectState.toggle(song)
+                        }
+                    } else {
+                        val localIndex = results[entry.scope].orEmpty().indexOf(entry)
+                        saveCurrentQuery()
+                        session.saveFocusedEntry(entry.scope, entry.key, localIndex)
+                        entry.song?.let(onSongClick)
+                            ?: onCategoryClick(entry.scope, entry.key)
+                    }
+                },
+                onItemLongClick = { item, _ ->
+                    val song = (item as? SearchVirtualListItem)?.entry?.song
+                    if (song != null) {
+                        if (!multiSelectState.isActive) {
+                            multiSelectState.enter(song)
+                        } else {
+                            multiSelectState.toggle(song)
+                        }
+                    }
                 }
             )
         }
@@ -459,6 +523,77 @@ fun GlobalSearchScreen(
         session = session,
         virtualListState = virtualListState,
         onDismiss = { showSortDialog = false }
+    )
+
+    SongMultiSelectActionBar(
+        state = multiSelectState,
+        songs = searchSongs,
+        onAddToPlaylist = { selected ->
+            (context as? MainActivity)?.showPlaylistPickerForSongs(selected)
+        },
+        onRemoveFromLibrary = { selected ->
+            scope.launch(Dispatchers.IO) {
+                MusicRepository.deleteSongsSuspend(selected, refreshLibrary = true)
+                withContext(Dispatchers.Main) {
+                    (context as? MainActivity)?.playerController?.removeSongsFromQueue(selected)
+                    AppNoticeBus.post(
+                        message = context.getString(R.string.songs_removed_from_library_result, selected.size),
+                        icon = AppNoticeIcon.AUDIO,
+                    )
+                }
+            }
+        },
+        onDeleteSongs = { selected, deletePhysical ->
+            if (deletePhysical) {
+                (context as? MainActivity)?.deleteSongs(selected) { result ->
+                    if (result.deletedSongs.isNotEmpty()) {
+                        (context as? MainActivity)?.playerController?.removeSongsFromQueue(result.deletedSongs)
+                    }
+                    val message = when {
+                        result.cancelled && result.deleted == 0 -> context.getString(R.string.ui_delete_cancelled)
+                        result.failed > 0 -> context.getString(R.string.ui_delete_result_failed, result.deleted, result.failed)
+                        else -> context.getString(R.string.ui_delete_result, result.deleted)
+                    }
+                    if (result.failed > 0) {
+                        AppNoticeBus.error(message)
+                    } else if (result.cancelled) {
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    } else {
+                        AppNoticeBus.post(message = message, icon = AppNoticeIcon.AUDIO)
+                    }
+                }
+            } else {
+                scope.launch(Dispatchers.IO) {
+                    MusicRepository.deleteSongsSuspend(selected, refreshLibrary = true)
+                    withContext(Dispatchers.Main) {
+                        (context as? MainActivity)?.playerController?.removeSongsFromQueue(selected)
+                        AppNoticeBus.post(
+                            message = context.getString(R.string.ui_delete_result, selected.size),
+                            icon = AppNoticeIcon.AUDIO,
+                        )
+                    }
+                }
+            }
+        },
+        onAddToQueue = { selected ->
+            val pc = (context as? MainActivity)?.playerController
+            selected.forEach { song -> pc?.addToQueue(song) }
+            AppNoticeBus.post(
+                message = context.getString(R.string.ui_queue_added),
+                icon = AppNoticeIcon.QUEUE,
+            )
+        },
+        onPlayNext = { selected ->
+            val pc = (context as? MainActivity)?.playerController
+            selected.asReversed().forEach { song -> pc?.playNext(song) }
+            AppNoticeBus.post(
+                message = context.getString(R.string.ui_play_next_added),
+                icon = AppNoticeIcon.PLAY_NEXT,
+            )
+        },
+        onShare = { selected ->
+            shareSelectedAudio(context, selected)
+        }
     )
 }
 

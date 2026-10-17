@@ -175,6 +175,7 @@ data class LibrarySongSelectionActions(
     val addToPlaylist: (List<AudioFile>) -> Unit = {},
     val addToQueue: (List<AudioFile>) -> Unit = {},
     val delete: (List<AudioFile>) -> Unit = {},
+    val removeFromLibrary: (List<AudioFile>) -> Unit = {},
     val playNext: (List<AudioFile>) -> Unit = {},
     val transcode: (List<AudioFile>) -> Unit = {},
     val batchMatchLyrics: (List<AudioFile>) -> Unit = {},

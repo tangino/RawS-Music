@@ -98,6 +98,8 @@ import com.rawsmusic.core.ui.widget.MiuixOverlayBackRuntime
 import com.rawsmusic.core.ui.widget.predictiveBottomSheetMotion
 import com.rawsmusic.core.ui.widget.predictiveBottomSheetScrim
 import com.rawsmusic.core.ui.widget.predictiveDialogMotion
+import com.rawsmusic.core.ui.widget.selection.RemoveFromLibraryConfirmDialog
+import com.rawsmusic.core.ui.widget.selection.DeleteSongsConfirmDialog
 import com.rawsmusic.core.ui.widget.rememberPredictiveDialogProgress
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListFull
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListState
@@ -166,6 +168,8 @@ fun SongsPage(
     onSelectionAddToPlaylist: (List<AudioFile>) -> Unit = {},
     onSelectionAddToQueue: (List<AudioFile>) -> Unit = {},
     onSelectionDelete: (List<AudioFile>) -> Unit = {},
+    onSelectionRemoveFromLibrary: (List<AudioFile>) -> Unit = {},
+    onSelectionDeleteWithPhysical: (List<AudioFile>, Boolean) -> Unit = { songs, _ -> },
     onSelectionPlayNext: (List<AudioFile>) -> Unit = {},
     onSelectionTranscode: (List<AudioFile>) -> Unit = {},
     onSelectionBatchMatchLyrics: (List<AudioFile>) -> Unit = {},
@@ -187,6 +191,8 @@ fun SongsPage(
     var selectionMode by remember { mutableStateOf(false) }
     var selectedSongIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var showSelectionSheet by remember { mutableStateOf(false) }
+    var showRemoveDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     val floatingModalAlpha by animateFloatAsState(
         targetValue = if (showSelectionSheet || MiuixOverlayBackRuntime.activeCount > 0) 0f else 1f,
         animationSpec = tween(200),
@@ -547,6 +553,7 @@ fun SongsPage(
                         onBack = onBack,
                         onMoreClick = { showMoreDialog = true },
                         onShuffleAll = { onShuffleAll(visibleSongs) },
+                        onBatchManage = { openSelectionActions(emptySet()) },
                         headerButtonsEnabled = effectiveHeaderButtonsEnabled,
                         headerActionsAlpha = headerActionVisibility,
                         showNowPlayingLocator = true,
@@ -650,10 +657,14 @@ fun SongsPage(
                     clearSelection()
                 }
             },
+            onRemoveFromLibrary = {
+                if (selectedSongs.isNotEmpty()) {
+                    showRemoveDialog = true
+                }
+            },
             onDelete = {
                 if (selectedSongs.isNotEmpty()) {
-                    onSelectionDelete(selectedSongs)
-                    clearSelection()
+                    showDeleteDialog = true
                 }
             },
             onPlayNext = {
@@ -682,6 +693,30 @@ fun SongsPage(
             },
             onDismiss = { clearSelection() }
         )
+
+        if (showRemoveDialog && selectedSongs.isNotEmpty()) {
+            RemoveFromLibraryConfirmDialog(
+                count = selectedSongs.size,
+                onDismiss = { showRemoveDialog = false },
+                onConfirm = {
+                    showRemoveDialog = false
+                    onSelectionRemoveFromLibrary(selectedSongs)
+                    clearSelection()
+                }
+            )
+        }
+
+        if (showDeleteDialog && selectedSongs.isNotEmpty()) {
+            DeleteSongsConfirmDialog(
+                count = selectedSongs.size,
+                onDismiss = { showDeleteDialog = false },
+                onConfirm = { deletePhysical ->
+                    showDeleteDialog = false
+                    onSelectionDeleteWithPhysical(selectedSongs, deletePhysical)
+                    clearSelection()
+                }
+            )
+        }
     }
 }
 
@@ -717,6 +752,7 @@ internal fun SongsTopMenuBar(
     showHeaderMore: Boolean = true,
     showHeaderSearch: Boolean = true,
     showHeaderShuffle: Boolean = true,
+    onBatchManage: (() -> Unit)? = null,
     headerTrailingContent: (@Composable () -> Unit)? = null,
     isLight: Boolean,
     overlayProgress: Float,
@@ -1029,6 +1065,19 @@ internal fun SongsTopMenuBar(
                                 }
                             }
                         }
+                        if (onBatchManage != null) {
+                            IconButton(
+                                onClick = onBatchManage,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Regular.ListView,
+                                    contentDescription = stringResource(R.string.songs_action_batch_manage),
+                                    tint = foreground,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
                         headerTrailingContent?.invoke()
                     }
                 }
@@ -1287,6 +1336,7 @@ internal fun SongSelectionMenu(
     onToggleRange: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onAddToQueue: () -> Unit,
+    onRemoveFromLibrary: () -> Unit = {},
     onDelete: () -> Unit,
     onPlayNext: () -> Unit,
     onTranscode: () -> Unit,
@@ -1327,6 +1377,12 @@ internal fun SongSelectionMenu(
             title = stringResource(R.string.songs_action_add_to_playlist),
             vector = MiuixIcons.Regular.ListView,
             onClick = onAddToPlaylist,
+        ))
+        add(
+        SelectionActionSpec(
+            title = stringResource(R.string.songs_action_remove_from_library),
+            drawableRes = R.drawable.ic_delete,
+            onClick = onRemoveFromLibrary,
         ))
         add(
         SelectionActionSpec(

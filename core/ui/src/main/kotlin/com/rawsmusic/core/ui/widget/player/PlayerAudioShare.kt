@@ -20,7 +20,7 @@ internal fun sharePlayerAudio(context: Context, song: AudioFile?) {
     }
 }
 
-internal fun shareSelectedAudio(context: Context, songs: List<AudioFile>) {
+fun shareSelectedAudio(context: Context, songs: List<AudioFile>) {
     val uris = songs.mapNotNull { song -> resolveShareUri(context, song)?.let { it to song } }
     if (uris.isEmpty()) {
         AppNoticeBus.error(context.getString(R.string.player_share_audio_unavailable))

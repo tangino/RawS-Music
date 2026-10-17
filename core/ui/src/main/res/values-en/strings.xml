@@ -490,4 +490,16 @@
     <string name="scan_settings_automatic_summary">Check selected folders on startup and audio file changes. Manual scanning remains available when disabled.</string>
     <string name="scan_settings_immediate_title">Respond quickly to file changes</string>
     <string name="scan_settings_immediate_summary">Reduce the wait after system changes. Leave off when copying many files.</string>
+
+    <!-- Batch multi-select management -->
+    <string name="songs_action_remove_from_library">Remove from library</string>
+    <string name="songs_action_remove_dialog_title">Remove from library</string>
+    <string name="songs_action_remove_dialog_message">Remove the selected %1$d songs from your library.\n\nThis will not delete the physical audio files from your storage device.</string>
+    <string name="songs_action_remove_confirm">Remove</string>
+    <string name="songs_action_delete_dialog_title">Delete songs</string>
+    <string name="songs_action_delete_dialog_message">Are you sure you want to delete the selected %1$d songs from your library?</string>
+    <string name="songs_action_delete_physical_checkbox">Also permanently delete audio files from local storage</string>
+    <string name="songs_action_delete_confirm">Delete</string>
+    <string name="songs_selection_selected_count">%1$d selected</string>
+    <string name="songs_action_batch_manage">Batch manage</string>
 </resources>

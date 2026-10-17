@@ -147,6 +147,10 @@ internal fun SelectableSongList(
             if (selectedSongs.isNotEmpty()) selectionActions.addToQueue(selectedSongs)
             clearSelection()
         },
+        onRemoveFromLibrary = {
+            if (selectedSongs.isNotEmpty()) selectionActions.removeFromLibrary(selectedSongs)
+            clearSelection()
+        },
         onDelete = {
             if (selectedSongs.isNotEmpty()) selectionActions.delete(selectedSongs)
             clearSelection()
