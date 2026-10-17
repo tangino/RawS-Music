@@ -25,8 +25,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
+import com.rawsmusic.module.data.prefs.BottomBarMaterial
+import com.rawsmusic.module.data.prefs.PersonalizationPreferences
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Rect
@@ -150,23 +154,37 @@ private fun PersistentLibraryRail(
 ) {
     val colors = MiuixTheme.colorScheme
     val selectedRoot = selectedScene.persistentLibraryRailRoot()
+    val railShape = RoundedCornerShape(28.dp)
+    val bottomBarMaterial by PersonalizationPreferences.bottomBarMaterial.collectAsState()
+    val isGlass = bottomBarMaterial == BottomBarMaterial.LIQUID_GLASS || bottomBarMaterial == BottomBarMaterial.ACRYLIC
+
     Column(
         modifier = modifier
-            .background(
-                color = colors.surfaceContainer.copy(alpha = 0.72f),
-                shape = RoundedCornerShape(28.dp),
-            )
+            .sidebarGlassModifier(shape = railShape)
             .padding(horizontal = 10.dp, vertical = 14.dp),
     ) {
         PersistentLibraryRailScenes.forEach { scene ->
             val selected = scene == selectedRoot
+            val itemShape = RoundedCornerShape(18.dp)
+            val selectedBgColor = if (isGlass) {
+                colors.primary.copy(alpha = 0.20f)
+            } else {
+                colors.primary.copy(alpha = 0.14f)
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
+                    .then(
+                        if (selected && isGlass) {
+                            Modifier.border(0.5.dp, colors.primary.copy(alpha = 0.35f), itemShape)
+                        } else {
+                            Modifier
+                        }
+                    )
                     .background(
-                        color = if (selected) colors.primary.copy(alpha = 0.14f) else Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        color = if (selected) selectedBgColor else Color.Transparent,
+                        shape = itemShape,
                     )
                     .clickable(enabled = !selected) { onNavigate(scene) }
                     .padding(horizontal = 14.dp),

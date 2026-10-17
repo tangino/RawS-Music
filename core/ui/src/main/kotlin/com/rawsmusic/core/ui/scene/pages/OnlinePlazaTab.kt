@@ -96,6 +96,7 @@ internal fun OnlinePlazaTab(
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
     val keyboard = LocalSoftwareKeyboardController.current
+    val gridColumns = resolveOnlineGridColumns()
 
     var section by remember { mutableStateOf(OnlinePlazaSection.Recommend) }
     var tags by remember(platform) { mutableStateOf<List<OnlinePlaylistTag>>(emptyList()) }
@@ -273,7 +274,7 @@ internal fun OnlinePlazaTab(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(
-                            searchResults.chunked(GRID_COLUMNS),
+                            searchResults.chunked(gridColumns),
                             key = { row -> "search_" + row.joinToString("_") { "${it.platform.id}_${it.id}" } }
                         ) { rowItems ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -284,7 +285,7 @@ internal fun OnlinePlazaTab(
                                         onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
                                     )
                                 }
-                                if (rowItems.size < GRID_COLUMNS) {
+                                repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
                                     Spacer(Modifier.weight(1f))
                                 }
                             }
@@ -328,7 +329,7 @@ internal fun OnlinePlazaTab(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(
-                            playlists.chunked(GRID_COLUMNS),
+                            playlists.chunked(gridColumns),
                             key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }
                         ) { rowItems ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -339,8 +340,8 @@ internal fun OnlinePlazaTab(
                                         onClick = { onOpenPlaylist(playlist.platform, playlist.id) },
                                     )
                                 }
-                                // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。
-                                if (rowItems.size < GRID_COLUMNS) {
+                                // 不足 columns 个时补齐等宽空位，保持列宽一致与对齐。
+                                repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
                                     Spacer(Modifier.weight(1f))
                                 }
                             }

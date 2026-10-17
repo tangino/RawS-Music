@@ -631,7 +631,7 @@ private fun HomePageContent(
             )
         }
 
-        if (mostPlayedVisible) {
+        if (mostPlayedVisible && mostPlayed.isNotEmpty()) {
             SectionTitle(stringResource(R.string.home_most_played_section))
             mostPlayed.forEach { song ->
                 val index = remember(songs, song.id) {
@@ -1796,7 +1796,7 @@ internal fun rememberHomeVirtualListProviderSpec(
             repeat(libraryRows.size) { row ->
                 add(homeSyntheticAudioFile(-9_110_000L - row, "$HOME_HOLDER_LIBRARY_ROW:$row", "HOME Library $row"))
             }
-            if (headerOptions.mostPlayedVisible) {
+            if (headerOptions.mostPlayedVisible && mostPlayed.isNotEmpty()) {
                 add(homeSyntheticAudioFile(-9_100_003L, HOME_HOLDER_MOST_HEADER, "HOME Most Played"))
                 mostPlayed.forEach { song ->
                     add(homeSyntheticAudioFile(-9_200_000L - song.id.absoluteValue, "$HOME_HOLDER_MOST_ROW:${song.id}", song.displayName))
@@ -1918,18 +1918,25 @@ internal fun rememberHomeVirtualListProviderSpec(
                     kind == HOME_HOLDER_LIBRARY_HEADER -> {
                         Box(
                             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.CenterStart,
+                            contentAlignment = Alignment.Center,
                         ) {
-                            HomeSectionTitle(
-                                text = stringResource(R.string.home_library_section),
-                                statistics = stringResource(
-                                    R.string.home_library_section_statistics,
-                                    visibleLibraryScenes.size,
-                                    songs.size,
-                                ),
-                                editing = homeCardEditMode,
-                                onDone = { onHomeCardEditModeChange(false) },
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(max = homeCardRowMaxWidth)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                HomeSectionTitle(
+                                    text = stringResource(R.string.home_library_section),
+                                    statistics = stringResource(
+                                        R.string.home_library_section_statistics,
+                                        visibleLibraryScenes.size,
+                                        songs.size,
+                                    ),
+                                    editing = homeCardEditMode,
+                                    onDone = { onHomeCardEditModeChange(false) },
+                                )
+                            }
                         }
                     }
                     kind.startsWith("$HOME_HOLDER_LIBRARY_ROW:") -> {
@@ -1960,8 +1967,18 @@ internal fun rememberHomeVirtualListProviderSpec(
                         }
                     }
                     kind == HOME_HOLDER_MOST_HEADER -> {
-                        Box(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
-                            SectionTitle(stringResource(R.string.home_most_played_section))
+                        Box(
+                            modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(max = homeCardRowMaxWidth)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                SectionTitle(stringResource(R.string.home_most_played_section))
+                            }
                         }
                     }
                     kind.startsWith("$HOME_HOLDER_MOST_ROW:") -> {
@@ -1974,32 +1991,48 @@ internal fun rememberHomeVirtualListProviderSpec(
                                     current.cueOffsetMs == mostSong.cueOffsetMs &&
                                     current.cueTrackIndex == mostSong.cueTrackIndex
                             } == true
-                            Box(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                                MostPlayedRow(
-                                    song = mostSong,
-                                    playCount = playCounts[mostSong.id] ?: 0,
-                                    isCurrentSong = isCurrentSong,
-                                    isPlaying = isCurrentSong && latestPlaying,
-                                    onClick = { onSongClick(mostSong, sourceIndex) },
-                                    onPlayPauseClick = {
-                                        if (isCurrentSong) onCurrentPlayPause() else onSongClick(mostSong, sourceIndex)
-                                    },
-                                    contentHeight = mostPlayedContentHeight,
-                                )
+                            Box(
+                                modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = homeCardRowMaxWidth)
+                                        .fillMaxWidth(),
+                                ) {
+                                    MostPlayedRow(
+                                        song = mostSong,
+                                        playCount = playCounts[mostSong.id] ?: 0,
+                                        isCurrentSong = isCurrentSong,
+                                        isPlaying = isCurrentSong && latestPlaying,
+                                        onClick = { onSongClick(mostSong, sourceIndex) },
+                                        onPlayPauseClick = {
+                                            if (isCurrentSong) onCurrentPlayPause() else onSongClick(mostSong, sourceIndex)
+                                        },
+                                        contentHeight = mostPlayedContentHeight,
+                                    )
+                                }
                             }
                         }
                     }
                     kind == HOME_HOLDER_TOOLS_HEADER -> {
                         Box(
                             modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.CenterStart,
+                            contentAlignment = Alignment.Center,
                         ) {
-                            HomeSectionTitle(
-                                text = stringResource(R.string.home_tools_section),
-                                statistics = stringResource(R.string.home_tools_section_statistics, visibleToolScenes.size),
-                                editing = homeCardEditMode,
-                                onDone = { onHomeCardEditModeChange(false) },
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(max = homeCardRowMaxWidth)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                HomeSectionTitle(
+                                    text = stringResource(R.string.home_tools_section),
+                                    statistics = stringResource(R.string.home_tools_section_statistics, visibleToolScenes.size),
+                                    editing = homeCardEditMode,
+                                    onDone = { onHomeCardEditModeChange(false) },
+                                )
+                            }
                         }
                     }
                     kind.startsWith("$HOME_HOLDER_TOOLS_ROW:") -> {

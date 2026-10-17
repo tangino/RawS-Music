@@ -20,8 +20,10 @@ import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -29,6 +31,9 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import com.rawsmusic.module.data.prefs.BottomBarMaterial
+import com.rawsmusic.module.data.prefs.PersonalizationPreferences
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -274,6 +279,10 @@ private fun AppSideRail(
     modifier: Modifier = Modifier,
 ) {
     val colors = MiuixTheme.colorScheme
+    val bottomBarMaterial by PersonalizationPreferences.bottomBarMaterial.collectAsState()
+    val isGlass = bottomBarMaterial == BottomBarMaterial.LIQUID_GLASS || bottomBarMaterial == BottomBarMaterial.ACRYLIC
+    val cardShape = RoundedCornerShape(15.dp)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -294,10 +303,18 @@ private fun AppSideRail(
 
         sideRailItems.forEach { item ->
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (isGlass) {
+                            Modifier.sidebarGlassModifier(shape = cardShape)
+                        } else {
+                            Modifier
+                        }
+                    ),
                 cornerRadius = 15.dp,
                 colors = CardDefaults.defaultColors(
-                    color = colors.surfaceContainer.copy(alpha = 0.82f),
+                    color = if (isGlass) Color.Transparent else colors.surfaceContainer.copy(alpha = 0.82f),
                     contentColor = colors.onSurface,
                 ),
                 onClick = { onItemClick(item.destination) },

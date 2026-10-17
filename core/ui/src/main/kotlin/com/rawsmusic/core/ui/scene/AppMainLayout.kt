@@ -485,6 +485,7 @@ fun AppMainLayout(
         ProvideRawFlowMode(rawFlowModeState) {
             CompositionLocalProvider(
                 LocalAppBackdrop provides backdrop,
+                LocalAppBackgroundBackdrop provides backgroundBackdrop,
                 LocalAppHazeState provides appHazeState,
             ) {
                 AppSideRailHost(

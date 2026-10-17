@@ -13,7 +13,7 @@ internal fun homeSectionHeaderHeightDp(fontScale: Float): Float =
     54f + 48f * homeFontScaleGrowth(fontScale)
 
 internal fun homeCardRowExtraHeightDp(fontScale: Float): Float =
-    82f + 42f * homeFontScaleGrowth(fontScale)
+    62f + 36f * homeFontScaleGrowth(fontScale)
 
 internal fun homeMostPlayedContentHeightDp(fontScale: Float): Float =
     74f + 40f * homeFontScaleGrowth(fontScale)

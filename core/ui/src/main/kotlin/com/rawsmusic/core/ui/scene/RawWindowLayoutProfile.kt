@@ -186,7 +186,7 @@ internal fun resolveRawWindowLayoutProfile(
         widthClass = widthClass,
         heightClass = heightClass,
         contentMaxWidth = contentMaxWidth,
-        homeCardContentMaxWidth = homeCardContentMaxWidth,
+        homeCardContentMaxWidth = homeCardContentMaxWidth.coerceAtMost(libraryContentMaxWidth),
         playerContentMaxWidth = playerContentMaxWidth,
         settingsContentMaxWidth = settingsContentMaxWidth,
         settingsRootContentMaxWidth = settingsRootContentMaxWidth,

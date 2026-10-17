@@ -80,6 +80,7 @@ internal fun OnlineArtistTab(
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
+    val gridColumns = resolveOnlineGridColumns()
 
     var categories by remember { mutableStateOf<List<OnlineArtistCategory>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf(ALL_CATEGORY) }
@@ -176,7 +177,7 @@ internal fun OnlineArtistTab(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(
-                        items = artists.chunked(GRID_COLUMNS),
+                        items = artists.chunked(gridColumns),
                         // 平台内 id 唯一，带上平台前缀可避免换平台后 key 撞车导致复用错卡片。
                         key = { row -> "${platform.id}_${row.first().id}" },
                     ) { rowItems ->
@@ -188,8 +189,8 @@ internal fun OnlineArtistTab(
                                     onClick = { onOpenArtist(artist.platform, artist.id, artist.name, artist.avatarUrl) },
                                 )
                             }
-                            // 奇数个时补一个等宽空位，避免最后一张卡被拉成整行宽。
-                            if (rowItems.size < GRID_COLUMNS) {
+                            // 不足 columns 个时补齐等宽空位，避免最后一张卡被拉成整行宽。
+                            repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
                                 Spacer(Modifier.weight(1f))
                             }
                         }
