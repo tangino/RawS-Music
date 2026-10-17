@@ -43,7 +43,7 @@ fun resolveBottomNavigationScenes(tags: List<String>): List<NavScene> {
     return resolved.take(MAX_BOTTOM_NAVIGATION_ITEMS)
 }
 
-const val MAX_BOTTOM_NAVIGATION_ITEMS = 5
+const val MAX_BOTTOM_NAVIGATION_ITEMS = 6
 const val MIN_BOTTOM_NAVIGATION_ITEMS = 2
 
 @Composable

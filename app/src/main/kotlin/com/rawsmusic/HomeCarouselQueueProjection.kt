@@ -40,10 +40,12 @@ internal fun buildHomeCarouselQueueProjection(
         var last = center
         while (first > 0 && relativeSongs[first - 1] != null) first--
         while (last < relativeSongs.lastIndex && relativeSongs[last + 1] != null) last++
-        return HomeCarouselQueueProjection(
-            (first..last).map { if (it == center) current else requireNotNull(relativeSongs[it]) },
-            center - first,
-        )
+        if (first < last || source.size <= 1) {
+            return HomeCarouselQueueProjection(
+                (first..last).map { if (it == center) current else requireNotNull(relativeSongs[it]) },
+                center - first,
+            )
+        }
     }
     val radius = com.rawsmusic.core.ui.scene.pages.HOME_CAROUSEL_PREVIEW_RADIUS
     val projected = (-radius..radius).map { offset ->

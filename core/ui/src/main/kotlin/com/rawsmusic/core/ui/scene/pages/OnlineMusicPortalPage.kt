@@ -303,6 +303,9 @@ private fun OnlinePortalBody(
             modifier = Modifier.fillMaxSize(),
         )
         OnlinePortalTab.Search -> OnlineSearchTab(modifier = Modifier.fillMaxSize())
-        OnlinePortalTab.Favorites -> OnlineFavoritesTab(modifier = Modifier.fillMaxSize())
+        OnlinePortalTab.Favorites -> OnlineFavoritesTab(
+            onOpenPlaylist = onOpenPlaylist,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }

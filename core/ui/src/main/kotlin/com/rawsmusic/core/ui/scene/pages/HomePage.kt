@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -378,6 +379,7 @@ fun HomePage(
                 onNavigate = onNavigate,
                 onSearchClick = onSearchClick,
                 weatherVisible = headerOptions.weatherVisible,
+                searchBarVisible = headerOptions.searchBarVisible,
                 onHeaderMenuClick = onHeaderMenuActionOverride ?: { showHeaderMenuDialog = true },
                 onFlowBackgroundClick = { showFlowModeDialog = true },
                 showSettingsShortcut = showSettingsShortcut,
@@ -417,6 +419,8 @@ fun HomePage(
             show = showHeaderMenuDialog,
             weatherVisible = headerOptions.weatherVisible,
             onWeatherVisibleChange = headerOptions::updateWeatherVisible,
+            searchBarVisible = headerOptions.searchBarVisible,
+            onSearchBarVisibleChange = headerOptions::updateSearchBarVisible,
             carouselVisible = headerOptions.carouselVisible,
             onCarouselVisibleChange = headerOptions::updateCarouselVisible,
             carouselLyricVisible = headerOptions.carouselLyricVisible,
@@ -475,6 +479,7 @@ private fun HomePageContent(
     onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     onSearchClick: () -> Unit,
     weatherVisible: Boolean,
+    searchBarVisible: Boolean = true,
     onHeaderMenuClick: () -> Unit,
     onFlowBackgroundClick: () -> Unit,
     showSettingsShortcut: Boolean,
@@ -542,26 +547,28 @@ private fun HomePageContent(
             HomeTopHeader(
                 weatherVisible = weatherVisible,
             )
-            Spacer(Modifier.height(14.dp))
-            SearchBar(
-                inputField = {
-                    InputField(
-                        query = "",
-                        onQueryChange = {},
-                        onSearch = {},
-                        expanded = false,
-                        onExpandedChange = { onSearchClick() },
-                        label = stringResource(R.string.search_hint),
-                        enabled = false
-                    )
-                },
-                onExpandedChange = { onSearchClick() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSearchClick() },
-                expanded = false,
-                content = {}
-            )
+            if (searchBarVisible) {
+                Spacer(Modifier.height(14.dp))
+                SearchBar(
+                    inputField = {
+                        InputField(
+                            query = "",
+                            onQueryChange = {},
+                            onSearch = {},
+                            expanded = false,
+                            onExpandedChange = { onSearchClick() },
+                            label = stringResource(R.string.search_hint),
+                            enabled = false
+                        )
+                    },
+                    onExpandedChange = { onSearchClick() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSearchClick() },
+                    expanded = false,
+                    content = {}
+                )
+            }
         }
 
         if (carouselVisible) {
@@ -617,6 +624,7 @@ private fun HomePageContent(
                 onNavigate = onNavigate,
                 onNavigatePlaylist = onNavigatePlaylist,
                 columns = homeCardColumns,
+                currentPlayingSong = currentSong,
                 modifier = Modifier
                     .widthIn(max = homeCardRowMaxWidth)
                     .align(Alignment.CenterHorizontally),
@@ -666,6 +674,7 @@ private fun HomePageContent(
                 onAdd = { onAddHomeCard(HomeCardGroup.TOOLS) },
                 onNavigate = onNavigate,
                 columns = homeCardColumns,
+                currentPlayingSong = currentSong,
                 modifier = Modifier
                     .widthIn(max = homeCardRowMaxWidth)
                     .align(Alignment.CenterHorizontally),
@@ -880,6 +889,7 @@ private fun HomeCardSlotRow(
     onNavigate: (NavScene) -> Unit,
     onNavigatePlaylist: (NavScene, String) -> Unit = { _, _ -> },
     columns: Int = 2,
+    currentPlayingSong: AudioFile? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -901,6 +911,7 @@ private fun HomeCardSlotRow(
                         onRemove = { layoutState.hide(card.scene) },
                         visibleOrder = visibleOrder,
                         dragPreview = dragPreview,
+                        currentPlayingSong = currentPlayingSong,
                         onMoveTo = { target -> layoutState.moveVisibleTo(card.scene, target) },
                         onClick = {
                             if (card.scene == NavScene.CURRENT_PLAYLIST || card.scene == NavScene.PREVIOUS_PLAYLIST) {
@@ -1003,6 +1014,7 @@ private fun LibraryTile(
     dragPreview: HomeCardDragPreviewState,
     onMoveTo: (Int) -> Unit,
     onClick: () -> Unit,
+    currentPlayingSong: AudioFile? = null,
 ) {
     var removing by remember(scene) { mutableStateOf(false) }
     val playedInfo = when (scene) {
@@ -1100,11 +1112,13 @@ private fun LibraryTile(
                 .clip(RoundedCornerShape(13.dp))
                 .background(pastelColorFor(scene.tag)),
         ) {
-            val playedCover = playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
+            val candidateCover = playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
+                ?: if (isPlayedScene) currentPlayingSong?.coverKey?.takeIf { it.isNotBlank() } else null
+                ?: song?.coverKey?.takeIf { it.isNotBlank() }
 
-            if (playedCover != null) {
+            if (candidateCover != null) {
                 BitmapImage(
-                    key = playedCover,
+                    key = candidateCover,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -1116,6 +1130,38 @@ private fun LibraryTile(
                         .fillMaxSize()
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
                 )
+            } else if (isPlayedScene) {
+                // 播放歌单专属高质感艺术流光封面（无封面时的优雅兜底）
+                val cardAccent = pastelColorFor(playedInfo?.name ?: scene.tag)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    cardAccent.copy(alpha = 0.65f),
+                                    Color.Black.copy(alpha = 0.75f),
+                                )
+                            )
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color.White.copy(alpha = 0.16f))
+                            .border(1.dp, Color.White.copy(alpha = 0.30f), RoundedCornerShape(18.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_playlist_play),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(Color.White),
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
             } else {
                 val fixedIconRes = scene.homeCardFixedIconResOrNull()
                 if (fixedIconRes != null) {
@@ -1138,20 +1184,6 @@ private fun LibraryTile(
                                     )
                                 )
                             ),
-                    )
-                } else if (song?.coverKey?.isNotBlank() == true) {
-                    BitmapImage(
-                        key = song.coverKey,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                        targetWidth = 360,
-                        targetHeight = 360,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
                     )
                 }
             }
@@ -1216,8 +1248,6 @@ private fun LibraryTile(
 private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
-    NavScene.CURRENT_PLAYLIST -> R.drawable.ic_playlist_play
-    NavScene.PREVIOUS_PLAYLIST -> R.drawable.ic_schedule
     else -> null
 }
 
@@ -1737,6 +1767,7 @@ internal fun rememberHomeVirtualListProviderSpec(
     }
     val heroHeight = remember(
         headerOptions.weatherVisible,
+        headerOptions.searchBarVisible,
         headerOptions.carouselVisible,
         headerOptions.carouselLyricVisible,
         headerOptions.carouselStyle,
@@ -1745,7 +1776,8 @@ internal fun rememberHomeVirtualListProviderSpec(
         // Keep the heterogeneous HOME hero holder equal to the content it actually composes. The
         // header/search area plus the original ~22dp section gap is 182dp; the carousel contributes
         // its real runtime height only while enabled, so hiding it removes the blank 360dp reserve.
-        val headerHeight = 182.dp + if (headerOptions.weatherVisible) 64.dp else 0.dp
+        val searchBarHeight = if (headerOptions.searchBarVisible) 70.dp else 0.dp
+        val headerHeight = 112.dp + searchBarHeight + if (headerOptions.weatherVisible) 64.dp else 0.dp
         if (!headerOptions.carouselVisible) {
             headerHeight
         } else {
@@ -1800,6 +1832,7 @@ internal fun rememberHomeVirtualListProviderSpec(
         headerOptions.carouselStyle,
         headerOptions.carouselLyricVisible,
         headerOptions.weatherVisible,
+        headerOptions.searchBarVisible,
         showSettingsShortcut,
     ) {
         VirtualListCustomProvider(
@@ -1831,26 +1864,28 @@ internal fun rememberHomeVirtualListProviderSpec(
                             HomeTopHeader(
                                 weatherVisible = headerOptions.weatherVisible,
                             )
-                            Spacer(Modifier.height(14.dp))
-                            SearchBar(
-                                inputField = {
-                                    InputField(
-                                        query = "",
-                                        onQueryChange = {},
-                                        onSearch = {},
-                                        expanded = false,
-                                        onExpandedChange = { onSearchClick() },
-                                        label = stringResource(R.string.search_hint),
-                                        enabled = false,
-                                    )
-                                },
-                                onExpandedChange = { onSearchClick() },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSearchClick() },
-                                expanded = false,
-                                content = {},
-                            )
+                            if (headerOptions.searchBarVisible) {
+                                Spacer(Modifier.height(14.dp))
+                                SearchBar(
+                                    inputField = {
+                                        InputField(
+                                            query = "",
+                                            onQueryChange = {},
+                                            onSearch = {},
+                                            expanded = false,
+                                            onExpandedChange = { onSearchClick() },
+                                            label = stringResource(R.string.search_hint),
+                                            enabled = false,
+                                        )
+                                    },
+                                    onExpandedChange = { onSearchClick() },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSearchClick() },
+                                    expanded = false,
+                                    content = {},
+                                )
+                            }
                             if (headerOptions.carouselVisible) {
                                 Spacer(Modifier.height(20.dp))
                                 HomeArtworkCarousel(
@@ -1919,6 +1954,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                 onNavigate = onNavigate,
                                 onNavigatePlaylist = onNavigatePlaylist,
                                 columns = homeCardColumns,
+                                currentPlayingSong = latestCarouselCurrentSong,
                                 modifier = Modifier.widthIn(max = homeCardRowMaxWidth),
                             )
                         }
@@ -1987,6 +2023,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                 onAdd = { onAddHomeCard(HomeCardGroup.TOOLS) },
                                 onNavigate = onNavigate,
                                 columns = homeCardColumns,
+                                currentPlayingSong = latestCarouselCurrentSong,
                                 modifier = Modifier.widthIn(max = homeCardRowMaxWidth),
                             )
                         }

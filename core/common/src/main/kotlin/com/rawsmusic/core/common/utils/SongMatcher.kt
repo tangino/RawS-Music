@@ -59,9 +59,9 @@ object SongMatcher {
     }
 
     /**
-     * 提取歌曲中的核心歌名（去除括号说明与影视剧副标题）
+     * 提取歌曲中的核心歌名（去除括号说明、影视剧副标题以及连接符歌手后缀/前缀）
      */
-    fun extractCoreTitle(title: String): String {
+    fun extractCoreTitle(title: String, artist: String? = null): String {
         val cleaned = cleanText(title)
             .replace("（", "(")
             .replace("）", ")")
@@ -73,7 +73,26 @@ object SongMatcher {
             .replace("]", ")")
         val withoutBracket = cleaned.replace(Regex("\\([^)]*\\)"), "").trim()
         val base = if (withoutBracket.isNotBlank()) withoutBracket else cleaned
-        return base.substringBefore(" - ").substringBefore(" — ").trim()
+        var result = base.substringBefore(" - ").substringBefore(" — ").substringBefore(" – ").trim()
+
+        // 针对带连接符（如“离开我的依赖-王艳薇”或“王艳薇-离开我的依赖”）进行智能歌手剥离
+        val normArtist = artist?.let { normalizeForCompare(it) }?.takeIf { it.isNotBlank() }
+        val splitDelimiters = charArrayOf('-', '—', '–', '_', '~')
+        if (result.any { it in splitDelimiters }) {
+            val parts = result.split(*splitDelimiters).map { it.trim() }.filter { it.isNotBlank() }
+            if (parts.size == 2) {
+                if (normArtist != null) {
+                    val p0Norm = normalizeForCompare(parts[0])
+                    val p1Norm = normalizeForCompare(parts[1])
+                    if (p1Norm == normArtist || normArtist.contains(p1Norm) || p1Norm.contains(normArtist)) {
+                        result = parts[0]
+                    } else if (p0Norm == normArtist || normArtist.contains(p0Norm) || p0Norm.contains(normArtist)) {
+                        result = parts[1]
+                    }
+                }
+            }
+        }
+        return result.trim()
     }
 
     /**
@@ -85,9 +104,14 @@ object SongMatcher {
     }
 
     /**
-     * 判断歌曲名称是否一致
+     * 判断歌曲名称是否一致（支持辅助歌手名剔除）
      */
-    fun isTitleMatched(targetTitle: String, candidateTitle: String): Boolean {
+    fun isTitleMatched(
+        targetTitle: String,
+        candidateTitle: String,
+        targetArtist: String? = null,
+        candidateArtist: String? = null,
+    ): Boolean {
         val normTarget = normalizeForCompare(targetTitle)
         val normCandidate = normalizeForCompare(candidateTitle)
         if (normTarget.isEmpty() || normCandidate.isEmpty()) return false
@@ -102,11 +126,27 @@ object SongMatcher {
             return false
         }
 
-        // 3. 核心歌名比对
-        val coreTarget = normalizeForCompare(extractCoreTitle(targetTitle))
-        val coreCandidate = normalizeForCompare(extractCoreTitle(candidateTitle))
+        // 3. 核心歌名比对（带歌手辅助提取）
+        val coreTarget = normalizeForCompare(extractCoreTitle(targetTitle, targetArtist ?: candidateArtist))
+        val coreCandidate = normalizeForCompare(extractCoreTitle(candidateTitle, candidateArtist ?: targetArtist))
         if (coreTarget.isNotEmpty() && coreTarget == coreCandidate) {
             return true
+        }
+
+        // 4. 容错剥离：若其中一个标题包含另一个标题且多出部分正是歌手名（如“离开我的依赖王艳薇”与“离开我的依赖”）
+        val possibleArtists = listOfNotNull(targetArtist, candidateArtist)
+            .map { normalizeForCompare(it) }
+            .filter { it.isNotBlank() && it !in listOf("未知歌手", "群星", "variousartists", "unknown") }
+
+        for (art in possibleArtists) {
+            val strippedTarget = normTarget.replace(art, "")
+            val strippedCandidate = normCandidate.replace(art, "")
+            if (strippedTarget.isNotEmpty() && strippedTarget == strippedCandidate) {
+                return true
+            }
+            if (strippedTarget.isNotEmpty() && (strippedTarget == normCandidate || normTarget == strippedCandidate)) {
+                return true
+            }
         }
 
         return false
@@ -161,7 +201,7 @@ object SongMatcher {
 
     /**
      * 严格综合匹配判定：
-     * 1. 歌名一致
+     * 1. 歌名一致（带歌手辅助提取与容错剥离）
      * 2. 作者一致
      * 3. 时间误差不超过 toleranceMs（默认 5000ms）
      */
@@ -175,7 +215,7 @@ object SongMatcher {
         toleranceMs: Long = 5000L,
     ): Boolean {
         // 1. 歌名判定
-        if (!isTitleMatched(targetTitle, candidateTitle)) {
+        if (!isTitleMatched(targetTitle, candidateTitle, targetArtist, candidateArtist)) {
             return false
         }
 
@@ -196,16 +236,133 @@ object SongMatcher {
     }
 
     /**
-     * 从本地曲库中查找最佳匹配的本地音源。
+     * 计算匹配优选度得分（1:1 还原 OrBitPlayer 的打分算法，并加入无损音质加权）
+     */
+    fun calculateMatchScore(
+        targetTitle: String,
+        targetArtist: String,
+        candidateTitle: String,
+        candidateArtist: String,
+        targetDurationMs: Long,
+        candidateDurationMs: Long,
+        candidate: AudioFile? = null,
+    ): Int {
+        var score = 0
+        val normTargetTitle = normalizeForCompare(targetTitle)
+        val normCandidateTitle = normalizeForCompare(candidateTitle)
+        if (normTargetTitle == normCandidateTitle) {
+            score += 50
+        } else {
+            score += 35
+        }
+
+        val normTargetArtist = normalizeForCompare(targetArtist)
+        val normCandidateArtist = normalizeForCompare(candidateArtist)
+        if (normTargetArtist == normCandidateArtist) {
+            score += 30
+        } else if (normTargetArtist.contains(normCandidateArtist) || normCandidateArtist.contains(normTargetArtist)) {
+            score += 20
+        } else {
+            score += 10
+        }
+
+        if (targetDurationMs > 5000L && candidateDurationMs > 5000L) {
+            val diffMs = abs(targetDurationMs - candidateDurationMs)
+            when {
+                diffMs <= 1000L -> score += 20
+                diffMs <= 3000L -> score += 15
+                diffMs <= 5000L -> score += 10
+                diffMs <= 10000L -> score += 5
+            }
+        } else {
+            score += 10
+        }
+
+        // 音质加权：同等匹配度下优先匹配本地无损/高解析音源
+        if (candidate != null) {
+            val formatUpper = candidate.format.uppercase()
+            when {
+                formatUpper.contains("DSD") || formatUpper.contains("DSF") || formatUpper.contains("DFF") || candidate.isDsdFormat -> score += 15
+                formatUpper.contains("FLAC") || formatUpper.contains("ALAC") || formatUpper.contains("APE") || formatUpper.contains("WAV") -> score += 10
+                formatUpper.contains("AAC") || formatUpper.contains("M4A") -> score += 5
+                else -> {}
+            }
+            if (candidate.bitsPerSample >= 24 || candidate.sampleRate >= 96000) {
+                score += 5
+            }
+        }
+
+        return score
+    }
+
+    /**
+     * 本地歌曲检索索引：按歌名与核心歌名归类，用于 O(1) 极速定位匹配候选集，
+     * 避免 O(N) 对全库歌曲执行全量正则与字符串计算。
+     */
+    class LocalSongIndex(val songs: List<AudioFile>) {
+        private val byCleanTitle = HashMap<String, MutableList<AudioFile>>()
+        private val byCoreTitle = HashMap<String, MutableList<AudioFile>>()
+
+        init {
+            for (song in songs) {
+                if (song.path.startsWith("online://")) continue
+                val clean = normalizeForCompare(song.title)
+                if (clean.isNotEmpty()) {
+                    byCleanTitle.getOrPut(clean) { mutableListOf() }.add(song)
+                }
+                val core = normalizeForCompare(extractCoreTitle(song.title, song.artist))
+                if (core.isNotEmpty() && core != clean) {
+                    byCoreTitle.getOrPut(core) { mutableListOf() }.add(song)
+                }
+                val parts = song.title.split('-', '—', '–', '_', '~')
+                    .map { normalizeForCompare(it.trim()) }
+                    .filter { it.isNotBlank() }
+                for (p in parts) {
+                    if (p != clean && p != core) {
+                        byCoreTitle.getOrPut(p) { mutableListOf() }.add(song)
+                    }
+                }
+            }
+        }
+
+        fun getCandidates(targetTitle: String, targetArtist: String? = null): List<AudioFile> {
+            val clean = normalizeForCompare(targetTitle)
+            val core = normalizeForCompare(extractCoreTitle(targetTitle, targetArtist))
+            val result = LinkedHashSet<AudioFile>()
+            if (clean.isNotEmpty()) {
+                byCleanTitle[clean]?.let { result.addAll(it) }
+                byCoreTitle[clean]?.let { result.addAll(it) }
+            }
+            if (core.isNotEmpty()) {
+                byCleanTitle[core]?.let { result.addAll(it) }
+                byCoreTitle[core]?.let { result.addAll(it) }
+            }
+            val parts = targetTitle.split('-', '—', '–', '_', '~')
+                .map { normalizeForCompare(it.trim()) }
+                .filter { it.isNotBlank() }
+            for (p in parts) {
+                byCleanTitle[p]?.let { result.addAll(it) }
+                byCoreTitle[p]?.let { result.addAll(it) }
+            }
+            return if (result.isNotEmpty()) result.toList() else emptyList()
+        }
+    }
+
+    fun buildIndex(librarySongs: List<AudioFile>): LocalSongIndex = LocalSongIndex(librarySongs)
+
+    /**
+     * 从本地曲库中查找最佳匹配的本地音源（加权打分 + 音质优选）。
      *
      * @param targetSong 在线歌曲或待匹配歌曲
      * @param librarySongs 本地曲库中的全部歌曲
+     * @param index 可选的本地曲库快速索引，用于批量解析时提升性能
      * @param toleranceMs 允许的时长误差毫秒数，默认 5000ms
-     * @return 匹配成功的本地歌曲；若无匹配则返回 null
+     * @return 匹配成功的最佳本地歌曲；若无匹配则返回 null
      */
     fun findBestLocalMatch(
         targetSong: AudioFile,
         librarySongs: List<AudioFile>,
+        index: LocalSongIndex? = null,
         toleranceMs: Long = 5000L,
     ): AudioFile? {
         if (librarySongs.isEmpty()) return null
@@ -213,10 +370,31 @@ object SongMatcher {
         val targetArtist = targetSong.artist
         val targetDuration = targetSong.duration
 
+        // 优先使用索引获取高概率候选集（通常仅 1~3 首）；若未提供索引且曲库很大则快速过滤
+        val candidates = index?.getCandidates(targetTitle, targetArtist) ?: run {
+            if (librarySongs.size > 100) {
+                val cleanTarget = normalizeForCompare(targetTitle)
+                val coreTarget = normalizeForCompare(extractCoreTitle(targetTitle, targetArtist))
+                librarySongs.filter { candidate ->
+                    if (candidate.path.startsWith("online://")) false
+                    else {
+                        val cleanCand = normalizeForCompare(candidate.title)
+                        cleanCand == cleanTarget || cleanCand == coreTarget ||
+                            cleanCand.contains(coreTarget) || coreTarget.contains(cleanCand)
+                    }
+                }
+            } else {
+                librarySongs
+            }
+        }
+
+        if (candidates.isEmpty()) return null
+
         var bestMatch: AudioFile? = null
+        var highestScore = -1
         var minDurationDiff = Long.MAX_VALUE
 
-        for (candidate in librarySongs) {
+        for (candidate in candidates) {
             // 跳过在线虚拟歌曲
             if (candidate.path.startsWith("online://")) continue
 
@@ -230,15 +408,61 @@ object SongMatcher {
                     toleranceMs = toleranceMs,
                 )
             ) {
+                val score = calculateMatchScore(
+                    targetTitle = targetTitle,
+                    targetArtist = targetArtist,
+                    candidateTitle = candidate.title,
+                    candidateArtist = candidate.artist,
+                    targetDurationMs = targetDuration,
+                    candidateDurationMs = candidate.duration,
+                    candidate = candidate,
+                )
                 val diff = if (targetDuration > 5000L && candidate.duration > 5000L) {
                     abs(targetDuration - candidate.duration)
                 } else {
                     0L
                 }
-                if (diff < minDurationDiff) {
+                if (score > highestScore || (score == highestScore && diff < minDurationDiff)) {
+                    highestScore = score
                     minDurationDiff = diff
                     bestMatch = candidate
-                    if (diff == 0L) break
+                }
+            }
+        }
+
+        // 宽松降级探活：当严格误差（如 5s）未能命中时，对歌名与作者完全相符的本地音频允许最多 20s 误差（兼容不同母带或前导静音）
+        if (bestMatch == null && toleranceMs < 20000L) {
+            for (candidate in candidates) {
+                if (candidate.path.startsWith("online://")) continue
+                if (isMatched(
+                        targetTitle = targetTitle,
+                        targetArtist = targetArtist,
+                        candidateTitle = candidate.title,
+                        candidateArtist = candidate.artist,
+                        targetDurationMs = targetDuration,
+                        candidateDurationMs = candidate.duration,
+                        toleranceMs = 20000L,
+                    )
+                ) {
+                    val score = calculateMatchScore(
+                        targetTitle = targetTitle,
+                        targetArtist = targetArtist,
+                        candidateTitle = candidate.title,
+                        candidateArtist = candidate.artist,
+                        targetDurationMs = targetDuration,
+                        candidateDurationMs = candidate.duration,
+                        candidate = candidate,
+                    )
+                    val diff = if (targetDuration > 5000L && candidate.duration > 5000L) {
+                        abs(targetDuration - candidate.duration)
+                    } else {
+                        0L
+                    }
+                    if (score > highestScore || (score == highestScore && diff < minDurationDiff)) {
+                        highestScore = score
+                        minDurationDiff = diff
+                        bestMatch = candidate
+                    }
                 }
             }
         }

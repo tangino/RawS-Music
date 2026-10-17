@@ -520,6 +520,10 @@ class NavigationState {
         transitionFromScene = scene
         transitionToScene = scene
         currentScene = scene
+        val stackIndex = _backStack.lastIndexOf(scene)
+        if (stackIndex >= 0) {
+            currentArgument = argumentStack.getOrElse(stackIndex) { "" }
+        }
     }
 
     // ==================== 查询方法 ====================

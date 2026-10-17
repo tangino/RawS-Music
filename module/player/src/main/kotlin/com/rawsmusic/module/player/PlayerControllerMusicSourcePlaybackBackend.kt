@@ -143,6 +143,28 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         mutableSnapshot.value = MusicSourceBackendSnapshot()
     }
 
+    override fun peekNextQueueIndex(): Int? {
+        val nextSong = controller.previewNextSong() ?: return null
+        val currentQueue = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value.queue
+        if (currentQueue.isEmpty()) return null
+        val nextKey = nextSong.path
+        val isOnline = com.rawsmusic.core.common.model.isOnlineSongKey(nextKey)
+        val targetIdentity = if (isOnline) {
+            val rest = nextKey.removePrefix("online://")
+            val pId = rest.substringBefore('/', "netease")
+            val sId = rest.substringAfter('/', nextSong.id.toString())
+            "remote://$pId/$sId"
+        } else {
+            "remote://local/${nextSong.id}"
+        }
+        val idx = currentQueue.indexOfFirst {
+            it.stableIdentity == targetIdentity ||
+                (it.title.equals(nextSong.title, ignoreCase = true) &&
+                    it.artists.contains(nextSong.artist))
+        }
+        return if (idx >= 0) idx else null
+    }
+
     fun onRendererStateChanged(state: FfmpegAudioPlayer.State) {
         val request = activeRequest ?: return
         val currentPath = controller.currentSong.value?.path

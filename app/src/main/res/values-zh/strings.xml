@@ -1279,7 +1279,7 @@
     <string name="settings_bottom_navigation_preview_section">导航栏预览</string>
     <string name="settings_bottom_navigation_selected_section">已选择入口与顺序</string>
     <string name="settings_bottom_navigation_entries_section">可选入口</string>
-    <string name="settings_bottom_navigation_entries_summary">选择 2～5 个入口。</string>
+    <string name="settings_bottom_navigation_entries_summary">选择 2～6 个入口。</string>
     <string name="settings_bottom_navigation_count">已选择 %1$d / %2$d 个入口</string>
     <string name="settings_bottom_navigation_home_required">主界面入口固定保留</string>
     <string name="settings_bottom_navigation_position">第 %1$d 个位置</string>

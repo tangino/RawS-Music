@@ -39,11 +39,12 @@ fun PlaylistDetailScreen(
     onPlaySong: (List<AudioFile>, Int) -> Unit,
     onRemoveSong: (AudioFile) -> Unit
 ) {
-    // 本地曲与在线曲**并列**取（见 PlaylistStore.playlistEntries / P2-05b）：
-    // 只用 resolveSongs 的话，在线曲目会被静默丢掉 —— 导入的 QQ/酷狗歌单会"看起来成功但列表是空的"。
-    val entries = playlistStore.playlistEntries(playlist, librarySongs)
-    // 混合歌单保持原顺序，在线歌曲若在本地曲库有同名同歌手同时间音源，优先匹配为本地音源
-    val songs = playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
+    // 使用 remember(playlist, librarySongs) 缓存解析结果，避免每次重组在主线程重复计算
+    val songs = remember(playlist, librarySongs) {
+        playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
+    }
+    val onlineCount = remember(songs) { songs.count { it.path.startsWith("online://") } }
+    val localCount = remember(songs, onlineCount) { songs.size - onlineCount }
     val state = rememberComposeVirtualListState("playlist-${playlist?.id.orEmpty()}")
     var exportDialog by remember { mutableStateOf(false) }
     val colors = themeColors()
@@ -64,14 +65,14 @@ fun PlaylistDetailScreen(
         }
     } else null
 
-        val statsText = when {
-            entries.local.isNotEmpty() && entries.online.isNotEmpty() ->
-                "共 ${songs.size} 首 (本地 ${entries.local.size} · 网络 ${entries.online.size})"
-            entries.online.isNotEmpty() ->
-                "共 ${songs.size} 首 (网络歌单)"
-            else ->
-                stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size)
-        }
+    val statsText = when {
+        localCount > 0 && onlineCount > 0 ->
+            "混合歌单 · 共 ${songs.size} 首 (本地 $localCount · 网络 $onlineCount)"
+        onlineCount > 0 ->
+            "网络歌单 · 共 ${songs.size} 首"
+        else ->
+            stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size)
+    }
         LibraryListScaffold(
             title = playlist?.name ?: stringResource(R.string.playlist_fallback_name),
             sceneId = NavScene.PLAYLIST_DETAIL_PAGE.name,

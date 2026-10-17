@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.model.isOnlineEntry
+import com.rawsmusic.core.common.model.isVipSong
 import com.rawsmusic.core.common.model.toUserPlaylistSong
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.online.model.OnlinePlatform
@@ -327,6 +328,24 @@ class CloudPlaylistJsonTest {
         assertTrue(parsed.contains("车载"))
         assertTrue(parsed.contains("系统"))
         assertFalse(parsed.contains("默认"))
+    }
+
+    @Test
+    fun `online song vip flag preserves across cloud serialization round trip`() {
+        val vipOnlineSong = onlineSong().copy(format = "VIP")
+        assertTrue(vipOnlineSong.isVipSong())
+
+        val dto = CloudPlaylistJson.songOf(vipOnlineSong, isFavorite = false, isDisliked = false)
+        assertTrue(dto.isVip)
+
+        val json = CloudPlaylistJson.buildPlaylistsJson(listOf(CloudPlaylistJson.systemPlaylist("测试", listOf(dto))))
+        val parsedDto = CloudPlaylistJson.parsePlaylists(json).single().songs.single()
+        assertTrue(parsedDto.isVip)
+
+        val restoredRow = CloudPlaylistJson.toOnlineSongRow(parsedDto)
+        assertNotNull(restoredRow)
+        assertTrue(restoredRow!!.isVipSong())
+        assertEquals("VIP", restoredRow.format)
     }
 
     // --------------------------------------------------------------- 构造工具

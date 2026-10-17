@@ -49,6 +49,13 @@ internal fun HomeHeaderSettingsSection(
     )
     Spacer(Modifier.height(7.dp))
     HomeHeaderToggleRow(
+        title = stringResource(R.string.home_header_search_bar_title),
+        summary = stringResource(R.string.home_header_search_bar_summary),
+        checked = options.searchBarVisible,
+        onCheckedChange = options::updateSearchBarVisible,
+    )
+    Spacer(Modifier.height(7.dp))
+    HomeHeaderToggleRow(
         title = stringResource(R.string.home_header_carousel_visible_title),
         summary = stringResource(R.string.home_header_carousel_visible_summary),
         checked = options.carouselVisible,
@@ -275,6 +282,8 @@ internal fun HomeHeaderMenuDialog(
     show: Boolean,
     weatherVisible: Boolean,
     onWeatherVisibleChange: (Boolean) -> Unit,
+    searchBarVisible: Boolean = true,
+    onSearchBarVisibleChange: (Boolean) -> Unit = {},
     carouselVisible: Boolean,
     onCarouselVisibleChange: (Boolean) -> Unit,
     carouselLyricVisible: Boolean,
@@ -325,6 +334,14 @@ internal fun HomeHeaderMenuDialog(
             )
         }
 
+        Spacer(Modifier.height(12.dp))
+
+        HomeHeaderDialogToggleRow(
+            title = stringResource(R.string.home_header_search_bar_title),
+            summary = stringResource(R.string.home_header_search_bar_summary),
+            checked = searchBarVisible,
+            onCheckedChange = onSearchBarVisibleChange,
+        )
 
         Spacer(Modifier.height(12.dp))
 

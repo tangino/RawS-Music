@@ -3,6 +3,7 @@ package com.rawsmusic.module.data.source.playback
 import android.content.Context
 import com.rawsmusic.core.common.source.RawResolvedAudioSource
 import com.rawsmusic.core.common.source.RawSourceMediaItem
+import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.OnlinePlaybackDiagnostics
 import java.io.BufferedInputStream
@@ -48,6 +49,44 @@ internal object OnlineAudioFileCache {
     private const val MAX_REDIRECTS = 6
 
     private val downloadMutexes = ConcurrentHashMap<String, Mutex>()
+
+    /**
+     * 对齐 OrBitPlayer 本地缓存拦截机制：在网络寻源前快速检查本地是否存在该在线歌曲的有效完整缓存。
+     * 若命中直接返回本地缓存文件及对应音质，无需执行耗时的网络寻源与第三方直链解析。
+     */
+    fun findValidCachedFile(
+        context: Context,
+        item: RawSourceMediaItem,
+        preferredQuality: RawSourceQuality? = null,
+    ): Pair<File, RawSourceQuality>? {
+        val cacheDir = File(context.cacheDir, CACHE_DIR)
+        if (!cacheDir.isDirectory) return null
+        val now = System.currentTimeMillis()
+
+        val allQualities = RawSourceQuality.entries
+        val candidateQualities: List<RawSourceQuality> = if (preferredQuality != null) {
+            listOf(preferredQuality) + (allQualities - preferredQuality)
+        } else {
+            allQualities
+        }
+
+        for (quality in candidateQualities) {
+            val cacheKey = sha256("${item.stableIdentity}|${quality.name}")
+            val files = cacheDir.listFiles { _, name -> name.startsWith("$cacheKey.") && !name.endsWith(".part") }
+            if (files != null && files.isNotEmpty()) {
+                val validFile = files.firstOrNull { file ->
+                    file.isFile &&
+                        file.length() >= MIN_VALID_BYTES &&
+                        now - file.lastModified() in 0..CACHE_TTL_MS
+                }
+                if (validFile != null) {
+                    validFile.setLastModified(now)
+                    return validFile to quality
+                }
+            }
+        }
+        return null
+    }
 
     suspend fun materialize(
         context: Context,

@@ -7,6 +7,7 @@ import com.rawsmusic.core.common.model.ONLINE_SONG_KEY_PREFIX
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.model.isOnlineEntry
+import com.rawsmusic.core.common.model.isVipSong
 import com.rawsmusic.core.common.model.onlineUserPlaylistSong
 import com.rawsmusic.core.common.model.toUserPlaylistSong
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
@@ -44,6 +45,7 @@ data class CloudSongDto(
     @SerializedName("sourcePlatform") val sourcePlatform: String,
     @SerializedName("isFavorite") val isFavorite: Boolean,
     @SerializedName("isDisliked") val isDisliked: Boolean,
+    @SerializedName("isVip") val isVip: Boolean = false,
 )
 
 /** `playlists_json` 里的一个歌单。 */
@@ -170,6 +172,7 @@ object CloudPlaylistJson {
             sourcePlatform = if (online) platformIdOfPath(song.path)?.let(::uppercaseOrEmpty) ?: "" else "",
             isFavorite = isFavorite,
             isDisliked = isDisliked,
+            isVip = song.isVipSong(),
         )
     }
 
@@ -307,6 +310,7 @@ object CloudPlaylistJson {
             album = song.album,
             durationMs = song.durationMs,
             albumArtUrl = cover,
+            isVip = song.isVip,
         )
     }
 

@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 
 private const val HOME_HEADER_PREFS = "home_header_preferences"
 private const val HOME_WEATHER_VISIBLE_KEY = "weather_visible"
+private const val HOME_SEARCH_BAR_VISIBLE_KEY = "search_bar_visible"
 private const val HOME_CAROUSEL_VISIBLE_KEY = "carousel_visible"
 private const val HOME_CAROUSEL_STYLE_KEY = "carousel_style"
 private const val HOME_CAROUSEL_LYRIC_VISIBLE_KEY = "carousel_lyric_visible"
@@ -44,6 +45,11 @@ class HomeHeaderOptionsState(context: Context) {
 
     var weatherVisible by mutableStateOf(
         preferences.getBoolean(HOME_WEATHER_VISIBLE_KEY, true),
+    )
+        private set
+
+    var searchBarVisible by mutableStateOf(
+        preferences.getBoolean(HOME_SEARCH_BAR_VISIBLE_KEY, true),
     )
         private set
 
@@ -111,6 +117,8 @@ class HomeHeaderOptionsState(context: Context) {
         when (key) {
             HOME_WEATHER_VISIBLE_KEY -> weatherVisible =
                 preferences.getBoolean(HOME_WEATHER_VISIBLE_KEY, true)
+            HOME_SEARCH_BAR_VISIBLE_KEY -> searchBarVisible =
+                preferences.getBoolean(HOME_SEARCH_BAR_VISIBLE_KEY, true)
             HOME_CAROUSEL_VISIBLE_KEY -> carouselVisible =
                 preferences.getBoolean(HOME_CAROUSEL_VISIBLE_KEY, true)
             HOME_CAROUSEL_LYRIC_VISIBLE_KEY -> carouselLyricVisible =
@@ -149,6 +157,11 @@ class HomeHeaderOptionsState(context: Context) {
     fun updateWeatherVisible(value: Boolean) {
         weatherVisible = value
         preferences.edit().putBoolean(HOME_WEATHER_VISIBLE_KEY, value).apply()
+    }
+
+    fun updateSearchBarVisible(value: Boolean) {
+        searchBarVisible = value
+        preferences.edit().putBoolean(HOME_SEARCH_BAR_VISIBLE_KEY, value).apply()
     }
 
     fun updateCarouselVisible(value: Boolean) {

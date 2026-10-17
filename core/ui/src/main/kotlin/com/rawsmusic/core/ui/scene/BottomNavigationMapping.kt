@@ -55,7 +55,8 @@ fun NavScene.bottomNavigationRoot(): NavScene = when (this) {
     NavScene.ABOUT -> NavScene.SETTINGS
 
     NavScene.ONLINE_MUSIC,
-    NavScene.ONLINE_PLAYLIST_DETAIL -> NavScene.ONLINE_MUSIC
+    NavScene.ONLINE_PLAYLIST_DETAIL,
+    NavScene.ONLINE_ARTIST_DETAIL -> NavScene.ONLINE_MUSIC
 
     else -> NavScene.SONGS
 }

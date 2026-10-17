@@ -26,4 +26,21 @@ class BottomNavigationEntryTest {
             customizableBottomNavigationScenes.map { it.tag }.distinct().size,
         )
     }
+
+    @Test
+    fun sixItemSavedOrderWithOnlineMusicIsPreservedExactly() {
+        val tags = listOf("home", "songs", "audio_effects", "search", "settings", "online_music")
+
+        assertEquals(
+            listOf(
+                NavScene.HOME,
+                NavScene.SONGS,
+                NavScene.AUDIO_EFFECTS,
+                NavScene.SEARCH,
+                NavScene.SETTINGS,
+                NavScene.ONLINE_MUSIC,
+            ),
+            resolveBottomNavigationScenes(tags),
+        )
+    }
 }

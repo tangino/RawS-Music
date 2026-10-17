@@ -5580,10 +5580,9 @@ class PlayerController private constructor(context: Context) {
     }
 
     private fun applyExplicitShuffleSelectionPolicy(queue: List<AudioFile>, index: Int) {
-        if (!playbackModeController.isShuffleEnabled ||
-            !samePlaybackQueue(_queue.value.songs, queue)
-        ) return
-        val forceContinuousShuffle = shuffleQueueController.onExplicitSelection(_queue.value, index)
+        if (!playbackModeController.isShuffleEnabled) return
+        val targetQueue = PlayQueue(songs = queue, currentIndex = index)
+        val forceContinuousShuffle = shuffleQueueController.onExplicitSelection(targetQueue, index)
         if (forceContinuousShuffle && playbackModeController.currentPlayMode == PlayMode.SHUFFLE_ONCE) {
             playbackModeController.setPlayMode(PlayMode.SHUFFLE_ALL)
         }
@@ -5643,19 +5642,29 @@ class PlayerController private constructor(context: Context) {
             return
         }
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
-            // 混合歌单特征：当本地存在同名同歌手且时长基本一致的歌曲时，优先播放本地音源
-            val searchPool = (queue + _queue.value.songs).filter { !com.rawsmusic.core.common.model.isOnlineSongKey(it.path) }
-            val localMatch = com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, searchPool)
-            if (localMatch != null) {
-                Log.i(TAG, "play() 混合歌单优先使用本地音源: title=${song.title} -> ${localMatch.path}")
-                val resolvedQueue = if (queue.isNotEmpty()) {
-                    queue.map { if (it.path == song.path) localMatch else it }
-                } else {
-                    _queue.value.songs.map { if (it.path == song.path) localMatch else it }
+            // 本地曲库优先秒开探活：
+            // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时
+            val localMatch = try {
+                val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
+                com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
+            } catch (_: Throwable) {
+                null
+            }
+            if (localMatch != null && java.io.File(localMatch.path).exists()) {
+                AppLogger.i(TAG, "playInternal: online song '${song.title}' matched local file '${localMatch.path}', redirecting to local 0ms instant playback")
+                val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                val redirectedQueue = effectiveQueue.map { q ->
+                    if (q.path == song.path) localMatch else q
                 }
-                play(localMatch, resolvedQueue, index)
+                playInternal(
+                    song = localMatch,
+                    queue = redirectedQueue,
+                    index = index,
+                    deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                )
                 return
             }
+
             // 即将进入网络寻源。如果当前底层正在播放/准备，立即停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
             val isRendererBusy = _playState.value == PlayState.PLAYING ||
                 _playState.value == PlayState.PREPARING ||

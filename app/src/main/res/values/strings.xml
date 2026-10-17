@@ -1301,7 +1301,7 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="settings_bottom_navigation_preview_section">Preview</string>
     <string name="settings_bottom_navigation_selected_section">Selected entries and order</string>
     <string name="settings_bottom_navigation_entries_section">Available entries</string>
-    <string name="settings_bottom_navigation_entries_summary">Choose 2–5 entries.</string>
+    <string name="settings_bottom_navigation_entries_summary">Choose 2–6 entries.</string>
     <string name="settings_bottom_navigation_count">%1$d of %2$d entries selected</string>
     <string name="settings_bottom_navigation_home_required">Required main-screen entry</string>
     <string name="settings_bottom_navigation_position">Position %1$d</string>

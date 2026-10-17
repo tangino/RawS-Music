@@ -103,6 +103,24 @@ data class SongVirtualListItem(
  * retained scene is in motion, matching Reference's ArtworkItemNode/MarqueeTextNode ownership.
  */
 internal fun formatVirtualListSongMeta(song: AudioFile): String {
+    if (song.path.startsWith("online://")) {
+        val rest = song.path.removePrefix("online://")
+        val platformId = rest.substringBefore('/')
+        val platformName = when (platformId.lowercase(Locale.ROOT)) {
+            "netease" -> "网易云"
+            "qq" -> "QQ音乐"
+            "kugou" -> "酷狗"
+            "kuwo" -> "酷我"
+            "migu" -> "咪咕"
+            else -> platformId.ifBlank { "在线" }
+        }
+        return buildList {
+            add(platformName)
+            if (song.isVipSong()) add("VIP")
+            add("在线音源")
+        }.joinToString("｜")
+    }
+
     val format = song.format
         .ifBlank { song.encodingFormat }
         .ifBlank { song.extension }

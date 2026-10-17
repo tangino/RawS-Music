@@ -176,6 +176,9 @@ class AppPageRendererImpl(
                         val clicked = songs.getOrNull(index) ?: return@PlaylistDetailScreen
                         pc?.play(clicked, songs, index)
                         val coverPath = playlist?.coverUrl?.takeIf { it.isNotBlank() }
+                            ?: clicked.coverKey.takeIf { it.isNotBlank() }
+                            ?: songs.firstOrNull { it.coverKey.isNotBlank() }?.coverKey
+                            ?: clicked.albumArtPath.takeIf { it.isNotBlank() }
                             ?: songs.firstOrNull { it.albumArtPath.isNotBlank() }?.albumArtPath.orEmpty()
                         if (playlist != null) {
                             PlayedPlaylistManager.recordPlayedPlaylist(

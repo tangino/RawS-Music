@@ -208,13 +208,8 @@ fun AppMainLayout(
             OnlinePortalTabManager.dismiss()
         }
     }
-    val tabScenes = remember(configuredTabTags, isOnlineMusicActive) {
-        val configured = resolveBottomNavigationScenes(configuredTabTags)
-        if (isOnlineMusicActive && NavScene.ONLINE_MUSIC !in configured) {
-            configured + NavScene.ONLINE_MUSIC
-        } else {
-            configured
-        }
+    val tabScenes = remember(configuredTabTags) {
+        resolveBottomNavigationScenes(configuredTabTags)
     }
 
     val selectedTabIndex by remember(tabScenes) {

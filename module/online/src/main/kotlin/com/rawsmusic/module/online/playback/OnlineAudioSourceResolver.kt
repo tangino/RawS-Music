@@ -109,6 +109,13 @@ object OnlineAudioSourceResolver {
         }
     }
 
+    /**
+     * 全局初始化与常驻挂载入口，确保在线寻源兜底与探活校验在应用生命周期内始终就绪。
+     */
+    fun init(context: Context) {
+        AppLogger.i(TAG, "OnlineAudioSourceResolver globally initialized and hooked into MusicSourceAudioResolver")
+    }
+
     @Synchronized
     fun getOrCreateQuickJsEngine(context: Context, source: InstalledLxSource): LxSourceEngine? {
         val existing = quickJsEngines[source.id]
@@ -1169,6 +1176,19 @@ object OnlineAudioSourceResolver {
             RawSourceQuality.Lossless -> "flac"
             RawSourceQuality.Super, RawSourceQuality.High -> "320k"
             else -> "128k"
+        }
+
+        // 🌟 对齐 OrBitPlayer：优先查内存 LRU 直链缓存 (0ms 秒开)
+        val cacheKey = "${platform.id}:$songId:$qualityStr"
+        val now = System.currentTimeMillis()
+        val cached = memoryUrlCache.get(cacheKey) ?: memoryUrlCache.get("${platform.id}:$songId")
+        if (cached != null && cached.expireAtMs > now) {
+            AppLogger.d(TAG, "Hit memoryUrlCache for ${item.title}: ${cached.url}")
+            return RawResolvedAudioSource(
+                url = cached.url,
+                quality = requestedQuality,
+                headers = emptyMap(),
+            )
         }
 
         val resolved = resolvePlayableSource(

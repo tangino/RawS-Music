@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -171,15 +172,11 @@ fun PlaylistScreen(
         )
     }
 
-    val resolvedSongsByPlaylistId = remember(displayedPlaylists, librarySongs) {
+    val collageSongsByPlaylistId = remember(displayedPlaylists, librarySongs) {
+        val libraryMap = librarySongs.associateBy { it.id }
         displayedPlaylists.associate { playlist ->
-            val local = playlistStore.resolveSongs(playlist, librarySongs)
-            val online = playlist.songs.filter { it.isOnlineEntry() }.map { it.toAudioFile() }
-            playlist.id to (local + online)
+            playlist.id to extractPlaylistPreviewSongs(playlist, libraryMap)
         }
-    }
-    val collageSongsByPlaylistId = remember(resolvedSongsByPlaylistId) {
-        resolvedSongsByPlaylistId.mapValues { (_, songs) -> buildPlaylistCollageSongs(songs) }
     }
     // 分组只影响真实歌单：伪卡是系统入口，不属于任何分组，固定排在所有分区之上（默认选择，
     // 理由见汇报）；同一分组内保持既有「先 chunked、再交给虚拟列表」的网格排布。
@@ -252,6 +249,15 @@ fun PlaylistScreen(
     val playlistRowHeight = remember(windowLayoutProfile.contentMaxWidth, playlistColumns) {
         playlistGridRowHeight(windowLayoutProfile.contentMaxWidth, playlistColumns)
     }
+    val onPlaylistActionsCallback = remember(groupChrome) {
+        { pl: UserPlaylist -> groupChrome.playlistActionsTarget = pl }
+    }
+    val onOnlinePlaylistActionsCallback = remember(groupChrome) {
+        { fav: OnlinePlaylistFavoriteEntity -> groupChrome.onlinePlaylistActionsTarget = fav }
+    }
+    val onGroupLongPressCallback = remember(groupChrome) {
+        { group: String -> groupChrome.groupMenuTarget = group }
+    }
     val playlistCustomProvider = rememberPlaylistGridProvider(
         plan = playlistGridPlan,
         columns = playlistColumns,
@@ -259,10 +265,10 @@ fun PlaylistScreen(
         collageSongsByPlaylistId = collageSongsByPlaylistId,
         attitudeSongCounts = attitudeSongCounts,
         onPlaylistClick = onPlaylistClick,
-        onPlaylistActions = { groupChrome.playlistActionsTarget = it },
+        onPlaylistActions = onPlaylistActionsCallback,
         onOnlinePlaylistClick = onOnlinePlaylistClick,
-        onOnlinePlaylistActions = { groupChrome.onlinePlaylistActionsTarget = it },
-        onGroupLongPress = { groupChrome.groupMenuTarget = it },
+        onOnlinePlaylistActions = onOnlinePlaylistActionsCallback,
+        onGroupLongPress = onGroupLongPressCallback,
     )
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -515,64 +521,203 @@ internal fun playlistCardIconRes(playlist: UserPlaylist): Int = when {
     else -> R.drawable.ic_music_note
 }
 
-private data class PlaylistArtworkSlot(
-    val x: Float,
-    val y: Float,
-    val width: Float,
-    val height: Float,
-    val rotation: Float,
-    val cornerRadius: Dp,
-    val z: Float,
-)
+private fun extractPlaylistPreviewSongs(
+    playlist: UserPlaylist,
+    libraryMap: Map<Long, AudioFile>,
+    maxArtworks: Int = 4,
+): List<AudioFile> {
+    if (!playlist.coverUrl.isNullOrBlank()) return emptyList()
+    if (playlist.songs.isEmpty()) return emptyList()
 
-private val playlistArtworkSlots = listOf(
-    PlaylistArtworkSlot(0.025f, 0.035f, 0.60f, 0.79f, -1.8f, 20.dp, 6f),
-    PlaylistArtworkSlot(0.63f, 0.035f, 0.29f, 0.35f, 2.1f, 17.dp, 4f),
-    PlaylistArtworkSlot(0.815f, 0.22f, 0.16f, 0.30f, -1.2f, 14.dp, 5f),
-    PlaylistArtworkSlot(0.61f, 0.40f, 0.35f, 0.27f, 1.0f, 16.dp, 3f),
-    PlaylistArtworkSlot(0.67f, 0.66f, 0.28f, 0.25f, -1.8f, 15.dp, 4f),
-    PlaylistArtworkSlot(0.49f, 0.72f, 0.19f, 0.20f, 1.8f, 13.dp, 5f),
-)
+    val result = ArrayList<AudioFile>(maxArtworks)
+    val seenCovers = HashSet<String>(maxArtworks)
 
-internal object PlaylistOrganicFrameShape : Shape {
-    override fun createOutline(
-        size: Size,
-        layoutDirection: LayoutDirection,
-        density: Density,
-    ): Outline {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.10f, 0f)
-            cubicTo(w * 0.27f, h * 0.012f, w * 0.33f, 0f, w * 0.50f, h * 0.01f)
-            cubicTo(w * 0.68f, h * 0.022f, w * 0.73f, 0f, w * 0.88f, h * 0.018f)
-            cubicTo(w * 0.965f, h * 0.03f, w, h * 0.09f, w * 0.99f, h * 0.18f)
-            cubicTo(w * 0.98f, h * 0.34f, w, h * 0.43f, w * 0.985f, h * 0.58f)
-            cubicTo(w * 0.97f, h * 0.72f, w, h * 0.81f, w * 0.955f, h * 0.91f)
-            cubicTo(w * 0.91f, h * 0.995f, w * 0.81f, h, w * 0.69f, h * 0.985f)
-            cubicTo(w * 0.53f, h * 0.97f, w * 0.44f, h, w * 0.29f, h * 0.985f)
-            cubicTo(w * 0.15f, h * 0.97f, w * 0.055f, h * 0.985f, w * 0.022f, h * 0.89f)
-            cubicTo(-w * 0.005f, h * 0.79f, w * 0.018f, h * 0.69f, w * 0.008f, h * 0.55f)
-            cubicTo(0f, h * 0.42f, w * 0.018f, h * 0.31f, w * 0.008f, h * 0.19f)
-            cubicTo(0f, h * 0.09f, w * 0.03f, h * 0.025f, w * 0.10f, 0f)
-            close()
+    for (entry in playlist.songs) {
+        val song = if (entry.isOnlineEntry()) {
+            entry.toAudioFile()
+        } else {
+            libraryMap[entry.id] ?: entry.toAudioFile()
         }
-        return Outline.Generic(path)
-    }
-}
-
-private fun buildPlaylistCollageSongs(songs: List<AudioFile>): List<AudioFile> {
-    if (songs.isEmpty()) return emptyList()
-    val result = ArrayList<AudioFile>(6)
-    val artworkKeys = HashSet<String>(6)
-    songs.forEach { song ->
-        val artworkKey = song.coverKey
-        if (artworkKeys.add(artworkKey)) {
-            result += song
+        val key = song.coverKey
+        if (key.isNotBlank() && seenCovers.add(key)) {
+            result.add(song)
+            if (result.size >= maxArtworks) break
         }
-        if (result.size == 6) return result
     }
     return result
+}
+
+@Composable
+private fun PlaylistCollageCover(
+    coverUrl: String?,
+    collageSongs: List<AudioFile>,
+    iconRes: Int,
+    accent: Color,
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.22f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!coverUrl.isNullOrBlank()) {
+            BitmapImage(
+                key = coverUrl,
+                contentDescription = title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                targetWidth = 320,
+                targetHeight = 320,
+            )
+        } else if (collageSongs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                accent.copy(alpha = 0.40f),
+                                Color.Black.copy(alpha = 0.65f),
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(Color.White.copy(alpha = 0.16f))
+                        .border(1.dp, Color.White.copy(alpha = 0.30f), RoundedCornerShape(22.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(iconRes),
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.95f),
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+        } else if (collageSongs.size == 1) {
+            BitmapImage(
+                key = collageSongs[0].coverKey,
+                contentDescription = title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                targetWidth = 320,
+                targetHeight = 320,
+            )
+        } else if (collageSongs.size in 2..3) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                BitmapImage(
+                    key = collageSongs[0].coverKey,
+                    contentDescription = title,
+                    modifier = Modifier
+                        .weight(1.3f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 240,
+                    targetHeight = 320,
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    for (i in 1 until collageSongs.size) {
+                        BitmapImage(
+                            key = collageSongs[i].coverKey,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp)),
+                            contentScale = ContentScale.Crop,
+                            targetWidth = 160,
+                            targetHeight = 160,
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    BitmapImage(
+                        key = collageSongs[0].coverKey,
+                        contentDescription = title,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop,
+                        targetWidth = 160,
+                        targetHeight = 160,
+                    )
+                    BitmapImage(
+                        key = collageSongs[1].coverKey,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop,
+                        targetWidth = 160,
+                        targetHeight = 160,
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    BitmapImage(
+                        key = collageSongs[2].coverKey,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop,
+                        targetWidth = 160,
+                        targetHeight = 160,
+                    )
+                    BitmapImage(
+                        key = collageSongs[3].coverKey,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop,
+                        targetWidth = 160,
+                        targetHeight = 160,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -591,145 +736,82 @@ internal fun PlaylistFrameCard(
     val accent = remember(playlist.id, playlist.isFavorites, accentOverride) {
         accentOverride ?: playlistFrameAccent(playlist)
     }
-    val frameShape = PlaylistOrganicFrameShape
+    val cardShape = RoundedCornerShape(22.dp)
 
-    BoxWithConstraints(
+    Column(
         modifier = modifier
             .aspectRatio(0.86f)
             .shadow(
-                elevation = 10.dp,
-                shape = frameShape,
+                elevation = 8.dp,
+                shape = cardShape,
                 clip = false,
-                ambientColor = accent.copy(alpha = 0.18f),
-                spotColor = accent.copy(alpha = 0.24f),
+                ambientColor = accent.copy(alpha = 0.15f),
+                spotColor = accent.copy(alpha = 0.20f),
             )
-            .clip(frameShape)
+            .clip(cardShape)
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        accent.copy(alpha = 0.26f),
-                        colors.surface.copy(alpha = 0.96f),
-                        Color.Black.copy(alpha = 0.78f),
+                        accent.copy(alpha = 0.22f),
+                        colors.surface.copy(alpha = 0.94f),
+                        Color.Black.copy(alpha = 0.72f),
                     )
                 )
             )
-            .border(1.dp, accent.copy(alpha = 0.42f), frameShape)
+            .border(1.dp, accent.copy(alpha = 0.35f), cardShape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = if (actionsEnabled) onActions else null,
             )
+            .padding(8.dp),
     ) {
-        val collageHeight = maxHeight - 64.dp
-
-        Box(
+        PlaylistCollageCover(
+            coverUrl = playlist.coverUrl,
+            collageSongs = collageSongs,
+            iconRes = iconRes,
+            accent = accent,
+            title = playlist.name,
             modifier = Modifier
-                .padding(start = 8.dp, top = 8.dp, end = 8.dp)
                 .fillMaxWidth()
-                .height(collageHeight.coerceAtLeast(96.dp))
-                .clip(RoundedCornerShape(26.dp))
-                .background(Color.Black.copy(alpha = 0.26f))
-        ) {
-            val coverUrl = playlist.coverUrl
-            if (!coverUrl.isNullOrBlank()) {
-                BitmapImage(
-                    key = coverUrl,
-                    contentDescription = playlist.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    targetWidth = 512,
-                    targetHeight = 512,
-                )
-            } else if (collageSongs.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(accent.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painter = painterResource(iconRes),
-                            contentDescription = null,
-                            tint = accent.copy(alpha = 0.92f),
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
-            } else {
-                BoxWithConstraints(Modifier.fillMaxSize()) {
-                    collageSongs.forEachIndexed { index, song ->
-                        val slot = playlistArtworkSlots[index]
-                        BitmapImage(
-                            key = song.coverKey,
-                            contentDescription = if (index == 0) playlist.name else null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .offset(
-                                    x = maxWidth * slot.x,
-                                    y = maxHeight * slot.y,
-                                )
-                                .size(
-                                    width = maxWidth * slot.width,
-                                    height = maxHeight * slot.height,
-                                )
-                                .zIndex(slot.z)
-                                .graphicsLayer { rotationZ = slot.rotation }
-                                .clip(RoundedCornerShape(slot.cornerRadius))
-                                .border(
-                                    width = if (index == 0) 1.2.dp else 0.8.dp,
-                                    color = Color.White.copy(alpha = if (index == 0) 0.24f else 0.16f),
-                                    shape = RoundedCornerShape(slot.cornerRadius),
-                                ),
-                            targetWidth = if (index == 0) 512 else 256,
-                            targetHeight = if (index == 0) 512 else 256,
-                            priority = BitmapRequest.Priority.LOADING_LIST,
-                            surface = ArtworkSurface.List,
-                        )
-                    }
-                }
-            }
-        }
+                .weight(1f),
+        )
+
+        Spacer(Modifier.height(8.dp))
 
         Row(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
                 .fillMaxWidth()
-                .height(52.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .height(48.dp)
+                .clip(RoundedCornerShape(14.dp))
                 .background(
                     Brush.horizontalGradient(
                         listOf(
-                            accent.copy(alpha = 0.20f),
-                            colors.surface.copy(alpha = 0.82f),
-                            Color.Black.copy(alpha = 0.52f),
+                            accent.copy(alpha = 0.22f),
+                            colors.surface.copy(alpha = 0.85f),
+                            Color.Black.copy(alpha = 0.55f),
                         )
                     )
                 )
-                .border(0.8.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(24.dp))
-                .padding(start = 10.dp, end = 6.dp),
+                .border(0.8.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(start = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(accent.copy(alpha = 0.18f)),
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     painter = painterResource(iconRes),
                     contentDescription = null,
                     tint = accent,
-                    modifier = Modifier.size(17.dp)
+                    modifier = Modifier.size(16.dp)
                 )
             }
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -738,35 +820,87 @@ internal fun PlaylistFrameCard(
                 Text(
                     text = playlist.name,
                     color = colors.onSurface,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontFamily = appFontFamily(),
                 )
-                Text(
-                    text = stringResource(R.string.playlist_song_count, songCountOverride ?: playlist.songs.size),
-                    color = colors.onSurface.copy(alpha = 0.50f),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    fontFamily = appFontFamily(),
-                )
+                val totalCount = songCountOverride ?: playlist.songs.size
+                val onlineCount = playlist.songs.count { it.isOnlineEntry() }
+                val localCount = (playlist.songs.size - onlineCount).coerceAtLeast(0)
+                val isHybrid = onlineCount > 0 && localCount > 0
+                val countText = when {
+                    totalCount == 0 -> stringResource(R.string.playlist_song_count, 0)
+                    isHybrid -> "${totalCount} 首 (网 $onlineCount · 本 $localCount)"
+                    onlineCount > 0 && onlineCount == playlist.songs.size -> "${totalCount} 首 (网络)"
+                    else -> stringResource(R.string.playlist_song_count, totalCount)
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    if (isHybrid) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFFFF9100).copy(alpha = 0.16f))
+                                .border(0.5.dp, Color(0xFFFF9100).copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+                                .padding(horizontal = 3.dp, vertical = 0.5.dp),
+                        ) {
+                            Text(
+                                text = "混合",
+                                color = Color(0xFFFF9100),
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                    } else if (onlineCount > 0 && onlineCount == playlist.songs.size) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF00E5FF).copy(alpha = 0.16f))
+                                .border(0.5.dp, Color(0xFF00E5FF).copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+                                .padding(horizontal = 3.dp, vertical = 0.5.dp),
+                        ) {
+                            Text(
+                                text = "网络",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                    }
+                    Text(
+                        text = countText,
+                        color = colors.onSurface.copy(alpha = 0.50f),
+                        fontSize = 10.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontFamily = appFontFamily(),
+                    )
+                }
             }
 
             if (actionsEnabled) {
                 IconButton(
                     onClick = onActions,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
                         contentDescription = stringResource(R.string.playlist_group_playlist_actions),
                         tint = colors.onSurface.copy(alpha = 0.44f),
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             } else {
-                Spacer(Modifier.width(32.dp))
+                Spacer(Modifier.width(28.dp))
             }
         }
     }
@@ -802,43 +936,42 @@ internal fun OnlinePlaylistFrameCard(
             }
         }
     }
-    val frameShape = PlaylistOrganicFrameShape
+    val cardShape = RoundedCornerShape(22.dp)
 
-    BoxWithConstraints(
+    Column(
         modifier = modifier
             .aspectRatio(0.86f)
             .shadow(
-                elevation = 10.dp,
-                shape = frameShape,
+                elevation = 8.dp,
+                shape = cardShape,
                 clip = false,
-                ambientColor = accent.copy(alpha = 0.18f),
-                spotColor = accent.copy(alpha = 0.24f),
+                ambientColor = accent.copy(alpha = 0.15f),
+                spotColor = accent.copy(alpha = 0.20f),
             )
-            .clip(frameShape)
+            .clip(cardShape)
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        accent.copy(alpha = 0.26f),
-                        colors.surface.copy(alpha = 0.96f),
-                        Color.Black.copy(alpha = 0.78f),
+                        accent.copy(alpha = 0.22f),
+                        colors.surface.copy(alpha = 0.94f),
+                        Color.Black.copy(alpha = 0.72f),
                     )
                 )
             )
-            .border(1.dp, accent.copy(alpha = 0.42f), frameShape)
+            .border(1.dp, accent.copy(alpha = 0.35f), cardShape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onActions,
             )
+            .padding(8.dp),
     ) {
-        val collageHeight = maxHeight - 64.dp
-
         Box(
             modifier = Modifier
-                .padding(start = 8.dp, top = 8.dp, end = 8.dp)
                 .fillMaxWidth()
-                .height(collageHeight.coerceAtLeast(96.dp))
-                .clip(RoundedCornerShape(26.dp))
-                .background(Color.Black.copy(alpha = 0.26f))
+                .weight(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black.copy(alpha = 0.22f)),
+            contentAlignment = Alignment.Center,
         ) {
             val coverUrl = favorite.coverUrl
             if (coverUrl.isNotBlank()) {
@@ -847,73 +980,66 @@ internal fun OnlinePlaylistFrameCard(
                     contentDescription = favorite.title,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
-                    targetWidth = 512,
-                    targetHeight = 512,
+                    targetWidth = 320,
+                    targetHeight = 320,
                 )
             } else {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(accent.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(accent.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_play_list_fill),
-                            contentDescription = null,
-                            tint = accent.copy(alpha = 0.92f),
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+                    Icon(
+                        painter = painterResource(R.drawable.ic_play_list_fill),
+                        contentDescription = null,
+                        tint = accent.copy(alpha = 0.92f),
+                        modifier = Modifier.size(32.dp)
+                    )
                 }
             }
         }
 
-        // 下方磨砂底条
+        Spacer(Modifier.height(8.dp))
+
         Row(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
                 .fillMaxWidth()
-                .height(52.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .height(48.dp)
+                .clip(RoundedCornerShape(14.dp))
                 .background(
                     Brush.horizontalGradient(
                         listOf(
-                            accent.copy(alpha = 0.20f),
-                            colors.surface.copy(alpha = 0.82f),
-                            Color.Black.copy(alpha = 0.52f),
+                            accent.copy(alpha = 0.22f),
+                            colors.surface.copy(alpha = 0.85f),
+                            Color.Black.copy(alpha = 0.55f),
                         )
                     )
                 )
-                .border(0.8.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(24.dp))
-                .padding(start = 10.dp, end = 6.dp),
+                .border(0.8.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(start = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 左侧平台小徽章
             val platformLabel = platform?.displayName ?: favorite.platform.uppercase()
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(6.dp))
                     .background(accent.copy(alpha = 0.22f))
-                    .border(0.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                    .border(0.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.5.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = platformLabel,
                     color = accent,
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                 )
             }
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -922,7 +1048,7 @@ internal fun OnlinePlaylistFrameCard(
                 Text(
                     text = favorite.title,
                     color = colors.onSurface,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -931,7 +1057,7 @@ internal fun OnlinePlaylistFrameCard(
                 Text(
                     text = stringResource(R.string.playlist_song_count, favorite.trackCount),
                     color = colors.onSurface.copy(alpha = 0.50f),
-                    fontSize = 11.sp,
+                    fontSize = 10.5.sp,
                     maxLines = 1,
                     fontFamily = appFontFamily(),
                 )
@@ -939,13 +1065,13 @@ internal fun OnlinePlaylistFrameCard(
 
             IconButton(
                 onClick = onActions,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(28.dp)
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_more_vert),
                     contentDescription = stringResource(R.string.playlist_group_playlist_actions),
                     tint = colors.onSurface.copy(alpha = 0.44f),
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }

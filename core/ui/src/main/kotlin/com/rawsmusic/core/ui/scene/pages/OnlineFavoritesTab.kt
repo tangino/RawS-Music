@@ -51,7 +51,10 @@ import top.yukonga.miuix.kmp.basic.TextButton
  * **不要直接调 DAO**：DAO 写入后不会通知 UI，界面会停在旧数据上（见 `AGENTS.MD` §5.3）。
  */
 @Composable
-internal fun OnlineFavoritesTab(modifier: Modifier = Modifier) {
+internal fun OnlineFavoritesTab(
+    onOpenPlaylist: (OnlinePlatform, String) -> Unit = { _, _ -> },
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val favorites by OnlinePlaylistFavoriteStore.favorites.collectAsState()
@@ -96,8 +99,10 @@ internal fun OnlineFavoritesTab(modifier: Modifier = Modifier) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(visible, key = { it.playlistKey }) { favorite ->
+                        val platform = OnlinePlatform.fromId(favorite.platform) ?: OnlinePlatform.NETEASE
                         OnlineFavoriteRow(
                             favorite = favorite,
+                            onClick = { onOpenPlaylist(platform, favorite.remoteId) },
                             onRemove = {
                                 scope.launch {
                                     runCatching {
@@ -165,6 +170,7 @@ private fun OnlineFavoriteChip(label: String, selected: Boolean, onClick: () -> 
 @Composable
 private fun OnlineFavoriteRow(
     favorite: OnlinePlaylistFavoriteEntity,
+    onClick: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val colors = themeColors()
@@ -186,6 +192,7 @@ private fun OnlineFavoriteRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(colors.surface)
+            .clickable(onClick = onClick)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

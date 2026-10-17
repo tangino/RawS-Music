@@ -73,6 +73,8 @@
     <string name="home_header_menu_title">Home</string>
     <string name="home_header_menu_summary">Manage weather, artwork carousel visibility, and carousel style.</string>
     <string name="home_header_weather_title">Weather</string>
+    <string name="home_header_search_bar_title">Search bar</string>
+    <string name="home_header_search_bar_summary">Show search bar at the top of the home page; turn off to hide.</string>
     <string name="home_header_carousel_visible_title">Artwork carousel</string>
     <string name="home_header_carousel_visible_summary">Show the artwork carousel on Home. Turning it off also hides carousel lyric and style controls.</string>
     <string name="home_header_carousel_lyric_title">Rotating lyrics</string>

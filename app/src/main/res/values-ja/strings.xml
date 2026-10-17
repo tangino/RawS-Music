@@ -1221,7 +1221,7 @@
     <string name="settings_bottom_navigation_preview_section">プレビュー</string>
     <string name="settings_bottom_navigation_selected_section">選択済み項目と順序</string>
     <string name="settings_bottom_navigation_entries_section">利用可能な項目</string>
-    <string name="settings_bottom_navigation_entries_summary">2～5 項目を選択してください。</string>
+    <string name="settings_bottom_navigation_entries_summary">2～6 項目を選択してください。</string>
     <string name="settings_bottom_navigation_count">%2$d 項目中 %1$d 項目を選択</string>
     <string name="settings_bottom_navigation_home_required">必須のメイン画面項目</string>
     <string name="settings_bottom_navigation_position">位置 %1$d</string>

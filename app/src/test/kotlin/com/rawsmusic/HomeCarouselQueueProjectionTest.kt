@@ -34,4 +34,16 @@ class HomeCarouselQueueProjectionTest {
         val after = buildHomeCarouselQueueProjection(PlayQueue(next, 9), next[9], next[8], next[10], next)
         assertEquals(before.songs.subList(9, 18), after.songs.subList(5, 14))
     }
+
+    @Test fun isolatedCenterRelativePreviewFallsBackToPhysicalNeighboursWhenQueueHasMultipleSongs() {
+        val source = (0..20).map(::song)
+        val relative = List<AudioFile?>(19) { if (it == 9) source[9] else null }
+        val result = buildHomeCarouselQueueProjection(
+            PlayQueue(source, 9), source[9], null, null, relative,
+        )
+        // 确保不会因为relative只有center而塌陷为单曲，而是回退到物理兜底投影（-9..9共19首）
+        assertEquals(19, result.songs.size)
+        assertEquals(9, result.currentIndex)
+        assertEquals(source[9], result.songs[9])
+    }
 }

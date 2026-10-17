@@ -483,9 +483,48 @@ object MusicSourcePlaybackController {
             return
         }
 
+        val targetPreferredQuality = requestedQualityOverride ?: loadPreferredQuality()
+        // 对齐 OrBitPlayer 核心机制：检查本地磁盘是否已存在有效缓存文件
+        // 若已命中完整缓存，直接以离线本地文件起播，跳过 Resolving（正在寻源...）阶段，实现 0 延时离线秒开！
+        val cachedHit = OnlineAudioFileCache.findValidCachedFile(
+            context = context,
+            item = item,
+            preferredQuality = targetPreferredQuality,
+        )
+        if (cachedHit != null) {
+            val (cachedFile, cachedQuality) = cachedHit
+            AppLogger.i(
+                TAG,
+                "${OnlinePlaybackDiagnostics.PREFIX} CACHE_DIRECT_HIT title=${item.title} " +
+                    "quality=$cachedQuality bytes=${cachedFile.length()} file=${cachedFile.name}"
+            )
+            val localResolved = RawResolvedAudioSource(
+                url = cachedFile.absolutePath,
+                quality = cachedQuality,
+                headers = emptyMap(),
+            )
+            mutableSnapshot.value = MusicSourcePlaybackSnapshot(
+                queue = queue,
+                currentIndex = index,
+                currentItem = item,
+                status = MusicSourcePlaybackStatus.Preparing,
+                requestedQuality = cachedQuality,
+                resolvedQuality = cachedQuality,
+                durationMs = item.durationMs,
+            )
+            prepareResolved(
+                generation = generation,
+                item = item,
+                source = localResolved,
+                startPositionMs = startPositionMs.coerceAtLeast(0L),
+                autoPlay = autoPlay,
+            )
+            return
+        }
+
         val requestedQuality = MusicSourceAudioResolver.preferredQuality(
             item = item,
-            preferred = requestedQualityOverride ?: loadPreferredQuality(),
+            preferred = targetPreferredQuality,
         )
         mutableSnapshot.value = MusicSourcePlaybackSnapshot(
             queue = queue,
@@ -532,7 +571,12 @@ object MusicSourcePlaybackController {
             return
         }
 
-        val nextIndex = if (isShuffle || playMode == PlayMode.SHUFFLE_ALL || playMode == PlayMode.SHUFFLE_ONCE) {
+        // 优先对齐宿主 PlayerController 规划的下一首（包含确定性的随机洗牌序列与队列策略）
+        val backendNext = backend?.peekNextQueueIndex()
+        val nextIndex = if (backendNext != null && backendNext in queue.indices && backendNext != state.currentIndex) {
+            plannedNextShuffleIndex = backendNext
+            backendNext
+        } else if (isShuffle || playMode == PlayMode.SHUFFLE_ALL || playMode == PlayMode.SHUFFLE_ONCE) {
             val next = pickNextShuffleIndex(queue.size, state.currentIndex)
             plannedNextShuffleIndex = next
             next
@@ -543,6 +587,13 @@ object MusicSourcePlaybackController {
 
         if (nextIndex !in queue.indices || nextIndex == state.currentIndex) return
         val nextItem = queue[nextIndex]
+
+        // 若下一首在本地磁盘已拥有有效缓存，直接跳过网络预解析
+        val nextCached = OnlineAudioFileCache.findValidCachedFile(context, nextItem)
+        if (nextCached != null) {
+            AppLogger.d(TAG, "下一首【${nextItem.title}】已在本地完整缓存(${nextCached.second})，跳过网络预热")
+            return
+        }
 
         preloadJob = scope.launch(Dispatchers.IO) {
             delay(500L) // 缩短起播后等待延迟（由2000ms降至500ms），让下一首更早进入预解析

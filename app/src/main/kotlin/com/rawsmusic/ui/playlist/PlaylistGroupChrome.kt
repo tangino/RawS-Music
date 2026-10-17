@@ -1,8 +1,11 @@
 package com.rawsmusic.ui.playlist
 
 import android.content.Context
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -361,7 +365,8 @@ private fun playlistGridVirtualItem(index: Int, entry: PlaylistGridEntry): Audio
 }
 
 /**
- * 现代轻量化二级分组筛选胶囊栏 (OrBit 风格移植并深度融合 Miuix 视觉规范)。
+ * 现代轻量化二级分组筛选胶囊栏 (深度融合 Miuix 极简圆角药丸规范)。
+ * 移除了突兀死板的实体遮挡背景条，采用通透沉浸的无感平滑滑动的流线药丸设计；
  * 仅在存在多个包含歌单的分组时展示；空分组自动隐形，不打扰用户。
  */
 @Composable
@@ -374,44 +379,38 @@ internal fun PlaylistGroupFilterBar(
     onGroupLongPress: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = themeColors()
-    Surface(
-        color = colors.surface.copy(alpha = 0.85f),
-        modifier = modifier.fillMaxWidth(),
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val isAllSelected = selectedGroup == null
-            PlaylistFilterChip(
-                name = stringResource(R.string.playlist_group_all),
-                count = totalPlaylistCount,
-                isSelected = isAllSelected,
-                onClick = { onSelectGroup(null) },
-                onLongClick = {},
-            )
+        val isAllSelected = selectedGroup == null
+        PlaylistFilterChip(
+            name = stringResource(R.string.playlist_group_all),
+            count = totalPlaylistCount,
+            isSelected = isAllSelected,
+            onClick = { onSelectGroup(null) },
+            onLongClick = {},
+        )
 
-            groups.forEach { group ->
-                val isSelected = selectedGroup == group.name
-                val count = groupCounts[group.name] ?: 0
-                val displayName = playlistGroupDisplayName(group.name)
-                PlaylistFilterChip(
-                    name = displayName,
-                    count = count,
-                    isSelected = isSelected,
-                    onClick = { onSelectGroup(group.name) },
-                    onLongClick = {
-                        if (group.name != DEFAULT_PLAYLIST_GROUP) {
-                            onGroupLongPress(group.name)
-                        }
-                    },
-                )
-            }
+        groups.forEach { group ->
+            val isSelected = selectedGroup == group.name
+            val count = groupCounts[group.name] ?: 0
+            val displayName = playlistGroupDisplayName(group.name)
+            PlaylistFilterChip(
+                name = displayName,
+                count = count,
+                isSelected = isSelected,
+                onClick = { onSelectGroup(group.name) },
+                onLongClick = {
+                    if (group.name != DEFAULT_PLAYLIST_GROUP) {
+                        onGroupLongPress(group.name)
+                    }
+                },
+            )
         }
     }
 }
@@ -426,24 +425,33 @@ private fun PlaylistFilterChip(
     onLongClick: () -> Unit,
 ) {
     val colors = themeColors()
-    val shape = RoundedCornerShape(8.dp)
-    val bgColor = if (isSelected) colors.primary.copy(alpha = 0.16f) else colors.surface.copy(alpha = 0.45f)
-    val borderColor = if (isSelected) colors.primary.copy(alpha = 0.6f) else colors.outline.copy(alpha = 0.15f)
-    val textColor = if (isSelected) colors.primary else colors.onSurface
+    val shape = RoundedCornerShape(999.dp)
+    val pillBgColor by animateColorAsState(
+        targetValue = if (isSelected) colors.primary.copy(alpha = 0.14f) else colors.surface.copy(alpha = 0.65f),
+        label = "playlistChipBg",
+    )
+    val pillBorderColor by animateColorAsState(
+        targetValue = if (isSelected) colors.primary.copy(alpha = 0.45f) else colors.outline.copy(alpha = 0.12f),
+        label = "playlistChipBorder",
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (isSelected) colors.primary else colors.secondaryText,
+        label = "playlistChipText",
+    )
 
-    Surface(
-        shape = shape,
-        color = bgColor,
-        border = BorderStroke(if (isSelected) 1.dp else 0.5.dp, borderColor),
+    Box(
         modifier = Modifier
             .clip(shape)
+            .background(pillBgColor)
+            .border(BorderStroke(if (isSelected) 1.dp else 0.5.dp, pillBorderColor), shape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
-            ),
+            )
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
@@ -455,17 +463,22 @@ private fun PlaylistFilterChip(
                 fontFamily = appFontFamily(),
             )
             if (count > 0) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = if (isSelected) colors.primary.copy(alpha = 0.22f) else colors.onSurface.copy(alpha = 0.08f),
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            if (isSelected) colors.primary.copy(alpha = 0.20f)
+                            else colors.onSurface.copy(alpha = 0.08f)
+                        )
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = "$count",
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isSelected) colors.primary else colors.onSurfaceVariant,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) colors.primary else colors.secondaryText,
                         fontFamily = appFontFamily(),
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                     )
                 }
             }

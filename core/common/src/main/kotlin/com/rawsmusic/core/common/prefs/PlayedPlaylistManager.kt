@@ -86,6 +86,19 @@ object PlayedPlaylistManager {
         saveEntry(KEY_CURRENT, null)
     }
 
+    /**
+     * 如果当前歌单缺少封面，且当前播放的曲目具备封面时，自动补齐封面。
+     */
+    fun updateCurrentPlaylistCoverIfBlank(coverKey: String) {
+        if (coverKey.isBlank()) return
+        val current = _currentPlaylist.value ?: return
+        if (current.coverUrl.isNullOrBlank()) {
+            val updated = current.copy(coverUrl = coverKey)
+            _currentPlaylist.value = updated
+            saveEntry(KEY_CURRENT, updated)
+        }
+    }
+
     private fun loadEntry(key: String): PlayedPlaylistEntry? {
         val jsonStr = kv.decodeString(key)?.takeIf { it.isNotBlank() } ?: return null
         return try {

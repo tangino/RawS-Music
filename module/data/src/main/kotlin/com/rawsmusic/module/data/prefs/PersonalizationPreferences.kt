@@ -4,6 +4,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 object PersonalizationPreferences {
+    const val MAX_BOTTOM_NAVIGATION_SCENES = 6
+    const val MIN_BOTTOM_NAVIGATION_SCENES = 2
+
     private const val KEY_PREDICTIVE_BACK_ANIMATION = "personalization_predictive_back_animation"
     private const val KEY_PERFORMANCE_MODE = "personalization_performance_mode"
     private const val KEY_PERFORMANCE_MODE_DEFAULT_V2 = "personalization_performance_mode_default_v2"
@@ -74,6 +77,7 @@ object PersonalizationPreferences {
         "audio_effects",
         "search",
         "settings",
+        "online_music",
     )
 
     val defaultBottomNavigationSceneTags: List<String> = listOf(
@@ -593,7 +597,7 @@ object PersonalizationPreferences {
         if (result.size < 2) {
             defaultBottomNavigationSceneTags.firstOrNull { it !in result }?.let(result::add)
         }
-        return result.take(5)
+        return result.take(MAX_BOTTOM_NAVIGATION_SCENES)
     }
 }
 

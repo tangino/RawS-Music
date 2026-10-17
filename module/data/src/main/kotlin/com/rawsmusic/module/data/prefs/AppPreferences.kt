@@ -2264,7 +2264,7 @@ object AppPreferences {
 
         var resolveStrategy: com.rawsmusic.module.data.source.ResolveStrategy
             get() = com.rawsmusic.module.data.source.ResolveStrategy.fromId(
-                kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.CLASSIC_POLLING.id)
+                kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.MODERN_CONCURRENT.id)
             )
             set(value) { kv.encode("resolve_strategy", value.id) }
     }

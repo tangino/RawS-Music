@@ -148,14 +148,10 @@ internal fun OnlineArtistDetailPage(
     val noMatchMessage = stringResource(R.string.online_detail_no_match)
     val playFailedMessage = stringResource(R.string.online_detail_play_failed)
 
-    // 拦截返回键：如果处于专辑下钻状态，先返回歌手页；否则返回歌手库列表
-    BackHandler {
-        if (selectedAlbum != null) {
-            selectedAlbum = null
-            albumSongs = emptyList()
-        } else {
-            onBack()
-        }
+    // 拦截返回键：仅在处于专辑下钻状态时拦截并返回歌手页；未下钻时不拦截，交由全局导航/播放器返回处理
+    BackHandler(enabled = selectedAlbum != null) {
+        selectedAlbum = null
+        albumSongs = emptyList()
     }
 
     // 加载歌手详情与初始歌曲/专辑

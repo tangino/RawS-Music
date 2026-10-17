@@ -21,16 +21,14 @@ internal fun resolveBottomNavigationSelectedIndex(
     val exactIndex = tabScenes.indexOf(rootScene)
     if (exactIndex >= 0) return exactIndex
 
-    if (visualScene == NavScene.SEARCH) {
-        val searchIndex = backStack.lastIndexOf(NavScene.SEARCH)
-        val ownerCandidates = when {
-            searchIndex > 0 -> backStack.subList(0, searchIndex).asReversed()
-            else -> backStack.asReversed().filterNot { it == NavScene.SEARCH }
-        }
-        ownerCandidates.forEach { candidate ->
-            val ownerIndex = tabScenes.indexOf(candidate.bottomNavigationRoot())
-            if (ownerIndex >= 0) return ownerIndex
-        }
+    val lastSceneIndex = backStack.lastIndexOf(visualScene)
+    val ownerCandidates = when {
+        lastSceneIndex > 0 -> backStack.subList(0, lastSceneIndex).asReversed()
+        else -> backStack.asReversed().filterNot { it == visualScene }
+    }
+    ownerCandidates.forEach { candidate ->
+        val ownerIndex = tabScenes.indexOf(candidate.bottomNavigationRoot())
+        if (ownerIndex >= 0) return ownerIndex
     }
 
     return tabScenes.indexOf(NavScene.HOME).coerceAtLeast(0)

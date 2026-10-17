@@ -53,6 +53,7 @@ interface MusicSourcePlaybackBackend {
     fun resume()
     fun seekTo(positionMs: Long)
     fun stop()
+    fun peekNextQueueIndex(): Int? = null
 }
 
 /**

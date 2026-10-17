@@ -85,6 +85,13 @@ class PlaylistStore private constructor(private val context: Context) {
     private val mutationMutex = Mutex()
     private val ready = CompletableDeferred<Unit>()
 
+    // 内存 LRU 映射缓存：将 online 歌曲 Key 映射到匹配成功的本地 AudioFile，避免重复遍历曲库进行高频计算
+    private val onlineToLocalMatchCache = android.util.LruCache<String, AudioFile>(500)
+
+    fun invalidateMatchCache() {
+        onlineToLocalMatchCache.evictAll()
+    }
+
     private val _playlists = MutableStateFlow(
         legacyPlaylists ?: listOf(createFavoritesPlaylist())
     )
@@ -273,16 +280,49 @@ class PlaylistStore private constructor(private val context: Context) {
             librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
         }
 
+        // 仅在有在线歌曲时才构建局部索引，避免无意义的开销
+        val hasOnline = playlist.songs.any { it.isOnlineEntry() }
+        val localSongIndex = if (hasOnline && librarySongs.isNotEmpty()) {
+            SongMatcher.buildIndex(librarySongs)
+        } else {
+            null
+        }
+
+        // 本地音源优先原则：无论歌单是否为混合歌单，在线条目若在本地曲库中有对应音频，
+        // 一律优先使用本地音源播放，实现 0 延迟秒开，避免网络寻源开销与超时；
+        // 本地条目若因换机或路径微调未命中原路径，自动通过智能匹配器自愈找回。
         return playlist.songs.mapNotNull { stored ->
             if (stored.isOnlineEntry()) {
-                val onlineAudioFile = stored.toAudioFile()
-                // 优先在本地曲库中匹配同名、同歌手、时长误差不超过 5 秒的本地音源
-                val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs)
-                matchedLocal ?: onlineAudioFile
+                val cacheKey = stored.key
+                val cached = onlineToLocalMatchCache.get(cacheKey)
+                if (cached != null) {
+                    if (cached.path.startsWith("online://")) {
+                        // 负缓存命中：此前已确认无本地匹配，直接返回在线音频，0ms 秒开
+                        cached
+                    } else if (File(cached.path).exists()) {
+                        // 正缓存命中：本地匹配文件依然存在，直接返回
+                        cached
+                    } else {
+                        // 文件已被移动或删除，重新尝试匹配
+                        val onlineAudioFile = stored.toAudioFile()
+                        val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                        val result = matchedLocal ?: onlineAudioFile
+                        onlineToLocalMatchCache.put(cacheKey, result)
+                        result
+                    }
+                } else {
+                    val onlineAudioFile = stored.toAudioFile()
+                    val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                    val result = matchedLocal ?: onlineAudioFile
+                    // 无论命中与否均写入缓存（未命中则缓存 onlineAudioFile 本身作为负缓存），阻断重复扫描
+                    onlineToLocalMatchCache.put(cacheKey, result)
+                    result
+                }
             } else {
                 byIdentity[stored.key]
                     ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
                     ?: stored.toAudioFile().takeIf { File(it.path).exists() }
+                    ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
             }
         }
     }

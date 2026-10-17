@@ -94,6 +94,8 @@
     <string name="home_header_menu_summary">管理天气信息、专辑图轮播显示与轮播样式。</string>
     <string name="home_header_weather_title">天气信息</string>
     <string name="home_header_weather_summary">控制标题下方的天气动画、温度和提示；“主界面”标题始终显示。</string>
+    <string name="home_header_search_bar_title">搜索栏</string>
+    <string name="home_header_search_bar_summary">在主界面顶部显示搜索框；关闭后隐藏搜索入口。</string>
     <string name="home_header_carousel_visible_title">专辑图轮播</string>
     <string name="home_header_carousel_visible_summary">在主界面显示专辑图轮播；关闭后同时隐藏轮播歌词与样式调节。</string>
     <string name="home_header_carousel_lyric_title">轮播歌词</string>
