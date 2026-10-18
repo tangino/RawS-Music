@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 车机与超大屏黄金比例胶囊：去除切歌按键后紧凑压缩，消除右侧冗余留白 -->
+    <dimen name="floating_window_width">380dp</dimen>
+    <dimen name="floating_window_height">90dp</dimen>
+    <dimen name="floating_window_corner_radius">45dp</dimen>
+    <dimen name="floating_padding_start">8dp</dimen>
+    <dimen name="floating_padding_end">10dp</dimen>
+    <dimen name="floating_padding_vertical">8dp</dimen>
+
+    <!-- 黑胶唱片封面与居中大播放按键 -->
+    <dimen name="floating_cover_size">74dp</dimen>
+    <dimen name="floating_btn_play_pause_size">44dp</dimen>
+    <dimen name="floating_btn_play_pause_padding">8dp</dimen>
+
+    <!-- 中部文本信息 (滑动切歌，点击进播放器) -->
+    <dimen name="floating_info_margin_start">12dp</dimen>
+    <dimen name="floating_info_margin_end">8dp</dimen>
+    <dimen name="floating_title_size">20sp</dimen>
+    <dimen name="floating_title_max_width">185dp</dimen>
+    <dimen name="floating_dot_margin">5dp</dimen>
+    <dimen name="floating_dot_size">15sp</dimen>
+    <dimen name="floating_artist_size">15sp</dimen>
+    <dimen name="floating_lyric_size">16.5sp</dimen>
+
+    <!-- 关闭按键 -->
+    <dimen name="floating_btn_close_size">32dp</dimen>
+    <dimen name="floating_btn_close_padding">5dp</dimen>
+</resources>

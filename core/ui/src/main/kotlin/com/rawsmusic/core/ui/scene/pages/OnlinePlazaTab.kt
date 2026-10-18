@@ -271,13 +271,13 @@ internal fun OnlinePlazaTab(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
                         ),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(
                             searchResults.chunked(gridColumns),
                             key = { row -> "search_" + row.joinToString("_") { "${it.platform.id}_${it.id}" } }
                         ) { rowItems ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 rowItems.forEach { playlist ->
                                     OnlinePlaylistCard(
                                         playlist = playlist,
@@ -326,13 +326,13 @@ internal fun OnlinePlazaTab(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
                         ),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(
                             playlists.chunked(gridColumns),
                             key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }
                         ) { rowItems ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 rowItems.forEach { playlist ->
                                     OnlinePlaylistCard(
                                         playlist = playlist,
@@ -573,24 +573,23 @@ private fun OnlinePlaylistCard(
     val colors = themeColors()
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surface)
-            .clickable(onClick = onClick)
-            .padding(bottom = 8.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(colors.surface.copy(alpha = 0.5f)),
-            contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = MiuixIcons.Regular.Music,
                 contentDescription = null,
                 tint = colors.secondaryText.copy(alpha = 0.25f),
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier
+                    .size(32.dp)
+                    .align(Alignment.Center),
             )
             BitmapImage(
                 key = playlist.coverUrl,
@@ -600,22 +599,52 @@ private fun OnlinePlaylistCard(
                 targetHeight = 256,
                 showDefaultArtwork = false,
             )
+            if (playlist.playCount > 0) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 4.dp, end = 4.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "▶",
+                        fontSize = 8.sp,
+                        color = Color.White,
+                    )
+                    Text(
+                        text = formatPlayCount(playlist.playCount),
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
+        Spacer(Modifier.height(5.dp))
         Text(
             text = playlist.title,
             color = colors.onSurface,
-            fontSize = 13.sp,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Normal,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            lineHeight = 16.sp,
         )
-        Text(
-            text = stringResource(R.string.online_plaza_play_count, formatPlayCount(playlist.playCount)),
-            color = colors.secondaryText,
-            fontSize = 11.sp,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
+        playlist.creatorName?.takeIf { it.isNotBlank() }?.let { creator ->
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = creator,
+                color = colors.secondaryText,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -738,9 +767,15 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
     }
 }
 
-/** 播放量按中文习惯用「万 / 亿」压缩，否则 7 位数会撑破卡片。 */
+/** 播放量按中文习惯用「万 / 亿」压缩并保留一位小数，与主流平台一致。 */
 private fun formatPlayCount(count: Long): String = when {
-    count >= 100_000_000L -> "${count / 100_000_000L}亿"
-    count >= 10_000L -> "${count / 10_000L}万"
+    count >= 100_000_000L -> {
+        val v = count / 100_000_000.0
+        if (v >= 10.0 || (count % 100_000_000L < 10_000_000L)) "${count / 100_000_000L}亿" else String.format(java.util.Locale.CHINA, "%.1f亿", v)
+    }
+    count >= 10_000L -> {
+        val v = count / 10_000.0
+        if (v >= 100.0 || (count % 10_000L < 1_000L)) "${count / 10_000L}万" else String.format(java.util.Locale.CHINA, "%.1f万", v)
+    }
     else -> count.toString()
 }

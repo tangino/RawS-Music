@@ -437,9 +437,11 @@ object OnlineAudioSourceResolver {
             candidates.add(MatchedPlatformSong(targetPlatform, songId, hash = songId, matchTitle = title, matchArtist = artist, durationMs = expectedDurationMs))
         }
 
-        // 跨平台寻源或原平台初步失败时，搜索匹配符合严格规则的候选集
+        // 跨平台寻源或原平台初步失败时，搜索匹配符合严格规则的候选集（2800ms 超时保护）
         if (!isOriginal || candidates.isEmpty()) {
-            val searched = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+            val searched = kotlinx.coroutines.withTimeoutOrNull(2800L) {
+                searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+            } ?: emptyList()
             candidates.addAll(searched)
         }
 
@@ -782,7 +784,9 @@ object OnlineAudioSourceResolver {
 
             // 4.4 若原平台原始 ID 解析失败，但在原平台上尚未搜索其他版本，进行原平台二度搜救
             if (resolvedResult == null && isOriginal) {
-                val searchedOriginal = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+                val searchedOriginal = (kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                    searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+                } ?: emptyList())
                     .filter { it.songId != songId }
                     .take(2)
                 for (cand in searchedOriginal) {

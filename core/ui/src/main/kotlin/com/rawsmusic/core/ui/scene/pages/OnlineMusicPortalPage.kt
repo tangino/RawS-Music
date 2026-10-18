@@ -74,7 +74,7 @@ fun OnlineMusicPortalPage(
             .rawStableStatusBarsPadding()
             .bottomChromeNestedScroll(),
     ) {
-        // 顶部操作栏：左侧返回 + 标题，右侧平台切换器胶囊
+        // 顶部操作栏：左侧返回 + 标题，右侧网格列数与平台切换器胶囊
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -119,6 +119,7 @@ fun OnlineMusicPortalPage(
         }
     }
 
+
     // 平台选择对话框
     if (showPlatformPicker) {
         PlatformPickerDialog(
@@ -128,6 +129,7 @@ fun OnlineMusicPortalPage(
         )
     }
 }
+
 
 /** 顶栏右侧的精巧平台选择胶囊按钮。 */
 @Composable

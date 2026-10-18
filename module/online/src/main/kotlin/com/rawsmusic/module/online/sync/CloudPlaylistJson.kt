@@ -277,6 +277,26 @@ object CloudPlaylistJson {
     }
 
     /**
+     * 清洗跨设备迁移时可能失效的封面 URI。
+     * 仅保留有效的 HTTP/HTTPS 网络封面或本设备确实存在的本地物理图片，
+     * 阻断诸如 `content://com.orbit.music.cover/` 等跨进程失效 URI 卡死图片解码队列。
+     */
+    fun sanitizeArtworkUri(uri: String): String {
+        val trimmed = uri.trim()
+        if (trimmed.isBlank()) return ""
+        if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+            return trimmed
+        }
+        if (trimmed.startsWith("content://com.orbit.music.cover", ignoreCase = true)) {
+            return ""
+        }
+        if (trimmed.startsWith("/") && !java.io.File(trimmed).exists()) {
+            return ""
+        }
+        return trimmed
+    }
+
+    /**
      * 云端的一首**本地**歌 → [AudioFile]，交给 `PlaylistStore` 去转行。
      *
      * ⚠️ `id` 故意留 0：云端的歌曲 id 是**别的设备**上的 MediaStore id，搬到本机会指错歌。
@@ -289,8 +309,19 @@ object CloudPlaylistJson {
         artist = song.artist,
         album = song.album,
         duration = song.durationMs,
-        albumArtPath = song.albumArtUri,
+        albumArtPath = sanitizeArtworkUri(song.coverUrl.ifBlank { song.albumArtUri }),
     )
+
+    /**
+     * 云端一首歌（无论是在线歌曲还是本地歌曲）统一转换为 UserPlaylistSong，
+     * 确保混合歌单从云端还原时能严格保序，不发生本地/在线分离重排序。
+     */
+    fun toUserPlaylistSong(song: CloudSongDto): UserPlaylistSong {
+        val onlineRow = toOnlineSongRow(song)
+        if (onlineRow != null) return onlineRow
+
+        return toAudioFile(song).toUserPlaylistSong()
+    }
 
     /**
      * 云端的一首**在线**歌 → 本地在线行；`path` 不是 `online://` 串时返回 null。

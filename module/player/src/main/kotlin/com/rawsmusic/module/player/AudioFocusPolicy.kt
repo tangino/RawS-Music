@@ -17,7 +17,8 @@ internal data class AudioFocusPolicy(
     val handleTransientChangesAndCalls: Boolean,
     val resumeOnFocusGain: Boolean,
     val allowDuck: Boolean,
-    val pauseOnPermanentLoss: Boolean
+    val pauseOnPermanentLoss: Boolean,
+    val keepPlayingOnInterruption: Boolean = true
 ) {
     companion object {
         fun current() = AudioFocusPolicy(
@@ -27,7 +28,8 @@ internal data class AudioFocusPolicy(
             handleTransientChangesAndCalls = AudioFocusPreferences.handleTransientChangesAndCalls,
             resumeOnFocusGain = AudioFocusPreferences.resumeOnFocusGain,
             allowDuck = AudioFocusPreferences.allowDuck,
-            pauseOnPermanentLoss = AudioFocusPreferences.pauseOnPermanentLoss
+            pauseOnPermanentLoss = AudioFocusPreferences.pauseOnPermanentLoss,
+            keepPlayingOnInterruption = AudioFocusPreferences.keepPlayingOnInterruption
         )
     }
 }

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 手机端紧凑胶囊：自适应宽度与间距 -->
+    <dimen name="floating_window_width">205dp</dimen>
+    <dimen name="floating_window_height">54dp</dimen>
+    <dimen name="floating_window_corner_radius">27dp</dimen>
+    <dimen name="floating_padding_start">5dp</dimen>
+    <dimen name="floating_padding_end">5dp</dimen>
+    <dimen name="floating_padding_vertical">4.5dp</dimen>
+
+    <!-- 黑胶唱片封面与右侧播放按键 -->
+    <dimen name="floating_cover_size">42dp</dimen>
+    <dimen name="floating_btn_play_pause_size">22dp</dimen>
+    <dimen name="floating_btn_play_pause_padding">3dp</dimen>
+    <dimen name="floating_btn_play_pause_margin_end">4dp</dimen>
+
+    <!-- 中部文本信息 (滑动切歌，点击进播放器) -->
+    <dimen name="floating_info_margin_start">6dp</dimen>
+    <dimen name="floating_info_margin_end">4dp</dimen>
+    <dimen name="floating_title_size">10.5sp</dimen>
+    <dimen name="floating_title_max_width">80dp</dimen>
+    <dimen name="floating_dot_margin">2.5dp</dimen>
+    <dimen name="floating_dot_size">8sp</dimen>
+    <dimen name="floating_artist_size">9sp</dimen>
+    <dimen name="floating_lyric_size">9.8sp</dimen>
+
+    <!-- 关闭按键 -->
+    <dimen name="floating_btn_close_size">18dp</dimen>
+    <dimen name="floating_btn_close_padding">2dp</dimen>
+</resources>

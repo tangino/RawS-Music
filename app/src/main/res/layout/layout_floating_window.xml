@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/floating_root_card"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:padding="2dp">
+
+    <!-- 极简灵动音乐胶囊 (自适应设备尺寸与横竖屏) -->
+    <LinearLayout
+        android:id="@+id/floating_capsule_container"
+        android:layout_width="@dimen/floating_window_width"
+        android:layout_height="@dimen/floating_window_height"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/bg_floating_window"
+        android:paddingStart="@dimen/floating_padding_start"
+        android:paddingEnd="@dimen/floating_padding_end"
+        android:paddingTop="@dimen/floating_padding_vertical"
+        android:paddingBottom="@dimen/floating_padding_vertical">
+
+        <!-- 左侧：唱片级黑胶封面 -->
+        <FrameLayout
+            android:id="@+id/floating_cover_container"
+            android:layout_width="@dimen/floating_cover_size"
+            android:layout_height="@dimen/floating_cover_size"
+            android:background="@drawable/bg_floating_vinyl">
+
+            <!-- 唱片封面图 (正圆裁剪) -->
+            <ImageView
+                android:id="@+id/floating_cover"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_default_album_art"
+                android:contentDescription="Album Art" />
+        </FrameLayout>
+
+        <!-- 中部：纯净信息流 (左右滑动切歌 · 点击打开播放器) -->
+        <LinearLayout
+            android:id="@+id/floating_info_container"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginStart="@dimen/floating_info_margin_start"
+            android:layout_marginEnd="@dimen/floating_info_margin_end"
+            android:gravity="center_vertical"
+            android:orientation="vertical">
+
+            <!-- 上行：歌名与歌手 (左右轻划切换上一首/下一首，点击唤起播放器) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/floating_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RawS-Music"
+                    android:textSize="@dimen/floating_title_size"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:singleLine="true"
+                    android:maxWidth="@dimen/floating_title_max_width"
+                    android:ellipsize="marquee"
+                    android:marqueeRepeatLimit="marquee_forever" />
+
+                <TextView
+                    android:id="@+id/floating_title_dot"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/floating_dot_margin"
+                    android:text="·"
+                    android:textSize="@dimen/floating_dot_size"
+                    android:textColor="#66FFFFFF" />
+
+                <TextView
+                    android:id="@+id/floating_artist"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="@dimen/floating_dot_margin"
+                    android:text="未知艺术家"
+                    android:textSize="@dimen/floating_artist_size"
+                    android:textColor="#80FFFFFF"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- 第一行：永远是当前正在唱的歌词 (核心演唱行，高亮纯净白 #F1F5F9，字重加粗，单行超长跑马灯) -->
+            <TextView
+                android:id="@+id/floating_lyric"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:text="享受音乐旋律"
+                android:textSize="@dimen/floating_lyric_size"
+                android:textColor="#F1F5F9"
+                android:textStyle="bold"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="2"
+                android:singleLine="true"
+                android:ellipsize="marquee"
+                android:marqueeRepeatLimit="marquee_forever" />
+
+            <!-- 第二行：即将播放的下一句预告歌词 (次级柔和白 #80FFFFFF，单行超长跑马灯) -->
+            <TextView
+                android:id="@+id/floating_lyric_next"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="0.5dp"
+                android:text=""
+                android:textSize="@dimen/floating_lyric_size"
+                android:textColor="#80FFFFFF"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="2"
+                android:singleLine="true"
+                android:ellipsize="marquee"
+                android:marqueeRepeatLimit="marquee_forever" />
+        </LinearLayout>
+
+        <!-- 播放/暂停控制按键 (位于关闭按钮左侧) -->
+        <ImageButton
+            android:id="@+id/floating_btn_play_pause"
+            android:layout_width="@dimen/floating_btn_play_pause_size"
+            android:layout_height="@dimen/floating_btn_play_pause_size"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="@dimen/floating_btn_play_pause_margin_end"
+            android:padding="@dimen/floating_btn_play_pause_padding"
+            android:scaleType="fitCenter"
+            android:background="@drawable/bg_float_btn_ripple"
+            android:src="@drawable/ic_float_play"
+            android:contentDescription="Play/Pause" />
+
+        <!-- 右侧：微型关闭键 -->
+        <ImageButton
+            android:id="@+id/floating_btn_close"
+            android:layout_width="@dimen/floating_btn_close_size"
+            android:layout_height="@dimen/floating_btn_close_size"
+            android:layout_gravity="center_vertical"
+            android:padding="@dimen/floating_btn_close_padding"
+            android:scaleType="fitCenter"
+            android:background="@drawable/bg_float_btn_ripple"
+            android:src="@drawable/ic_float_close"
+            android:contentDescription="Close" />
+    </LinearLayout>
+
+    <!-- 长按唤起的尺寸调整层 (默认隐藏)：虚线选择框 + 四角拖动圆点 + 实时尺寸提示 -->
+    <FrameLayout
+        android:id="@+id/floating_resize_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
+
+        <!-- 虚线选择框 (圆角与胶囊等半径，跟随缩放自适应) -->
+        <View
+            android:id="@+id/floating_resize_frame"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- 四角拖动圆点：沿胶囊半圆外轮廓 45° 排布 -->
+        <View
+            android:id="@+id/floating_resize_handle_tl"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="top|start"
+            android:background="@drawable/bg_floating_resize_handle" />
+
+        <View
+            android:id="@+id/floating_resize_handle_tr"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="top|end"
+            android:background="@drawable/bg_floating_resize_handle" />
+
+        <View
+            android:id="@+id/floating_resize_handle_bl"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="bottom|start"
+            android:background="@drawable/bg_floating_resize_handle" />
+
+        <View
+            android:id="@+id/floating_resize_handle_br"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="bottom|end"
+            android:background="@drawable/bg_floating_resize_handle" />
+
+        <!-- 实时尺寸提示 (拖动时显示百分比与 dp 尺寸) -->
+        <TextView
+            android:id="@+id/floating_resize_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_floating_resize_hint"
+            android:maxLines="1"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:text="拖动圆点调整大小"
+            android:textColor="#FFFFFFFF"
+            android:textSize="10.5sp" />
+    </FrameLayout>
+
+</FrameLayout>

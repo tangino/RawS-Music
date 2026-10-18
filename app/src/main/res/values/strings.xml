@@ -544,6 +544,8 @@
     <string name="settings_audio_focus_resume_on_start_summary">Resume the previous playing session when RawS Music starts.</string>
     <string name="settings_audio_focus_resume_on_resume">Play when reopened</string>
     <string name="settings_audio_focus_resume_on_resume_summary">Continue playback when RawS Music returns from the background.</string>
+    <string name="settings_audio_focus_keep_playing_on_interruption">Keep playing during navigation prompts</string>
+    <string name="settings_audio_focus_keep_playing_on_interruption_summary">Ideal for in-car use. Do not pause music when navigation prompts, alerts or voice announcements appear.</string>
     <string name="settings_audio_focus_transient">Temporary audio-focus changes and calls</string>
     <string name="settings_audio_focus_transient_summary">Pause or duck for calls, navigation prompts, voice assistants, and other short interruptions.</string>
     <string name="settings_audio_focus_resume_on_gain">Resume after focus returns</string>
@@ -1596,6 +1598,12 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="settings_ai_live_stop_summary">Release the live player and audio focus while separation continues.</string>
     <string name="settings_ai_live_failed">Unable to play live stems</string>
     <string name="desktop_lyric_section">Desktop lyrics</string>
+    <string name="floating_window_section">Floating music capsule</string>
+    <string name="floating_window_title">Floating Music Capsule</string>
+    <string name="floating_window_desc">Compact floating music capsule with spinning vinyl, gesture controls, and responsive dual-line lyrics. Automatically appears when leaving to background.</string>
+    <string name="floating_window_enable">Enable floating music capsule</string>
+    <string name="floating_window_reset">Reset capsule position &amp; size</string>
+    <string name="floating_window_reset_desc">Reset floating music capsule to default position and 100% standard size.</string>
     <string name="desktop_lyric_title">Floating desktop lyrics</string>
     <string name="desktop_lyric_description">Word-synced transparent lyrics with translation, pronunciation, background vocals, dragging, locking and playback controls.</string>
     <string name="desktop_lyric_enable">Show floating desktop lyrics</string>
@@ -2203,6 +2211,8 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="settings_mini_bubble_origin_bottom">Bottom</string>
     <string name="settings_mini_high_energy_title">Highlight high-energy sections</string>
     <string name="settings_mini_high_energy_summary">Use offline waveform energy for intensity; estimated BPM only phase-locks the pulse and does not decide energy by itself</string>
+    <string name="settings_mini_outer_progress_title">Outer progress border</string>
+    <string name="settings_mini_outer_progress_summary">Show a countdown remaining progress stroke around the mini player</string>
     <string name="settings_mini_player_artwork_display_title">MiniPlayer artwork</string>
     <string name="settings_mini_player_artwork_display_adjustment_title">Artwork adjustments</string>
     <string name="settings_mini_player_artwork_display_summary">%1$s · %2$d dp · Tap to adjust</string>

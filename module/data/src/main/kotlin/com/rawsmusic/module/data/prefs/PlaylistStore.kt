@@ -330,8 +330,12 @@ class PlaylistStore private constructor(private val context: Context) {
                     // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频）：
                     // 具备混合歌单特征：不丢弃歌曲条目，平滑降级为可在线寻源试听的网络虚拟歌曲（保留完整元数据）
                     val virtualId = if (stored.id > 0) stored.id.toString() else "${stored.title}_${stored.artist}".hashCode().toString()
+                    val cleanedArtPath = stored.albumArtPath.takeIf {
+                        it.startsWith("http://", true) || it.startsWith("https://", true)
+                    }.orEmpty()
                     stored.toAudioFile().copy(
-                        path = "online://netease/$virtualId"
+                        path = "online://netease/$virtualId",
+                        albumArtPath = cleanedArtPath
                     )
                 }
             }
@@ -494,6 +498,104 @@ class PlaylistStore private constructor(private val context: Context) {
             val existingKeys = if (overwrite) mutableSetOf() else disliked.songs.mapTo(mutableSetOf()) { it.key }
             val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
                 .filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && !overwrite) return@withLock
+
+            val finalSongs = if (overwrite) incoming else (disliked.songs + incoming)
+            val now = System.currentTimeMillis()
+            dao.deleteSongsForPlaylist(disliked.id)
+            dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(disliked.id, index) })
+            dao.touchPlaylist(disliked.id, now)
+            val updated = disliked.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == disliked.id) updated else it }
+        }
+    }
+
+    /**
+     * 严格保序导入/合并普通歌单（云同步还原与混合歌单专用）。
+     *
+     * 接收调用方已经按原始顺序转换好的 `List<UserPlaylistSong>`，不再拆分本地与在线列表，
+     * 彻底解决混合歌单同步后本地全部排前、在线全部排后的顺序混乱缺陷。
+     */
+    suspend fun importResolvedPlaylistPreservingOrder(
+        name: String,
+        songs: List<UserPlaylistSong>,
+        coverUrl: String? = null,
+        overwrite: Boolean = false,
+    ): UserPlaylist? = withDatabase {
+        mutationMutex.withLock {
+            val baseName = name.trim().ifBlank { DEFAULT_IMPORT_PLAYLIST_NAME }
+            val now = System.currentTimeMillis()
+            val existing = _playlists.value.firstOrNull {
+                !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
+            }
+            val existingKeys = if (overwrite) mutableSetOf() else (existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf())
+            val incoming = songs.filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && existing != null && !overwrite) return@withLock existing
+
+            val importedSongs = if (overwrite) incoming else (existing.orEmptySongs() + incoming)
+            val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
+                ?: incoming.firstOrNull { it.albumArtPath.startsWith("http://", true) || it.albumArtPath.startsWith("https://", true) }?.albumArtPath
+            val imported = UserPlaylist(
+                id = existing?.id ?: "playlist-${UUID.randomUUID()}",
+                name = existing?.name ?: baseName,
+                songs = importedSongs,
+                createdAt = existing?.createdAt ?: now,
+                updatedAt = now,
+                coverUrl = targetCover,
+            )
+            targetCover?.let { setPlaylistCoverUrl(imported.id, it) }
+            dao.upsertPlaylist(
+                imported.toEntity(existing?.let(_playlists.value::indexOf) ?: _playlists.value.size),
+            )
+            if (existing != null) dao.deleteSongsForPlaylist(existing.id)
+            dao.insertSongs(imported.songs.mapIndexed { index, song -> song.toEntity(imported.id, index) })
+            _playlists.value = if (existing == null) {
+                _playlists.value + imported
+            } else {
+                _playlists.value.map { if (it.id == existing.id) imported else it }
+            }
+            imported
+        }
+    }
+
+    /**
+     * 严格保序导入/还原系统「我喜欢的音乐」歌单（云同步专用）。
+     */
+    suspend fun importFavoritesPlaylistPreservingOrder(
+        songs: List<UserPlaylistSong>,
+        overwrite: Boolean = false,
+    ) = withDatabase {
+        mutationMutex.withLock {
+            val favorites = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock
+            val existingKeys = if (overwrite) mutableSetOf() else favorites.songs.mapTo(mutableSetOf()) { it.key }
+            val incoming = songs.filter { existingKeys.add(it.key) }
+            if (incoming.isEmpty() && !overwrite) return@withLock
+
+            val finalSongs = if (overwrite) incoming else (favorites.songs + incoming)
+            val now = System.currentTimeMillis()
+            dao.deleteSongsForPlaylist(favorites.id)
+            dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(favorites.id, index) })
+            dao.touchPlaylist(favorites.id, now)
+            val updated = favorites.copy(songs = finalSongs, updatedAt = now)
+            _playlists.value = _playlists.value.map { if (it.id == favorites.id) updated else it }
+        }
+    }
+
+    /**
+     * 严格保序导入/还原系统「我不喜欢的音乐」歌单（云同步专用）。
+     */
+    suspend fun importDislikedPlaylistPreservingOrder(
+        songs: List<UserPlaylistSong>,
+        overwrite: Boolean = false,
+    ) = withDatabase {
+        mutationMutex.withLock {
+            val disliked = _playlists.value.firstOrNull { it.id == DISLIKED_PLAYLIST_ID }
+                ?: createDislikedPlaylist().also { created ->
+                    dao.upsertPlaylist(created.toEntity(_playlists.value.size))
+                    _playlists.value = _playlists.value + created
+                }
+            val existingKeys = if (overwrite) mutableSetOf() else disliked.songs.mapTo(mutableSetOf()) { it.key }
+            val incoming = songs.filter { existingKeys.add(it.key) }
             if (incoming.isEmpty() && !overwrite) return@withLock
 
             val finalSongs = if (overwrite) incoming else (disliked.songs + incoming)

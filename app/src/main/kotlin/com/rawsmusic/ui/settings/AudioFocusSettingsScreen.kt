@@ -31,6 +31,7 @@ fun AudioFocusSettingsScreen(
     var resumeAfterCall by remember { mutableStateOf(AudioFocusPreferences.resumeAfterCall) }
     var resumeOnStart by remember { mutableStateOf(AudioFocusPreferences.resumeOnStart) }
     var resumeOnResume by remember { mutableStateOf(AudioFocusPreferences.resumeOnResume) }
+    var keepPlayingOnInterruption by remember { mutableStateOf(AudioFocusPreferences.keepPlayingOnInterruption) }
     var handleTransient by remember { mutableStateOf(AudioFocusPreferences.handleTransientChangesAndCalls) }
     var resumeOnFocusGain by remember { mutableStateOf(AudioFocusPreferences.resumeOnFocusGain) }
     var allowDuck by remember { mutableStateOf(AudioFocusPreferences.allowDuck) }
@@ -109,6 +110,16 @@ fun AudioFocusSettingsScreen(
             SectionHeader(stringResource(R.string.settings_audio_focus_changes_section))
             Spacer(Modifier.height(4.dp))
 
+            SwitchPreference(
+                title = stringResource(R.string.settings_audio_focus_keep_playing_on_interruption),
+                summary = stringResource(R.string.settings_audio_focus_keep_playing_on_interruption_summary),
+                checked = keepPlayingOnInterruption,
+                onCheckedChange = { checked ->
+                    keepPlayingOnInterruption = checked
+                    AudioFocusPreferences.keepPlayingOnInterruption = checked
+                    onSettingsChanged()
+                }
+            )
             SwitchPreference(
                 title = stringResource(R.string.settings_audio_focus_transient),
                 summary = stringResource(R.string.settings_audio_focus_transient_summary),

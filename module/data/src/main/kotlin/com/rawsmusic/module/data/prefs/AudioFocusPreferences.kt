@@ -16,8 +16,12 @@ object AudioFocusPreferences {
         get() = kv.decodeBool("audio_focus_resume_on_resume", false)
         set(value) { kv.encode("audio_focus_resume_on_resume", value) }
 
+    var keepPlayingOnInterruption: Boolean
+        get() = kv.decodeBool("audio_focus_keep_playing_on_interruption", true)
+        set(value) { kv.encode("audio_focus_keep_playing_on_interruption", value) }
+
     var handleTransientChangesAndCalls: Boolean
-        get() = kv.decodeBool("audio_focus_handle_transient_and_calls", true)
+        get() = kv.decodeBool("audio_focus_handle_transient_and_calls", false)
         set(value) { kv.encode("audio_focus_handle_transient_and_calls", value) }
 
     var resumeOnFocusGain: Boolean

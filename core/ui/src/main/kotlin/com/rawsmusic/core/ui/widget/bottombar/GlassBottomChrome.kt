@@ -273,13 +273,18 @@ fun GlassBottomChrome(
         val expandedHorizontalPadding = expandedLeadingMargin + expandedTrailingMargin
         val wideInline = environment.wideInlineLayout && !compact &&
             environment.hasMiniPlayer && environment.hasNavigation
+        val railReservation = if (environment.wideInlineLayout) 236.dp else 0.dp
+        val availableChromeWidth = (rootWidth - railReservation - 32.dp).coerceAtLeast(1.dp)
         val preferredWideChromeWidth = environment.regularNavigationMaxWidth +
             inlineGap + environment.regularAccessoryMaxWidth
-        val wideChromeWidth = (rootWidth - 32.dp)
-            .coerceAtLeast(1.dp)
+        val wideChromeWidth = availableChromeWidth
             .coerceAtMost(environment.regularChromeMaxWidth)
             .coerceAtMost(preferredWideChromeWidth)
-        val wideChromeLeft = (rootWidth - wideChromeWidth) / 2f
+        val wideChromeLeft = if (environment.wideInlineLayout) {
+            railReservation + (availableChromeWidth - wideChromeWidth) / 2f + 16.dp
+        } else {
+            (rootWidth - wideChromeWidth) / 2f
+        }
         val wideNavigationWidth = minOf(
             environment.regularNavigationMaxWidth,
             (wideChromeWidth * 0.4f).coerceAtLeast(320.dp),
@@ -290,9 +295,12 @@ fun GlassBottomChrome(
         val expandedMiniWidth = if (wideInline) {
             wideMiniWidth
         } else {
-            (rootWidth - expandedHorizontalPadding)
-                .coerceAtLeast(1.dp)
-                .let { if (compact) it else it.coerceAtMost(environment.regularAccessoryMaxWidth) }
+            val maxAvailable = if (environment.wideInlineLayout) {
+                (rootWidth - railReservation - expandedHorizontalPadding).coerceAtLeast(1.dp)
+            } else {
+                (rootWidth - expandedHorizontalPadding).coerceAtLeast(1.dp)
+            }
+            if (compact) maxAvailable else maxAvailable.coerceAtMost(environment.regularAccessoryMaxWidth)
         }
 
         val inlineLeadingReserve = navigationLeadingMargin +
@@ -331,6 +339,9 @@ fun GlassBottomChrome(
         val miniOpticalShiftX = if (wideInline) {
             val wideMiniCenter = wideChromeLeft + wideChromeWidth - wideMiniWidth / 2f
             wideMiniCenter - rootWidth / 2f
+        } else if (environment.wideInlineLayout && !compact) {
+            val rightContentCenter = railReservation + (rootWidth - railReservation) / 2f
+            rightContentCenter - rootWidth / 2f
         } else if (compact) {
             lerpDp(expandedMiniCenterShift, inlineMiniCenterShift, morphProgress)
         } else {
@@ -402,8 +413,18 @@ fun GlassBottomChrome(
                     .align(if (wideInline) Alignment.BottomStart else Alignment.BottomCenter)
                     .padding(bottom = geometry.navigationBottomInset)
                     .offset {
+                        val shiftX = if (wideInline) {
+                            with(density) { wideChromeLeft.toPx().roundToInt() }
+                        } else if (environment.wideInlineLayout && !compact) {
+                            with(density) {
+                                val rightContentCenter = railReservation + (rootWidth - railReservation) / 2f
+                                (rightContentCenter - rootWidth / 2f).toPx().roundToInt()
+                            }
+                        } else {
+                            0
+                        }
                         IntOffset(
-                            if (wideInline) with(density) { wideChromeLeft.toPx().roundToInt() } else 0,
+                            shiftX,
                             with(density) {
                                 (geometry.navigationMinimizeTravel * morphProgressState.value).toPx().roundToInt()
                             },
@@ -573,7 +594,7 @@ fun GlassBottomChrome(
                     animateArtwork = false,
                     backdrop = backdrop,
                     drawBackground = false,
-                    drawOuterProgress = false,
+                    drawOuterProgress = progressEffects.showOuterProgress,
                     drawInlineProgress = true,
                     inlineProgressColor = foregroundAccentColor,
                     inlineProgressBubbles = !performanceMode && progressEffects.bubbleCount > 0,

@@ -161,6 +161,7 @@ private fun PersistentLibraryRail(
     Column(
         modifier = modifier
             .sidebarGlassModifier(shape = railShape)
+            .fillMaxHeight()
             .padding(horizontal = 10.dp, vertical = 14.dp),
     ) {
         PersistentLibraryRailScenes.forEach { scene ->
@@ -761,23 +762,30 @@ internal fun ReferenceLibraryVirtualListHost(
         // Pages only publish their viewport/provider/LayoutRes into the persistent runtime; this
         // Modifier.Node never moves between HOME/category parents.
         Box(modifier = modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
+            val supportsRail = windowLayoutProfile.supportsPersistentLibraryRail
+            val rowModifier = if (supportsRail) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
                     .widthIn(max = windowLayoutProfile.contentMaxWidth)
                     .fillMaxWidth()
                     .fillMaxHeight()
-                    .align(Alignment.Center),
-            ) {
-                if (windowLayoutProfile.supportsPersistentLibraryRail) {
+                    .align(Alignment.Center)
+            }
+            Row(modifier = rowModifier) {
+                if (supportsRail) {
+                    val bottomChromeEnvironment = LocalBottomChromeEnvironment.current
+                    val railBottomPadding = bottomChromeEnvironment.geometry.navigationBottomInset.coerceAtLeast(12.dp)
                     PersistentLibraryRail(
                         selectedScene = presentationScene,
                         onNavigate = onNavigate,
                         modifier = Modifier
+                            .padding(start = 12.dp)
                             .width(windowLayoutProfile.libraryRailWidth)
                             .fillMaxHeight()
                             .padding(
                                 top = libraryRailTopInset + 16.dp,
-                                bottom = libraryRailBottomInset + 16.dp,
+                                bottom = railBottomPadding,
                             ),
                     )
                     Spacer(Modifier.width(windowLayoutProfile.libraryRailGap))
@@ -786,6 +794,12 @@ internal fun ReferenceLibraryVirtualListHost(
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center,
+            ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
                     .widthIn(max = windowLayoutProfile.libraryContentMaxWidth)
                     .fillMaxHeight()
                     .onGloballyPositioned { coordinates ->
@@ -901,6 +915,7 @@ internal fun ReferenceLibraryVirtualListHost(
                     }
                 }
                 }
+            }
             }
             }
         }

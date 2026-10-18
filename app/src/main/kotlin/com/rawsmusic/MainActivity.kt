@@ -2276,8 +2276,9 @@ class MainActivity : ComponentActivity() {
             miniPlayerSong = miniPlayerCoordinator.currentSong ?: canonicalCurrentSong,
             queueSongs = playbackQueue.songs,
             queueCurrentIndex = playbackQueue.currentIndex,
-            homeCarouselSongs = homeCarouselQueue.songs,
-            homeCarouselCurrentIndex = homeCarouselQueue.currentIndex,
+            homeCarouselSongs = playbackQueue.songs.ifEmpty { listOfNotNull(canonicalCurrentSong) },
+            homeCarouselCurrentIndex = playbackQueue.currentIndex.takeIf { it in playbackQueue.songs.indices }
+                ?: if (canonicalCurrentSong != null) 0 else -1,
             miniPlayerTitle = miniPlayerCoordinator.title,
             miniPlayerArtist = miniPlayerCoordinator.artist,
             miniPlayerLyric = lyricsCoordinator.currentLyricText,

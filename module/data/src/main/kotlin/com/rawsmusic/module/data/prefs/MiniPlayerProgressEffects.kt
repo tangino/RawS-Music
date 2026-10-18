@@ -39,6 +39,7 @@ data class MiniPlayerProgressEffects(
     val bubbleSpeed: Float = 1f,
     val highEnergyHighlight: Boolean = false,
     val bubbleOrigin: MiniPlayerBubbleOrigin = MiniPlayerBubbleOrigin.START_EDGE,
+    val showOuterProgress: Boolean = false,
 ) {
     fun normalized(): MiniPlayerProgressEffects = copy(
         bubbleCount = bubbleCount.coerceIn(0, 32),

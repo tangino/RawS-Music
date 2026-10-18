@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 尺寸调整模式下四角可拖动圆点 (高对比度白玉圆珠，带微妙立体阴影与深色外环) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <gradient
+        android:angle="270"
+        android:startColor="#FFFFFFFF"
+        android:endColor="#FFE8ECF2"
+        android:type="linear" />
+    <stroke
+        android:width="1.5dp"
+        android:color="#80000000" />
+</shape>

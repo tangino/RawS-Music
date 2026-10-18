@@ -5717,6 +5717,15 @@ class PlayerController private constructor(context: Context) {
                     )
                 }
             }
+            primeSongSelectionForUi(song)
+            _currentSong.value = song
+            _playState.value = PlayState.PREPARING
+            _position.value = 0L
+            _duration.value = song.duration.coerceAtLeast(0L)
+            _queue.value = PlayQueue(
+                songs = finalQueue,
+                currentIndex = resolvedIndex,
+            )
             MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
             return
         }
@@ -5799,6 +5808,29 @@ class PlayerController private constructor(context: Context) {
         val playbackIsRemoteUrl = playbackPath.startsWith("http://") || playbackPath.startsWith("https://")
         val semanticIsRemoteUrl = song.path.startsWith("http://") || song.path.startsWith("https://")
         if (playbackPath.isBlank() || (!playbackIsRemoteUrl && !java.io.File(playbackPath).exists())) {
+            // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频或跨设备迁移）：
+            // 具备混合歌单特征：不直接静默跳过导致旧歌曲卡住播放，立即停止旧播放并平滑降级为在线全网寻源试听
+            if (song.title.isNotBlank()) {
+                AppLogger.i(TAG, "playInternal: local file not found at '$playbackPath', smoothly falling back to online streaming for '${song.title}'")
+                ffmpegPlayer.stop()
+                MusicSourcePlaybackController.stop()
+                val virtualId = if (song.id > 0) song.id.toString() else "${song.title}_${song.artist}".hashCode().toString()
+                val onlineFallbackSong = song.copy(
+                    path = "online://netease/$virtualId",
+                    albumArtPath = song.albumArtPath.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }.orEmpty()
+                )
+                val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                val updatedQueue = effectiveQueue.map { q ->
+                    if (q.path == song.path) onlineFallbackSong else q
+                }
+                playInternal(
+                    song = onlineFallbackSong,
+                    queue = updatedQueue,
+                    index = index,
+                    deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                )
+                return
+            }
             Log.w(TAG, "play() skip: renderer source not found: $playbackPath semantic=${song.path}")
             if (deferPublicCommitToRenderer) {
                 pendingRendererUiCommit

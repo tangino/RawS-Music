@@ -441,7 +441,7 @@ object MusicSourcePlaybackController {
         prepared = false
         completionHandledGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        releaseMediaPlayer(abandonFocus = false)
+        releaseMediaPlayer(abandonFocus = true)
         mutableSnapshot.value = MusicSourcePlaybackSnapshot()
     }
 
@@ -583,7 +583,10 @@ object MusicSourcePlaybackController {
     }
 
     private fun schedulePreloadNext() {
-        preloadJob?.cancel()
+        if (preloadJob?.isActive == true) {
+            // 已有预加载任务正在后台平稳寻源或下载，避免被打断
+            return
+        }
         val context = applicationContext ?: return
         val state = mutableSnapshot.value
         val queue = state.queue
@@ -614,27 +617,56 @@ object MusicSourcePlaybackController {
         if (nextIndex !in queue.indices || nextIndex == state.currentIndex) return
         val nextItem = queue[nextIndex]
 
-        // 若下一首在本地磁盘已拥有有效缓存，直接跳过网络预解析
+        // 若下一首在本地磁盘已拥有有效缓存，直接装载到 preloadedResolvedMap 并跳过网络预热
         val nextCached = OnlineAudioFileCache.findValidCachedFile(context, nextItem)
         if (nextCached != null) {
-            AppLogger.d(TAG, "下一首【${nextItem.title}】已在本地完整缓存(${nextCached.second})，跳过网络预热")
+            val (cachedFile, cachedQuality) = nextCached
+            preloadedResolvedMap[nextItem.stableIdentity] = RawResolvedAudioSource(
+                url = cachedFile.absolutePath,
+                quality = cachedQuality,
+                headers = emptyMap(),
+            )
+            AppLogger.d(TAG, "下一首【${nextItem.title}】已在本地完整缓存(${cachedQuality})，跳过网络预热")
             return
         }
 
         preloadJob = scope.launch(Dispatchers.IO) {
-            delay(500L) // 缩短起播后等待延迟（由2000ms降至500ms），让下一首更早进入预解析
+            delay(500L) // 缩短起播后等待延迟，让下一首更早进入预解析
             if (!isActive) return@launch
             try {
                 val preferredQuality = MusicSourceAudioResolver.preferredQuality(
                     item = nextItem,
                     preferred = loadPreferredQuality(),
                 )
-                val resolved = preloadedResolvedMap[nextItem.stableIdentity]
-                    ?: MusicSourceAudioResolver.resolve(context, nextItem, preferredQuality).also {
-                        preloadedResolvedMap[nextItem.stableIdentity] = it
-                    }
+                val resolved = preloadedResolvedMap[nextItem.stableIdentity]?.takeIf {
+                    !it.url.startsWith("http", ignoreCase = true)
+                } ?: MusicSourceAudioResolver.resolve(context, nextItem, preferredQuality)
+
                 AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_RESOLVED nextTitle=${nextItem.title} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)}")
-                // 轻量化预加载：仅提前寻源直链并缓存，不发起整首歌曲的全量下载阻塞网络带宽
+
+                // 🚀 核心对齐 OrBitPlayer 机制：拿到直链后立即在后台静默物化至本地磁盘缓存！
+                // 不仅规避防盗链 Token/时间戳在数分钟后过期失效（403 Forbidden），更让切歌瞬间从本地磁盘 0 延迟秒开！
+                if (resolved.url.startsWith("http://", ignoreCase = true) || resolved.url.startsWith("https://", ignoreCase = true)) {
+                    val materializedResult = OnlineAudioFileCache.materialize(
+                        context = context,
+                        item = nextItem,
+                        source = resolved,
+                    ) { _, _, _ -> }
+                    val localSource = resolved.copy(
+                        url = materializedResult.file.absolutePath,
+                        headers = emptyMap(),
+                        userAgent = null,
+                        expiresAtMs = null,
+                    )
+                    preloadedResolvedMap[nextItem.stableIdentity] = localSource
+                    AppLogger.i(
+                        TAG,
+                        "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_MATERIALIZED nextTitle=${nextItem.title} " +
+                            "bytes=${materializedResult.bytes} file=${materializedResult.file.name}"
+                    )
+                } else {
+                    preloadedResolvedMap[nextItem.stableIdentity] = resolved
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Throwable) {
@@ -821,6 +853,7 @@ object MusicSourcePlaybackController {
                 )
             }
             MusicSourceBackendStatus.Playing -> {
+                val isNewPlayingGeneration = backendReachedPlayingGeneration != generation
                 backendReachedPlayingGeneration = generation
                 prepared = true
                 mutableSnapshot.value = state.copy(
@@ -830,7 +863,9 @@ object MusicSourcePlaybackController {
                     bufferedPercent = 100,
                     error = "",
                 )
-                schedulePreloadNext()
+                if (isNewPlayingGeneration) {
+                    schedulePreloadNext()
+                }
             }
             MusicSourceBackendStatus.Paused -> {
                 prepared = true

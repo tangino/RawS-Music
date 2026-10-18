@@ -589,6 +589,7 @@ private fun HomePageContent(
                     onSelectSong = { song, index ->
                         onCarouselSongSelect(queueSongs, song, index)
                     },
+                    onPlayPause = onCurrentPlayPause,
                     onCurrentArtworkLongPress = onCurrentArtworkLongPress,
                     onCurrentArtworkDoubleTap = onCurrentArtworkDoubleTap,
                     onCurrentArtworkBoundsChanged = onCurrentArtworkBoundsChanged,
@@ -1904,6 +1905,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                     onSelectSong = { song, index ->
                                         onCarouselSongSelect(latestCarouselSongs, song, index)
                                     },
+                                    onPlayPause = onCurrentPlayPause,
                                     onCurrentArtworkLongPress = latestArtworkLongPress,
                                     onCurrentArtworkDoubleTap = latestArtworkDoubleTap,
                                     onCurrentArtworkBoundsChanged = latestArtworkBoundsChanged,

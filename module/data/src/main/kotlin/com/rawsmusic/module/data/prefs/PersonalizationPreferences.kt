@@ -29,6 +29,7 @@ object PersonalizationPreferences {
     private const val KEY_MINI_BUBBLE_SPEED = "personalization_mini_bubble_speed_v1"
     private const val KEY_MINI_HIGH_ENERGY = "personalization_mini_high_energy_v1"
     private const val KEY_MINI_BUBBLE_ORIGIN = "personalization_mini_bubble_origin_v1"
+    private const val KEY_MINI_OUTER_PROGRESS = "personalization_mini_outer_progress_v1"
     private const val KEY_MINI_STYLE_HEIGHT = "personalization_mini_style_height_v1"
     private const val KEY_MINI_STYLE_COMPACT_HEIGHT = "personalization_mini_style_compact_height_v1"
     private const val KEY_MINI_STYLE_RADIUS = "personalization_mini_style_radius_v1"
@@ -198,6 +199,7 @@ object PersonalizationPreferences {
         AppPreferences.storage.encode(KEY_MINI_BUBBLE_SPEED, next.bubbleSpeed)
         AppPreferences.storage.encode(KEY_MINI_HIGH_ENERGY, next.highEnergyHighlight)
         AppPreferences.storage.encode(KEY_MINI_BUBBLE_ORIGIN, next.bubbleOrigin.prefValue)
+        AppPreferences.storage.encode(KEY_MINI_OUTER_PROGRESS, next.showOuterProgress)
     }
 
     private val _miniPlayerStyle = MutableStateFlow(loadMiniPlayerStyle())
@@ -500,6 +502,7 @@ object PersonalizationPreferences {
                     MiniPlayerBubbleOrigin.START_EDGE.prefValue,
                 )
             ),
+            showOuterProgress = AppPreferences.storage.decodeBool(KEY_MINI_OUTER_PROGRESS, false),
         ).normalized()
 
     private fun loadBottomNavigationStyle(): BottomNavigationStyleSettings =

@@ -92,6 +92,8 @@ fun LiquidGlassStatusBarLyricScreen(
         mutableStateOf(BluetoothLyricMetadataField.fromId(lyricsPrefs.bluetoothLyricMetadataField))
     }
 
+    var floatingWindowEnabled by remember { mutableStateOf(AppPreferences.FloatingWindow.isEnabled) }
+
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -99,6 +101,9 @@ fun LiquidGlassStatusBarLyricScreen(
         desktopEnabled = granted
         lyricsPrefs.desktopLyricEnabled = granted
         DesktopLyricService.sync(context)
+        if (granted && floatingWindowEnabled) {
+            com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setEnabled(true)
+        }
     }
 
     fun applyDesktopSettings() {
@@ -150,6 +155,30 @@ fun LiquidGlassStatusBarLyricScreen(
     val bluetoothMetadataEntries = bluetoothMetadataLabels.map { DropdownItem(title = it) }
 
     SettingsPage(title = stringResource(R.string.settings_status_bar_lyric_title), onBack = onBack) {
+        SettingsSection(stringResource(R.string.floating_window_section)) {
+            SettingsInfoEntry(
+                title = stringResource(R.string.floating_window_title),
+                description = stringResource(R.string.floating_window_desc)
+            )
+            SwitchRow(stringResource(R.string.floating_window_enable), floatingWindowEnabled) { checked ->
+                if (checked && !DesktopLyricService.canDraw(context)) {
+                    floatingWindowEnabled = true
+                    overlayPermissionLauncher.launch(DesktopLyricService.permissionIntent(context))
+                } else {
+                    floatingWindowEnabled = checked
+                    com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setEnabled(checked)
+                }
+            }
+            SettingsNavigationEntry(
+                title = stringResource(R.string.floating_window_reset),
+                description = stringResource(R.string.floating_window_reset_desc)
+            ) {
+                AppPreferences.FloatingWindow.posX = -1
+                AppPreferences.FloatingWindow.posY = -1
+                com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setUserScale(1.0f)
+            }
+        }
+
         SettingsSection(stringResource(R.string.desktop_lyric_section)) {
             SettingsInfoEntry(
                 title = stringResource(R.string.desktop_lyric_title),

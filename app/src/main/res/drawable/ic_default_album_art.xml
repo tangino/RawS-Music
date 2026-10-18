@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+
+    <!-- 深黑哑光底座圆角背景 -->
+    <path
+        android:fillColor="#181B22"
+        android:pathData="M8,0 L56,0 A8,8 0 0 1 64,8 L64,56 A8,8 0 0 1 56,64 L8,64 A8,8 0 0 1 0,56 L0,8 A8,8 0 0 1 8,0 Z" />
+
+    <!-- 黑胶唱片同心圆轨道与音乐符号 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#2C3240"
+        android:strokeWidth="1.5"
+        android:pathData="M32,16 A16,16 0 1 0 32,48 A16,16 0 1 0 32,16 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00E5FF"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1.2"
+        android:pathData="M32,22 A10,10 0 1 0 32,42 A10,10 0 1 0 32,22 Z" />
+
+    <!-- 中心音乐音符微光 -->
+    <path
+        android:fillColor="#00E5FF"
+        android:fillAlpha="0.85"
+        android:pathData="M30,28 L30,36.5 A2.5,2.5 0 1 1 28,34 L28,29 L35,27 L35,34.5 A2.5,2.5 0 1 1 33,32 L33,26.5 Z" />
+
+</vector>

@@ -125,7 +125,7 @@ internal fun homeArtworkCarouselHeight(
     style: HomeArtworkCarouselStyle,
     showLyrics: Boolean,
     fontScale: Float,
-): androidx.compose.ui.unit.Dp = 340.dp + homeArtworkCarouselHorizontalLyricOffset(
+): androidx.compose.ui.unit.Dp = 356.dp + homeArtworkCarouselHorizontalLyricOffset(
     style = style,
     showLyrics = showLyrics,
     fontScale = fontScale,
@@ -373,6 +373,7 @@ internal fun HomeArtworkCarousel(
     isPlaying: Boolean,
     onNavigate: (Int) -> Unit,
     onSelectSong: (AudioFile, Int) -> Unit = { _, _ -> },
+    onPlayPause: () -> Unit = {},
     onCurrentArtworkLongPress: (HomeFullCoverSourceAnchor) -> Unit = {},
     onCurrentArtworkDoubleTap: () -> Unit = {},
     onCurrentArtworkBoundsChanged: (AudioFile, Rect) -> Unit = { _, _ -> },
@@ -591,53 +592,47 @@ internal fun HomeArtworkCarousel(
             // HOME feel globally swipe-sensitive. Its drag owner is attached to the centre artwork
             // hit region inside the VerticalDial branch below.
             .then(
-                if (style == HomeArtworkCarouselStyle.VerticalDial) Modifier
-                else Modifier.carouselDrag(Orientation.Horizontal)
-            )
-            .pointerInput(
-                style,
-                state.centerIndex,
-                currentSong,
-                currentArtworkBounds,
-            ) {
-                fun openCurrentArtwork(position: androidx.compose.ui.geometry.Offset, openPlayer: Boolean) {
-                    if (hostFrozen || abs(state.progress) > 0.001f || state.interactionActive ||
-                        state.hostTransitionActive || state.awaitingQueueIndex >= 0
+                if (style == HomeArtworkCarouselStyle.VerticalDial) {
+                    Modifier.pointerInput(
+                        style,
+                        state.centerIndex,
+                        currentSong,
+                        currentArtworkBounds,
                     ) {
-                        return
-                    }
-                    val currentIndex = resolveCarouselCenterIndex(
-                        songs = availableSongs,
-                        currentSong = currentSong,
-                        reportedQueueIndex = state.centerIndex,
-                    )
-                    if (currentIndex != state.centerIndex) return
-                    val hostBounds = carouselHostBounds ?: return
-                    val artworkBounds = if (style == HomeArtworkCarouselStyle.CurrentCarousel) {
-                        currentCanvasArtworkBoundsHandle.resolveInRoot() ?: currentArtworkBounds
-                    } else {
-                        currentArtworkBounds
-                    } ?: return
-                    val rootPosition = androidx.compose.ui.geometry.Offset(
-                        x = hostBounds.left + position.x,
-                        y = hostBounds.top + position.y,
-                    )
-                    if (artworkBounds.contains(rootPosition)) {
-                        if (openPlayer) onCurrentArtworkDoubleTap() else onCurrentArtworkLongPress(
-                            HomeFullCoverSourceAnchor(
-                                boundsInRoot = artworkBounds,
-                                cornerRadiusDp = resolveHomeArtworkSourceCornerRadiusDp(style),
+                        fun openCurrentArtwork(position: androidx.compose.ui.geometry.Offset, openPlayer: Boolean) {
+                            if (hostFrozen || abs(state.progress) > 0.001f || state.interactionActive ||
+                                state.hostTransitionActive || state.awaitingQueueIndex >= 0
+                            ) {
+                                return
+                            }
+                            val currentIndex = resolveCarouselCenterIndex(
+                                songs = availableSongs,
+                                currentSong = currentSong,
+                                reportedQueueIndex = state.centerIndex,
                             )
+                            if (currentIndex != state.centerIndex) return
+                            val hostBounds = carouselHostBounds ?: return
+                            val artworkBounds = currentArtworkBounds ?: return
+                            val rootPosition = androidx.compose.ui.geometry.Offset(
+                                x = hostBounds.left + position.x,
+                                y = hostBounds.top + position.y,
+                            )
+                            if (artworkBounds.contains(rootPosition)) {
+                                if (openPlayer) onCurrentArtworkDoubleTap() else onCurrentArtworkLongPress(
+                                    HomeFullCoverSourceAnchor(
+                                        boundsInRoot = artworkBounds,
+                                        cornerRadiusDp = resolveHomeArtworkSourceCornerRadiusDp(style),
+                                    )
+                                )
+                            }
+                        }
+                        detectTapGestures(
+                            onDoubleTap = { openCurrentArtwork(it, openPlayer = true) },
+                            onLongPress = { openCurrentArtwork(it, openPlayer = false) },
                         )
                     }
-                }
-                detectTapGestures(
-                    // The two destinations deliberately have distinct owners. Both still use the
-                    // same central-cover hit test rather than treating the whole rail as a button.
-                    onDoubleTap = { openCurrentArtwork(it, openPlayer = true) },
-                    onLongPress = { openCurrentArtwork(it, openPlayer = false) },
-                )
-            },
+                } else Modifier
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (availableSongs.isEmpty()) return@BoxWithConstraints
@@ -672,44 +667,31 @@ internal fun HomeArtworkCarousel(
             when (targetStyle) {
                 HomeArtworkCarouselStyle.CurrentCarousel -> {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        HomeArtworkCarouselCanvas(
+                        HomeOrbitCoverFlow(
                             songs = availableSongs,
-                            centerIndex = state.centerIndex,
-                            evenlySpacedTabletLandscape = evenlySpacedTabletLandscape,
-                            progressProvider = { state.progress },
-                            hideCenterLane = hideCenterForFullscreenTransition,
-                            centerReflectionAlpha = centerReflectionAlpha,
-                            centerReflectionArtworkKey = centerReflectionArtworkKey,
-                            centerArtworkBoundsHandle = currentCanvasArtworkBoundsHandle,
-                            onCenterArtworkBoundsChanged = { resolvedBounds ->
-                                currentArtworkBounds = resolvedBounds
-                                val centerSong = availableSongs.getOrNull(
-                                    wrapCarouselIndex(state.centerIndex, availableSongs.size)
-                                )
-                                if (centerSong != null) {
-                                    onCurrentArtworkBoundsChanged(centerSong, resolvedBounds)
-                                }
+                            currentSong = currentSong,
+                            isPlaying = isPlaying,
+                            onSelectSong = onSelectSong,
+                            onPlayPause = onPlayPause,
+                            onArtworkDoubleTap = onCurrentArtworkDoubleTap,
+                            onArtworkLongPress = onCurrentArtworkLongPress,
+                            onCurrentArtworkBoundsChanged = { song, bounds ->
+                                currentArtworkBounds = bounds
+                                onCurrentArtworkBoundsChanged(song, bounds)
                             },
+                            hideCenterForFullscreenTransition = hideCenterForFullscreenTransition,
+                            showLyrics = showLyrics,
+                            lyricRenderClock = lyricRenderClock,
+                            lyricSong = lyricSong,
+                            lyricPositionMs = lyricPositionMs,
+                            currentLyric = currentLyric,
+                            currentLyricTranslation = currentLyricTranslation,
+                            lyricAlbumAccent = lyricAlbumAccent,
                             modifier = Modifier
-                                .requiredWidth(containerWidth + 32.dp)
-                                .height(carouselHeight - horizontalLyricArtworkOffset)
-                                .offset(y = horizontalLyricArtworkOffset)
+                                .fillMaxWidth()
+                                .height(carouselHeight)
                                 .align(Alignment.TopCenter)
                         )
-                        if (showLyrics) {
-                            HomeHorizontalCarouselLyric(
-                                renderClock = lyricRenderClock,
-                                song = lyricSong,
-                                positionMs = lyricPositionMs,
-                                fallbackPrimary = currentLyric,
-                                fallbackTranslation = currentLyricTranslation,
-                                albumAccent = lyricAlbumAccent,
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .fillMaxWidth()
-                                    .zIndex(100f)
-                            )
-                        }
                     }
                 }
 

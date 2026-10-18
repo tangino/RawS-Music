@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <!-- 完美灵动胶囊全圆角 (跟随设备尺寸自适应半高圆角) -->
+    <corners android:radius="@dimen/floating_window_corner_radius" />
+
+    <!-- 顶级深空黑曜石毛玻璃透光质感 (约85%透光率，深邃纯净不杂乱) -->
+    <gradient
+        android:angle="135"
+        android:startColor="#E60E121A"
+        android:centerColor="#D9090C12"
+        android:endColor="#CC06080D"
+        android:type="linear" />
+
+    <!-- 极细高光白微边框 (0.75dp)，打造立体晶体悬浮感 -->
+    <stroke
+        android:width="0.75dp"
+        android:color="#33FFFFFF" />
+</shape>

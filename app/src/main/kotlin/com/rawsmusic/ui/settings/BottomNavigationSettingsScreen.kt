@@ -773,6 +773,16 @@ fun BottomNavigationSettingsScreen(onBack: () -> Unit) {
                     }
                 },
             )
+            SwitchPreference(
+                title = stringResource(R.string.settings_mini_outer_progress_title),
+                summary = stringResource(R.string.settings_mini_outer_progress_summary),
+                checked = progressEffects.showOuterProgress,
+                onCheckedChange = { enabled ->
+                    PersonalizationPreferences.updateMiniPlayerProgressEffects {
+                        it.copy(showOuterProgress = enabled)
+                    }
+                },
+            )
         }
 
         SmallTitle(text = stringResource(R.string.settings_bottom_navigation_preview_section))

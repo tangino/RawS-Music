@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarTopPadding
+import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -313,6 +314,13 @@ internal fun BoxScope.HomeFloatingHeaderHost(
             )
         }
 
+        val windowLayoutProfile = LocalRawWindowLayoutProfile.current
+        val menuStartOffset = if (windowLayoutProfile.supportsPersistentLibraryRail) {
+            12.dp + windowLayoutProfile.libraryRailWidth + windowLayoutProfile.libraryRailGap
+        } else {
+            0.dp
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -330,6 +338,7 @@ internal fun BoxScope.HomeFloatingHeaderHost(
                 width = 48.dp,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
+                    .padding(start = menuStartOffset)
                     .onGloballyPositioned { coordinates ->
                         menuCenterInRoot = coordinates.boundsInRoot().center
                     }

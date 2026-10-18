@@ -544,6 +544,8 @@
     <string name="settings_audio_focus_resume_on_start_summary">在 RawS Music 启动时恢复上次仍在播放的会话。</string>
     <string name="settings_audio_focus_resume_on_resume">重新打开时播放</string>
     <string name="settings_audio_focus_resume_on_resume_summary">RawS Music 从后台重新打开时继续播放。</string>
+    <string name="settings_audio_focus_keep_playing_on_interruption">导航与提示音打断时保持播放</string>
+    <string name="settings_audio_focus_keep_playing_on_interruption_summary">适合车机环境。导航语音、测速提示等短暂声音出现时不暂停，音乐持续播放。</string>
     <string name="settings_audio_focus_transient">短暂音频焦点变化、通话</string>
     <string name="settings_audio_focus_transient_summary">通话、导航播报、语音助手等短暂打断时暂停或降低音乐音量。</string>
     <string name="settings_audio_focus_resume_on_gain">恢复焦点后继续</string>
@@ -1574,6 +1576,12 @@
     <string name="settings_ai_live_stop_summary">释放实时播放器与音频焦点，后台分离继续运行。</string>
     <string name="settings_ai_live_failed">无法播放实时分轨</string>
     <string name="desktop_lyric_section">桌面悬浮歌词</string>
+    <string name="floating_window_section">桌面音乐悬浮窗</string>
+    <string name="floating_window_title">灵动音乐悬浮胶囊</string>
+    <string name="floating_window_desc">呈现黑胶唱片自转、左右切歌、双行智能歌词与自由拉伸调整。退出到后台自动弹出。</string>
+    <string name="floating_window_enable">启用桌面音乐悬浮窗</string>
+    <string name="floating_window_reset">重置悬浮窗位置与大小</string>
+    <string name="floating_window_reset_desc">将桌面悬浮窗恢复至默认位置与 100% 标准大小。</string>
     <string name="desktop_lyric_title">悬浮窗歌词</string>
     <string name="desktop_lyric_description">支持逐字同步、翻译、注音、背景人声、拖动、锁定和播放控制的透明桌面歌词。</string>
     <string name="desktop_lyric_enable">显示桌面悬浮歌词</string>
@@ -2180,6 +2188,8 @@
     <string name="settings_mini_bubble_origin_bottom">下方</string>
     <string name="settings_mini_high_energy_title">高能量时进度高亮</string>
     <string name="settings_mini_high_energy_summary">以离线波形能量判断强度；BPM 估计只用于让脉冲贴合节拍，不单独判定高能量</string>
+    <string name="settings_mini_outer_progress_title">外圈环绕进度条</string>
+    <string name="settings_mini_outer_progress_summary">在底栏迷你播放器四周显示倒计时剩余进度描边蓝线</string>
     <string name="settings_mini_player_artwork_display_title">播放栏专辑图显示</string>
     <string name="settings_mini_player_artwork_display_adjustment_title">专辑图调节</string>
     <string name="settings_mini_player_artwork_display_summary">%1$s · %2$d dp · 点击调整</string>

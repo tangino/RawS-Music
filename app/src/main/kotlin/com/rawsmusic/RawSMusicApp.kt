@@ -61,6 +61,7 @@ class RawSMusicApp : Application() {
         if (AppPreferences.Lyrics.desktopLyricEnabled && DesktopLyricService.canDraw(this)) {
             DesktopLyricService.sync(this)
         }
+        com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(this)
 
         PlayerService.ensureRuntimeService(
             this,

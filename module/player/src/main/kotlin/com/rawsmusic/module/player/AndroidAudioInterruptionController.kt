@@ -159,15 +159,19 @@ internal class AndroidAudioInterruptionController(
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
             val usbExclusive = callbacks.isUsbExclusive()
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener(focusChangeListener)
-                // USB exclusive keeps its existing focus ownership contract and ignores callbacks.
-                // For AudioTrack, own CAN_DUCK in-app (Reference-style duckPlaying/UNDUCK) instead
-                // of allowing Android 8+ automatic ducking to bypass the preference/state machine.
-                .setAcceptsDelayedFocusGain(!usbExclusive)
-                .setWillPauseWhenDucked(true)
-                .build()
+                val policy = AudioFocusPolicy.current()
+                val willPauseWhenDucked = !policy.keepPlayingOnInterruption &&
+                    policy.handleTransientChangesAndCalls &&
+                    !policy.allowDuck
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attributes)
+                    .setOnAudioFocusChangeListener(focusChangeListener)
+                    // USB exclusive keeps its existing focus ownership contract and ignores callbacks.
+                    // For AudioTrack, own CAN_DUCK in-app (Reference-style duckPlaying/UNDUCK) instead
+                    // of allowing Android 8+ automatic ducking to bypass the preference/state machine.
+                    .setAcceptsDelayedFocusGain(!usbExclusive)
+                    .setWillPauseWhenDucked(willPauseWhenDucked)
+                    .build()
             focusRequest = request
             manager.requestAudioFocus(request)
         } else {
@@ -329,25 +333,18 @@ internal class AndroidAudioInterruptionController(
                 "resumeGain=${policy.resumeOnFocusGain} permanent=${policy.pauseOnPermanentLoss}",
         )
         when (focusChange) {
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 transientFocusLossActive = true
-                if (!policy.handleTransientChangesAndCalls) {
-                    AppLogger.d(TAG, "AudioFocus: DUCK ignored by preference")
+                if (policy.keepPlayingOnInterruption || !policy.handleTransientChangesAndCalls) {
+                    AppLogger.i(TAG, "AudioFocus: transient focus loss ignored, keep playing (car/navigation mode)")
+                    setDuckFactor(1.0f)
                 } else if (policy.allowDuck) {
                     // Own ducking explicitly so the UI setting affects the same gain path on all
                     // AudioTrack outputs instead of being silently delegated to AudioFlinger.
                     setDuckFactor(DUCK_FACTOR)
                 } else {
-                    pauseForFocus(resolveTransientPauseCause(), "duck_pause")
-                }
-            }
-
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                transientFocusLossActive = true
-                if (policy.handleTransientChangesAndCalls) {
                     pauseForFocus(resolveTransientPauseCause(), "loss_transient")
-                } else {
-                    AppLogger.d(TAG, "AudioFocus: LOSS_TRANSIENT ignored by preference")
                 }
             }
 

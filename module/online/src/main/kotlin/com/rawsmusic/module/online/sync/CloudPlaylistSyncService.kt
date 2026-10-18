@@ -271,17 +271,16 @@ object CloudPlaylistSyncService {
             .filter { CloudPlaylistJson.systemKindOf(it) == null && it.name.isNotBlank() }
             .filter { selectedLocalNames == null || it.name in selectedLocalNames }
             .forEach { dto ->
-                val onlineRows = dto.songs.mapNotNull(CloudPlaylistJson::toOnlineSongRow)
-                val localSongs = dto.songs
-                    .filterNot(CloudPlaylistJson::isOnlineSong)
+                val orderedSongs = dto.songs
                     .filter { it.path.isNotBlank() }
-                    .map(CloudPlaylistJson::toAudioFile)
-                val playlistCover = onlineRows.firstOrNull { it.albumArtPath.isNotBlank() }?.albumArtPath
+                    .map(CloudPlaylistJson::toUserPlaylistSong)
+                val playlistCover = orderedSongs
+                    .firstOrNull { it.albumArtPath.startsWith("http://", true) || it.albumArtPath.startsWith("https://", true) }
+                    ?.albumArtPath
                     ?: dto.songs.firstOrNull { it.coverUrl.isNotBlank() }?.coverUrl
-                val imported = store.importResolvedPlaylist(
+                val imported = store.importResolvedPlaylistPreservingOrder(
                     name = dto.name,
-                    localSongs = localSongs,
-                    onlineSongs = onlineRows,
+                    songs = orderedSongs,
                     coverUrl = playlistCover,
                     overwrite = isOverwrite,
                 )
@@ -311,18 +310,13 @@ object CloudPlaylistSyncService {
             val favoriteSongDtos = (favSystemPlaylist?.songs.orEmpty() + allSongs.filter { it.isFavorite })
                 .distinctBy { CloudPlaylistJson.localSongKeyOf(it) }
 
-            val favoriteLocal = favoriteSongDtos
-                .filterNot(CloudPlaylistJson::isOnlineSong)
+            val favoriteSongRows = favoriteSongDtos
                 .filter { it.path.isNotBlank() }
-                .map(CloudPlaylistJson::toAudioFile)
+                .map(CloudPlaylistJson::toUserPlaylistSong)
 
-            val favoriteOnlineRows = favoriteSongDtos
-                .mapNotNull(CloudPlaylistJson::toOnlineSongRow)
-
-            // 将本地曲目与在线曲目完整写入 FAVORITES_PLAYLIST_ID 系统歌单中
-            store.importFavoritesPlaylist(
-                localSongs = favoriteLocal,
-                onlineSongs = favoriteOnlineRows,
+            // 将本地曲目与在线曲目完整保序写入 FAVORITES_PLAYLIST_ID 系统歌单中
+            store.importFavoritesPlaylistPreservingOrder(
+                songs = favoriteSongRows,
                 overwrite = isOverwrite,
             )
 
@@ -332,7 +326,7 @@ object CloudPlaylistSyncService {
             if (favoriteOnlineKeys.isNotEmpty()) {
                 SongAttitudeRepository.setOnlineFavorites(context, favoriteOnlineKeys, true)
             }
-            favoritesAppliedCount = favoriteLocal.size + favoriteOnlineRows.size
+            favoritesAppliedCount = favoriteSongRows.size
         }
 
         if (restoreDisliked) {
@@ -342,18 +336,13 @@ object CloudPlaylistSyncService {
             val dislikedSongDtos = (disSystemPlaylist?.songs.orEmpty() + allSongs.filter { it.isDisliked })
                 .distinctBy { CloudPlaylistJson.localSongKeyOf(it) }
 
-            val dislikedLocal = dislikedSongDtos
-                .filterNot(CloudPlaylistJson::isOnlineSong)
+            val dislikedSongRows = dislikedSongDtos
                 .filter { it.path.isNotBlank() }
-                .map(CloudPlaylistJson::toAudioFile)
+                .map(CloudPlaylistJson::toUserPlaylistSong)
 
-            val dislikedOnlineRows = dislikedSongDtos
-                .mapNotNull(CloudPlaylistJson::toOnlineSongRow)
-
-            // 将本地曲目与在线曲目完整写入 DISLIKED_PLAYLIST_ID 系统歌单中
-            store.importDislikedPlaylist(
-                localSongs = dislikedLocal,
-                onlineSongs = dislikedOnlineRows,
+            // 将本地曲目与在线曲目完整保序写入 DISLIKED_PLAYLIST_ID 系统歌单中
+            store.importDislikedPlaylistPreservingOrder(
+                songs = dislikedSongRows,
                 overwrite = isOverwrite,
             )
 

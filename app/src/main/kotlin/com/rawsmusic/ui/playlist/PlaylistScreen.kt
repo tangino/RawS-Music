@@ -541,7 +541,17 @@ private fun extractPlaylistPreviewSongs(
         val song = if (entry.isOnlineEntry()) {
             entry.toAudioFile()
         } else {
-            libraryMap[entry.id] ?: entry.toAudioFile()
+            val localMatched = libraryMap[entry.id]
+            if (localMatched != null) {
+                localMatched
+            } else if (java.io.File(entry.path).exists()) {
+                entry.toAudioFile()
+            } else if (entry.albumArtPath.startsWith("http://", true) || entry.albumArtPath.startsWith("https://", true)) {
+                entry.toAudioFile()
+            } else {
+                // 本地不存在该物理音频，且无有效网络封面，无法展示拼贴，跳过该项，优先使用有封面的后续歌曲
+                continue
+            }
         }
         val key = song.coverKey
         if (key.isNotBlank() && seenCovers.add(key)) {

@@ -636,6 +636,7 @@ object AppPreferences {
             get() = kv.decodeBool("ui_status_bar_hidden", false)
             set(value) { kv.encode("ui_status_bar_hidden", value) }
 
+
         /** Animate overflowing labels in player surfaces. */
         var animateLongLabels: Boolean
             get() = kv.decodeBool("ui_animate_long_labels", true)
@@ -2271,6 +2272,28 @@ object AppPreferences {
                 kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.MODERN_CONCURRENT.id)
             )
             set(value) { kv.encode("resolve_strategy", value.id) }
+    }
+
+    object FloatingWindow {
+        /** 悬浮窗功能开关（默认开启） */
+        var isEnabled: Boolean
+            get() = kv.decodeBool("floating_window_enabled", true)
+            set(value) { kv.encode("floating_window_enabled", value) }
+
+        /** 上次保存的 X 轴坐标 (像素) */
+        var posX: Int
+            get() = kv.decodeInt("floating_window_pos_x", -1)
+            set(value) { kv.encode("floating_window_pos_x", value) }
+
+        /** 上次保存的 Y 轴坐标 (像素) */
+        var posY: Int
+            get() = kv.decodeInt("floating_window_pos_y", -1)
+            set(value) { kv.encode("floating_window_pos_y", value) }
+
+        /** 用户自定义缩放因子 (0.6f ~ 2.2f，默认 1.0f) */
+        var userScale: Float
+            get() = kv.decodeFloat("floating_window_user_scale", 1.0f)
+            set(value) { kv.encode("floating_window_user_scale", value) }
     }
 }
 
