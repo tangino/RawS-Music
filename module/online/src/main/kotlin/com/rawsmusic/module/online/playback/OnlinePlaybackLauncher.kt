@@ -7,6 +7,7 @@ import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.module.data.source.LxSourcePluginStore
 import com.rawsmusic.module.data.source.MusicSourcePluginStore
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.OnlineAudioFileCache
 import com.rawsmusic.module.data.source.runtime.MusicSourceSearchCoordinator
 import com.rawsmusic.module.online.model.OnlineSongItem
 import kotlinx.coroutines.CancellationException
@@ -120,6 +121,40 @@ object OnlinePlaybackLauncher {
         val resolvedIndex = rawQueue.indexOfFirst { it.stableIdentity == targetMediaItem.stableIdentity }
             .takeIf { it >= 0 }
             ?: if (index in rawQueue.indices) index else 0
+
+        // 0. 🌟 对齐 OrBitPlayer 核心机制：检查本地磁盘是否已存在有效缓存文件
+        // 若已命中完整缓存，直接以离线本地文件起播，跳过寻源（正在寻源...）阶段，实现 0 延时离线秒开！
+        val cachedHit = OnlineAudioFileCache.findValidCachedFile(
+            context = context,
+            item = targetMediaItem,
+            preferredQuality = OnlineAudioSourceResolver.stringToRawSourceQuality(AppPreferences.Source.preferredQuality),
+        )
+        if (cachedHit != null) {
+            val (cachedFile, cachedQuality) = cachedHit
+            AppLogger.i(
+                TAG,
+                "[OnlinePlaybackLauncher] 命中本地完整缓存：${item.title} -> ${cachedFile.name} ($cachedQuality)"
+            )
+            val rawMediaItem = targetMediaItem.copy(
+                durationMs = item.durationMs,
+            )
+            val rawResolved = com.rawsmusic.core.common.source.RawResolvedAudioSource(
+                url = cachedFile.absolutePath,
+                quality = cachedQuality,
+                headers = emptyMap(),
+            )
+            MusicSourcePlaybackController.playResolved(
+                context = context,
+                item = rawMediaItem,
+                source = rawResolved,
+                queue = rawQueue,
+                index = resolvedIndex,
+                originalPlatform = item.platform.displayName,
+                resolvedPlatform = item.platform.displayName,
+                sourceTag = "本地缓存",
+            )
+            return OnlinePlayResult.Started
+        }
 
         // 1. 优先走 OrBitPlayer 寻源核心（LRU 缓存 -> 原平台优先通道 -> 跨平台并发搜救 -> 官方兜底直链 -> 探活）
         val resolved = OnlineAudioSourceResolver.resolvePlayableSource(

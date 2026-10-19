@@ -2,18 +2,18 @@
 chcp 65001 >nul 2>&1
 setlocal EnableExtensions EnableDelayedExpansion
 
-rem ============================================================================
-rem  RawS-Music 一键安装（Debug）—— Windows
-rem
-rem    install_debug.bat               安装最新生成的 Debug APK（若不存在则自动构建）
-rem    install_debug.bat -b, --build   强制重新构建 Debug APK 后安装
-rem    install_debug.bat -q, --quick   跳过构建，直接安装现有最新 APK
-rem    install_debug.bat -l, --launch  安装完成后自动启动应用
-rem    install_debug.bat -a, --all     直接安装到所有已连接设备
-rem    install_debug.bat -c, --clean   执行 clean 后重新构建并安装
-rem    install_debug.bat -s <serial>   多设备连接时指定目标设备序列号
-rem    install_debug.bat -h, --help    显示帮助信息
-rem ============================================================================
+:: ============================================================================
+:: RawS-Music Quick Installer (Debug) - Windows
+::
+::   install_debug.bat               安装最新生成的 Debug APK (若不存在则自动构建)
+::   install_debug.bat -b, --build   强制重新构建 Debug APK 后安装
+::   install_debug.bat -q, --quick   跳过构建，直接安装现有最新 APK
+::   install_debug.bat -l, --launch  安装完成后自动启动应用
+::   install_debug.bat -a, --all     直接安装到所有已连接设备
+::   install_debug.bat -c, --clean   执行 clean 后重新构建并安装
+::   install_debug.bat -s <serial>   多设备连接时指定目标设备序列号
+::   install_debug.bat -h, --help    显示帮助信息
+:: ============================================================================
 
 set "VARIANT=debug"
 set "VARIANT_LABEL=Debug"
@@ -23,7 +23,7 @@ set "DO_LAUNCH=0"
 set "DO_ALL=0"
 set "SPECIFIED_SERIAL="
 
-rem ------------------------------------------------------------------ 参数解析
+:: ------------------------------------------------------------------ 参数解析
 :parse_args
 if "%~1"=="" goto :args_done
 set "ARG=%~1"
@@ -60,12 +60,12 @@ goto :parse_args
 
 :args_done
 
-rem ------------------------------------------------------------------ 定位工程
+:: ------------------------------------------------------------------ 定位工程
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 cd /d "%SCRIPT_DIR%"
 
-rem ------------------------------------------------------------------ 定位 adb
+:: ------------------------------------------------------------------ 定位 adb
 set "ADB="
 if defined ANDROID_HOME if exist "!ANDROID_HOME!\platform-tools\adb.exe" set "ADB=!ANDROID_HOME!\platform-tools\adb.exe"
 
@@ -84,8 +84,8 @@ if not defined ADB if exist "local.properties" (
 
 if not defined ADB (
     for %%p in (
-        "%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"
         "E:\softwares\Android\sdk\platform-tools\adb.exe"
+        "%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"
         "D:\Android\sdk\platform-tools\adb.exe"
         "C:\Android\sdk\platform-tools\adb.exe"
     ) do (
@@ -105,7 +105,7 @@ if not defined ADB (
     exit /b 1
 )
 
-rem ------------------------------------------------------------------ 检查已连接设备
+:: ------------------------------------------------------------------ 检查已连接设备
 set "DEVICE_COUNT=0"
 set "UNAUTH_FOUND=0"
 
@@ -122,13 +122,13 @@ for /f "skip=1 tokens=1,2" %%i in ('"%ADB%" devices 2^>nul') do (
 if "%DEVICE_COUNT%"=="0" (
     echo [X] 未检测到可用的已连接 Android 设备！
     if "%UNAUTH_FOUND%"=="1" (
-        echo     ⚠️ 检测到设备处于未授权状态（unauthorized）。
-        echo     👉 请解锁手机屏幕，在弹出的「允许 USB 调试吗？」窗口中勾选并允许调试。
+        echo     [!] 检测到设备处于未授权状态 [unauthorized]。
+        echo     请解锁手机屏幕，在弹出的“允许 USB 调试吗？”窗口中勾选并允许调试。
     ) else (
-        echo     👉 请检查：
+        echo     请检查：
         echo        1. 手机是否已用 USB 数据线连接电脑；
-        echo        2. 手机是否开启了「开发者选项」和「USB 调试」；
-        echo        3. 部分机型（如小米/MIUI/HyperOS）需在开发者选项中开启「USB 安装」；
+        echo        2. 手机是否开启了“开发者选项”和“USB 调试”；
+        echo        3. 部分机型（如小米/MIUI/HyperOS）需在开发者选项中开启“USB 安装”；
         echo        4. 运行 'adb devices' 排查设备连接状态。
     )
     exit /b 1
@@ -156,11 +156,11 @@ if %DEVICE_COUNT% equ 1 (
     set "D_BRAND="
     for /f "delims=" %%m in ('"%ADB%" -s !DEV_1! shell getprop ro.product.model 2^>nul') do set "D_MODEL=%%m"
     for /f "delims=" %%b in ('"%ADB%" -s !DEV_1! shell getprop ro.product.brand 2^>nul') do set "D_BRAND=%%b"
-    echo [i] 目标设备：!D_BRAND! !D_MODEL! (!DEV_1!)
+    echo [i] 目标设备：!D_BRAND! !D_MODEL! [!DEV_1!]
     goto :device_selection_done
 )
 
-rem 多台设备交互选择
+:: 多台设备交互选择
 echo ============================================================
 echo [i] 检测到多台已连接设备（共 %DEVICE_COUNT% 台）：
 echo ============================================================
@@ -172,7 +172,7 @@ for /l %%k in (1,1,%DEVICE_COUNT%) do (
     for /f "delims=" %%m in ('"%ADB%" -s !cur_dev! shell getprop ro.product.model 2^>nul') do set "cur_model=%%m"
     for /f "delims=" %%b in ('"%ADB%" -s !cur_dev! shell getprop ro.product.brand 2^>nul') do set "cur_brand=%%b"
     for /f "delims=" %%v in ('"%ADB%" -s !cur_dev! shell getprop ro.build.version.release 2^>nul') do set "cur_ver=%%v"
-    echo   [%%k] !cur_brand! !cur_model! (Android !cur_ver!) - !cur_dev!
+    echo   [%%k] !cur_brand! !cur_model! [Android !cur_ver!] - !cur_dev!
 )
 echo   [A] 全部设备 (安装到以上所有设备)
 echo   [Q] 取消并退出
@@ -180,7 +180,7 @@ echo ============================================================
 
 :prompt_choice
 set "USER_CHOICE="
-set /p "USER_CHOICE=👉 请选择目标设备 [1-%DEVICE_COUNT% / A(全部) / Q(退出)] (默认 A): "
+set /p "USER_CHOICE=请选择目标设备 [1-%DEVICE_COUNT% / A(全部) / Q(退出)] (默认 A): "
 if not defined USER_CHOICE set "USER_CHOICE=A"
 
 if /i "%USER_CHOICE%"=="Q" (
@@ -193,7 +193,7 @@ if /i "%USER_CHOICE%"=="A" (
     goto :setup_all_devices
 )
 
-rem 验证是否为合法数字
+:: 验证是否为合法数字
 set "CHOSEN_DEV="
 for /l %%k in (1,1,%DEVICE_COUNT%) do (
     if "%USER_CHOICE%"=="%%k" set "CHOSEN_DEV=!DEV_%%k!"
@@ -218,7 +218,7 @@ echo [i] 目标设备：全部已连接设备（共 %TARGET_DEV_COUNT% 台）
 
 :device_selection_done
 
-rem ------------------------------------------------------------------ 检查或构建 APK
+:: ------------------------------------------------------------------ 检查或构建 APK
 set "APK_DIR=app\build\outputs\apk\%VARIANT%"
 set "APK="
 for /f "delims=" %%f in ('dir /b /o-d /s "%APK_DIR%\*.apk" 2^>nul') do if not defined APK set "APK=%%f"
@@ -230,11 +230,11 @@ if not defined APK (
 )
 
 echo [i] 使用现有最新 APK：!APK!
-echo     （若修改了代码需重新编译，请添加 -b 参数重新构建）
+echo     [若修改了代码需重新编译，请添加 -b 参数重新构建]
 goto :do_install
 
 :do_build
-echo 🔨 正在构建 %VARIANT_LABEL% APK...
+echo [*] 正在构建 %VARIANT_LABEL% APK...
 set "BUILD_OPTS="
 if "%DO_CLEAN%"=="1" set "BUILD_OPTS=--clean"
 
@@ -249,7 +249,7 @@ if exist "build_debug.bat" (
     exit /b 1
 )
 
-rem 重新查找构建出的 APK
+:: 重新查找构建出的 APK
 set "APK="
 for /f "delims=" %%f in ('dir /b /o-d /s "%APK_DIR%\*.apk" 2^>nul') do if not defined APK set "APK=%%f"
 if not defined APK (
@@ -263,35 +263,42 @@ set "SUCCESS_COUNT=0"
 set "FAIL_COUNT=0"
 
 for /l %%k in (1,1,%TARGET_DEV_COUNT%) do (
-    set "target=!TARGET_DEV_%%k!"
-    set "t_model=未知型号"
-    set "t_brand="
-    for /f "delims=" %%m in ('"%ADB%" -s !target! shell getprop ro.product.model 2^>nul') do set "t_model=%%m"
-    for /f "delims=" %%b in ('"%ADB%" -s !target! shell getprop ro.product.brand 2^>nul') do set "t_brand=%%b"
+    call :install_one_device "%%k" "!TARGET_DEV_%%k!"
+)
+goto :install_summary
 
-    if %TARGET_DEV_COUNT% gtr 1 (
-        echo ------------------------------------------------------------
-        echo [%%k/%TARGET_DEV_COUNT%] 🚀 正在安装 !APK! 到 !t_brand! !t_model! (!target!)...
-    ) else (
-        echo 🚀 正在安装 !APK! 到 !t_brand! !t_model! (!target!)...
-    )
+:install_one_device
+set "dev_index=%~1"
+set "target=%~2"
+set "t_model=未知型号"
+set "t_brand="
+for /f "delims=" %%m in ('"%ADB%" -s %target% shell getprop ro.product.model 2^>nul') do set "t_model=%%m"
+for /f "delims=" %%b in ('"%ADB%" -s %target% shell getprop ro.product.brand 2^>nul') do set "t_brand=%%b"
 
-    "%ADB%" -s !target! install -r -d "!APK!"
-    if errorlevel 1 (
-        echo [X] 设备 !target! 安装失败！
-        set /a "FAIL_COUNT+=1"
-    ) else (
-        echo [OK] 设备 !target! 安装成功！
-        set /a "SUCCESS_COUNT+=1"
-
-        if "%DO_LAUNCH%"=="1" (
-            echo ▶️  正在启动应用 com.rawsmusic/.MainActivity ...
-            "%ADB%" -s !target! shell am start -n com.rawsmusic/.MainActivity >nul 2>&1
-            echo ✨ 应用已在前台启动！
-        )
-    )
+if %TARGET_DEV_COUNT% gtr 1 (
+    echo ------------------------------------------------------------
+    echo [%dev_index%/%TARGET_DEV_COUNT%] [*] 正在安装 !APK! 到 %t_brand% %t_model% [%target%]...
+) else (
+    echo [*] 正在安装 !APK! 到 %t_brand% %t_model% [%target%]...
 )
 
+"%ADB%" -s %target% install -r -d "!APK!"
+if errorlevel 1 (
+    echo [X] 设备 %target% 安装失败！
+    set /a "FAIL_COUNT+=1"
+) else (
+    echo [OK] 设备 %target% 安装成功！
+    set /a "SUCCESS_COUNT+=1"
+
+    if "%DO_LAUNCH%"=="1" (
+        echo [>] 正在启动应用 com.rawsmusic/.MainActivity ...
+        "%ADB%" -s %target% shell am start -n com.rawsmusic/.MainActivity >nul 2>&1
+        echo [OK] 应用已在前台启动！
+    )
+)
+exit /b 0
+
+:install_summary
 echo.
 echo ============================================================
 if %FAIL_COUNT% equ 0 (
@@ -301,7 +308,7 @@ if %FAIL_COUNT% equ 0 (
 ) else (
     echo [!] 安装完成：%SUCCESS_COUNT% 台成功，%FAIL_COUNT% 台失败！
     echo     常见排查：
-    echo     1. 小米/红米/POCO 手机：需在「开发者选项」中开启「USB 安装」；
+    echo     1. 小米/红米/POCO 手机：需在开发者选项中开启“USB 安装”；
     echo     2. 签名冲突：如果手机上装有不同签名的历史版本，请先手动卸载旧版本；
     echo     3. 存储空间不足：请检查手机剩余存储容量。
     echo ============================================================
@@ -309,18 +316,18 @@ if %FAIL_COUNT% equ 0 (
 )
 
 :usage
-echo RawS-Music 一键安装（Debug）—— Windows
+echo RawS-Music 一键安装 (Debug) - Windows
 echo.
 echo 用法：
-echo   install_debug.bat               安装最新生成的 Debug APK（若不存在则自动构建）
+echo   install_debug.bat               安装最新生成的 Debug APK (若不存在则自动构建)
 echo   install_debug.bat -b, --build   强制重新构建 Debug APK 后安装
 echo   install_debug.bat -q, --quick   跳过构建，直接安装现有最新 APK
 echo   install_debug.bat -l, --launch  安装完成后自动启动应用
-echo   install_debug.bat -a, --all     直接安装到所有已连接设备（跳过交互选择）
+echo   install_debug.bat -a, --all     直接安装到所有已连接设备 (跳过交互选择)
 echo   install_debug.bat -c, --clean   执行 clean 后重新构建并安装
 echo   install_debug.bat -s ^<serial^>   多设备连接时指定目标设备序列号
 echo   install_debug.bat -h, --help    显示帮助信息
 echo.
 echo 环境变量：
-echo   ANDROID_HOME   Android SDK 路径（优先用于定位 adb 工具）
+echo   ANDROID_HOME   Android SDK 路径 (优先用于定位 adb 工具)
 exit /b 0

@@ -358,6 +358,7 @@ fun HomePage(
                 carouselStyle = headerOptions.carouselStyle,
                 carouselLyricVisible = headerOptions.carouselLyricVisible,
                 carouselGestureLocked = headerOptions.carouselGestureLocked,
+                carouselReflectionAlpha = headerOptions.carouselReflectionAlpha,
                 currentLyric = effectiveLyric,
                 currentLyricTranslation = effectiveTranslation,
                 lyricSong = effectiveLyricSong,
@@ -427,6 +428,8 @@ fun HomePage(
             onCarouselLyricVisibleChange = headerOptions::updateCarouselLyricVisible,
             carouselStyle = headerOptions.carouselStyle,
             onCarouselStyleChange = headerOptions::updateCarouselStyle,
+            carouselReflectionAlpha = headerOptions.carouselReflectionAlpha,
+            onCarouselReflectionAlphaChange = headerOptions::updateCarouselReflectionAlpha,
             onDismissRequest = { showHeaderMenuDialog = false }
         )
 
@@ -460,6 +463,7 @@ private fun HomePageContent(
     carouselStyle: HomeArtworkCarouselStyle,
     carouselLyricVisible: Boolean,
     carouselGestureLocked: Boolean,
+    carouselReflectionAlpha: Float = 0.85f,
     currentLyric: String,
     currentLyricTranslation: String,
     lyricSong: Song?,
@@ -578,6 +582,7 @@ private fun HomePageContent(
                     currentSong = currentSong,
                     state = carouselState,
                     style = carouselStyle,
+                    reflectionAlpha = carouselReflectionAlpha,
                     showLyrics = carouselLyricVisible,
                     gestureLocked = carouselGestureLocked,
                     currentLyric = currentLyric,
@@ -1894,6 +1899,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                     currentSong = latestCarouselCurrentSong,
                                     state = carouselState,
                                     style = headerOptions.carouselStyle,
+                                    reflectionAlpha = headerOptions.carouselReflectionAlpha,
                                     showLyrics = headerOptions.carouselLyricVisible,
                                     gestureLocked = headerOptions.carouselGestureLocked,
                                     currentLyric = latestLyric,

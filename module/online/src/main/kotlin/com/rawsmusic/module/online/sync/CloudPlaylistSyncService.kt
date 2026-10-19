@@ -293,6 +293,7 @@ object CloudPlaylistSyncService {
                     ) {
                         PlaylistGroupStore.movePlaylist(context, imported.id, group)
                     }
+                    OnlineArtworkResolver.prefetchArtworksForSongs(orderedSongs)
                 }
             }
 
@@ -319,6 +320,7 @@ object CloudPlaylistSyncService {
                 songs = favoriteSongRows,
                 overwrite = isOverwrite,
             )
+            OnlineArtworkResolver.prefetchArtworksForSongs(favoriteSongRows)
 
             val favoriteOnlineKeys = favoriteSongDtos
                 .filter(CloudPlaylistJson::isOnlineSong)

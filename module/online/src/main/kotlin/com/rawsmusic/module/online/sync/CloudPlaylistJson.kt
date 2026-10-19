@@ -163,11 +163,10 @@ object CloudPlaylistJson {
             // ⚠️ 这是**本地文件路径**，只在同设备还原时有用；跨设备还原时接收端会重新取封面。
             // 契约允许这里是空串，所以没有封面时填 ""。
             albumArtUri = song.albumArtPath,
-            coverUrl = if (online) {
-                song.albumArtPath.takeIf {
-                    it.startsWith("http://", true) || it.startsWith("https://", true)
-                }.orEmpty()
-            } else "",
+            // 无论是在线曲还是拥有有效网络封面的曲目，均保留 coverUrl 备份至云端
+            coverUrl = song.albumArtPath.takeIf {
+                it.startsWith("http://", true) || it.startsWith("https://", true)
+            }.orEmpty(),
             isOnline = online,
             sourcePlatform = if (online) platformIdOfPath(song.path)?.let(::uppercaseOrEmpty) ?: "" else "",
             isFavorite = isFavorite,

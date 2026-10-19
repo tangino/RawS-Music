@@ -59,6 +59,20 @@ interface UserPlaylistDao {
     )
     suspend fun updatePlaylistGroup(playlistId: String, groupName: String, updatedAt: Long)
 
+    /** 批量或单曲按标题和歌手更新缺失的网络封面路径（混合歌单云同步自愈用）。 */
+    @Query(
+        "UPDATE user_playlist_songs SET album_art_path = :artworkPath " +
+            "WHERE title = :title AND artist = :artist AND (album_art_path = '' OR album_art_path IS NULL)"
+    )
+    suspend fun updateArtworkPathByTitleAndArtist(title: String, artist: String, artworkPath: String)
+
+    /** 按歌曲唯一标识更新缺失的网络封面路径。 */
+    @Query(
+        "UPDATE user_playlist_songs SET album_art_path = :artworkPath " +
+            "WHERE song_key = :songKey AND (album_art_path = '' OR album_art_path IS NULL)"
+    )
+    suspend fun updateArtworkPathBySongKey(songKey: String, artworkPath: String)
+
     /**
      * 把某个分组下的**全部**歌单改挂到另一个分组。分组改名（old→new）与删除分组（old→默认）共用它。
      *

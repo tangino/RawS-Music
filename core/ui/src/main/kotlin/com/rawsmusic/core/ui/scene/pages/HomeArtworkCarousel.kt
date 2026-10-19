@@ -364,6 +364,7 @@ internal fun HomeArtworkCarousel(
     currentSong: AudioFile?,
     state: HomeArtworkCarouselState,
     style: HomeArtworkCarouselStyle,
+    reflectionAlpha: Float = 0.85f,
     showLyrics: Boolean,
     gestureLocked: Boolean = false,
     currentLyric: String,
@@ -671,6 +672,7 @@ internal fun HomeArtworkCarousel(
                             songs = availableSongs,
                             currentSong = currentSong,
                             isPlaying = isPlaying,
+                            reflectionAlpha = reflectionAlpha,
                             onSelectSong = onSelectSong,
                             onPlayPause = onPlayPause,
                             onArtworkDoubleTap = onCurrentArtworkDoubleTap,
@@ -696,7 +698,11 @@ internal fun HomeArtworkCarousel(
                 }
 
                 HomeArtworkCarouselStyle.VerticalDial -> {
-                    Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds()
+                    ) {
                         HomeArtworkDial(
                             songs = availableSongs,
                             centerIndex = state.centerIndex,

@@ -17,6 +17,7 @@ private const val HOME_CAROUSEL_VISIBLE_KEY = "carousel_visible"
 private const val HOME_CAROUSEL_STYLE_KEY = "carousel_style"
 private const val HOME_CAROUSEL_LYRIC_VISIBLE_KEY = "carousel_lyric_visible"
 private const val HOME_CAROUSEL_GESTURE_LOCKED_KEY = "carousel_gesture_locked"
+private const val HOME_CAROUSEL_REFLECTION_ALPHA_KEY = "carousel_reflection_alpha"
 private const val HOME_FLOATING_GLASS_ENABLED_KEY = "floating_glass_enabled"
 private const val HOME_FLOATING_LONG_PRESS_SPRING_ENABLED_KEY = "floating_long_press_spring_enabled"
 private const val HOME_FLOATING_PRESS_DISPLACEMENT_ENABLED_KEY = "floating_press_displacement_enabled"
@@ -78,6 +79,11 @@ class HomeHeaderOptionsState(context: Context) {
     )
         private set
 
+    var carouselReflectionAlpha by mutableStateOf(
+        preferences.getFloat(HOME_CAROUSEL_REFLECTION_ALPHA_KEY, 0.85f).coerceIn(0f, 1f),
+    )
+        private set
+
     var floatingGlassEnabled by mutableStateOf(
         preferences.getBoolean(HOME_FLOATING_GLASS_ENABLED_KEY, true),
     )
@@ -131,6 +137,8 @@ class HomeHeaderOptionsState(context: Context) {
                     HomeArtworkCarouselStyle.CurrentCarousel.value,
                 ),
             )
+            HOME_CAROUSEL_REFLECTION_ALPHA_KEY -> carouselReflectionAlpha =
+                preferences.getFloat(HOME_CAROUSEL_REFLECTION_ALPHA_KEY, 0.85f).coerceIn(0f, 1f)
             HOME_FLOATING_GLASS_ENABLED_KEY -> floatingGlassEnabled =
                 preferences.getBoolean(HOME_FLOATING_GLASS_ENABLED_KEY, true)
             HOME_FLOATING_LONG_PRESS_SPRING_ENABLED_KEY -> floatingLongPressSpringEnabled =
@@ -182,6 +190,12 @@ class HomeHeaderOptionsState(context: Context) {
     fun updateCarouselStyle(value: HomeArtworkCarouselStyle) {
         carouselStyle = value
         preferences.edit().putInt(HOME_CAROUSEL_STYLE_KEY, value.value).apply()
+    }
+
+    fun updateCarouselReflectionAlpha(value: Float) {
+        val clamped = value.coerceIn(0f, 1f)
+        carouselReflectionAlpha = clamped
+        preferences.edit().putFloat(HOME_CAROUSEL_REFLECTION_ALPHA_KEY, clamped).apply()
     }
 
     fun updateFloatingGlassEnabled(value: Boolean) {

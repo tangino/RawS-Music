@@ -61,6 +61,14 @@ data class PlaylistEntries(
 /** 导入时没有可用名字的兜底歌单名。与 `importTextPlaylist` 里既有的兜底保持一致。 */
 private const val DEFAULT_IMPORT_PLAYLIST_NAME = "Imported playlist"
 
+/**
+ * 混合歌单中非本地或缺失封面条目的在线封面寻源与缓存委托。
+ */
+interface PlaylistArtworkFallbackDelegate {
+    fun getCachedArtworkUrl(title: String, artist: String): String?
+    fun requestArtworkResolution(title: String, artist: String, songKey: String = "")
+}
+
 class PlaylistStore private constructor(private val context: Context) {
 
     companion object {
@@ -72,6 +80,9 @@ class PlaylistStore private constructor(private val context: Context) {
                 instance ?: PlaylistStore(context.applicationContext).also { instance = it }
             }
     }
+
+    @Volatile
+    var artworkFallbackDelegate: PlaylistArtworkFallbackDelegate? = null
 
     private val storeFile = context.filesDir.resolve("rawsmusic_playlists.json")
     private val backupFile = File(storeFile.parentFile, "${storeFile.name}.bak")
@@ -88,6 +99,39 @@ class PlaylistStore private constructor(private val context: Context) {
 
     // 内存 LRU 映射缓存：将 online 歌曲 Key 映射到匹配成功的本地 AudioFile，避免重复遍历曲库进行高频计算
     private val onlineToLocalMatchCache = android.util.LruCache<String, AudioFile>(500)
+
+    /**
+     * 异步回填单曲封面至内存歌单与数据库中（混合歌单封面自愈）。
+     */
+    fun updateSongArtworkInMemoryAndDb(title: String, artist: String, artworkUrl: String) {
+        if (title.isBlank() || artworkUrl.isBlank()) return
+        val currentPlaylists = _playlists.value
+        var anyUpdated = false
+        val newPlaylists = currentPlaylists.map { playlist ->
+            var playlistChanged = false
+            val newSongs = playlist.songs.map { song ->
+                if (song.title.equals(title, ignoreCase = true) &&
+                    (artist.isBlank() || song.artist.equals(artist, ignoreCase = true)) &&
+                    song.albumArtPath.isBlank()
+                ) {
+                    playlistChanged = true
+                    anyUpdated = true
+                    onlineToLocalMatchCache.remove(song.path)
+                    onlineToLocalMatchCache.remove(song.key)
+                    song.copy(albumArtPath = artworkUrl)
+                } else {
+                    song
+                }
+            }
+            if (playlistChanged) playlist.copy(songs = newSongs) else playlist
+        }
+        if (anyUpdated) {
+            _playlists.value = newPlaylists
+            databaseScope.launch {
+                dao.updateArtworkPathByTitleAndArtist(title, artist, artworkUrl)
+            }
+        }
+    }
 
     fun invalidateMatchCache() {
         onlineToLocalMatchCache.evictAll()
@@ -330,9 +374,16 @@ class PlaylistStore private constructor(private val context: Context) {
                     // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频）：
                     // 具备混合歌单特征：不丢弃歌曲条目，平滑降级为可在线寻源试听的网络虚拟歌曲（保留完整元数据）
                     val virtualId = if (stored.id > 0) stored.id.toString() else "${stored.title}_${stored.artist}".hashCode().toString()
+                    val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                     val cleanedArtPath = stored.albumArtPath.takeIf {
                         it.startsWith("http://", true) || it.startsWith("https://", true)
-                    }.orEmpty()
+                    }.orEmpty().ifBlank { cachedCover }
+
+                    // 若当前仍无网络封面，触发后台异步寻源，完成后自动持久化并通知刷新
+                    if (cleanedArtPath.isBlank() && stored.title.isNotBlank()) {
+                        artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                    }
+
                     stored.toAudioFile().copy(
                         path = "online://netease/$virtualId",
                         albumArtPath = cleanedArtPath

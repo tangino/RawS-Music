@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
  * sources. A complete local file also preserves the existing decoder/DSP/AudioTrack path and
  * makes normal seek semantics reliable, unlike a non-seekable pipe.
  */
-internal object OnlineAudioFileCache {
+object OnlineAudioFileCache {
     data class Result(
         val file: File,
         val fromCache: Boolean,
@@ -38,15 +38,20 @@ internal object OnlineAudioFileCache {
     )
 
     private const val TAG = "OnlineAudioCache"
-    private const val CACHE_DIR = "online_audio_v1"
-    private const val CACHE_TTL_MS = 24L * 60L * 60L * 1_000L
-    private const val MAX_CACHE_BYTES = 1_024L * 1_024L * 1_024L
-    private const val MAX_SINGLE_FILE_BYTES = 768L * 1_024L * 1_024L
-    private const val RESERVED_FREE_BYTES = 96L * 1_024L * 1_024L
-    private const val MIN_VALID_BYTES = 4L * 1_024L
-    private const val CONNECT_TIMEOUT_MS = 12_000
-    private const val READ_TIMEOUT_MS = 30_000
-    private const val MAX_REDIRECTS = 6
+    const val CACHE_DIR = "online_audio_v1"
+    const val CACHE_TTL_MS = 24L * 60L * 60L * 1_000L
+    const val MAX_CACHE_BYTES = 1_024L * 1_024L * 1_024L
+    const val MAX_SINGLE_FILE_BYTES = 768L * 1_024L * 1_024L
+    const val RESERVED_FREE_BYTES = 96L * 1_024L * 1_024L
+    const val MIN_VALID_BYTES = 4L * 1_024L
+    const val CONNECT_TIMEOUT_MS = 12_000
+    const val READ_TIMEOUT_MS = 30_000
+    const val MAX_REDIRECTS = 6
+
+    fun getCacheDir(context: Context): File = File(context.cacheDir, CACHE_DIR).apply { mkdirs() }
+
+    fun cacheKey(item: RawSourceMediaItem, quality: RawSourceQuality): String =
+        sha256("${item.stableIdentity}|${quality.name}")
 
     private val downloadMutexes = ConcurrentHashMap<String, Mutex>()
 
@@ -285,7 +290,7 @@ internal object OnlineAudioFileCache {
         }
     }
 
-    private fun trimCache(cacheDir: File, keep: File) {
+    fun trimCache(cacheDir: File, keep: File? = null) {
         val files = cacheDir.listFiles()
             ?.filter { it.isFile && !it.name.endsWith(".part") }
             ?.sortedByDescending { it.lastModified() }
@@ -293,7 +298,7 @@ internal object OnlineAudioFileCache {
         var total = files.sumOf { it.length() }
         for (file in files.asReversed()) {
             if (total <= MAX_CACHE_BYTES) break
-            if (file == keep) continue
+            if (keep != null && file == keep) continue
             val bytes = file.length()
             if (file.delete()) total -= bytes
         }
@@ -304,11 +309,11 @@ internal object OnlineAudioFileCache {
             }
     }
 
-    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+    fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8))
         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun cacheExtension(url: String): String {
+    fun cacheExtension(url: String): String {
         val extension = url
             .substringBefore('?')
             .substringBefore('#')

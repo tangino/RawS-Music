@@ -81,6 +81,8 @@
     <string name="home_header_carousel_gesture_lock_title">Lock carousel gestures</string>
     <string name="home_header_carousel_gesture_lock_summary">Limit each swipe to the adjacent artwork so a fast gesture cannot skip across multiple tracks.</string>
     <string name="home_header_artwork_style_title">Artwork carousel style</string>
+    <string name="home_header_carousel_reflection_alpha_title">Reflection opacity</string>
+    <string name="home_header_carousel_reflection_alpha_summary">Adjust the opacity of 3D cover reflections, or set to 0% to hide them.</string>
     <string name="home_header_floating_style_title">Floating header controls</string>
     <string name="home_header_floating_glass_title">Liquid glass containers</string>
     <string name="home_header_floating_glass_summary">Show liquid glass around the floating Home actions after scrolling; unsupported APIs fall back automatically.</string>

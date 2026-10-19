@@ -723,6 +723,33 @@ object MusicSourcePlaybackController {
             fail("在线播放上下文不可用")
             return
         }
+
+        // 优先检查本地是否已存在完整缓存文件（0ms 秒开）
+        val cachedHit = OnlineAudioFileCache.findValidCachedFile(context, item, source.quality)
+        if (cachedHit != null) {
+            val (cachedFile, cachedQuality) = cachedHit
+            AppLogger.i(
+                TAG,
+                "${OnlinePlaybackDiagnostics.PREFIX} CACHE_DIRECT_HIT bytes=${cachedFile.length()} " +
+                    "file=${cachedFile.name} title=${item.title}"
+            )
+            val localSource = source.copy(
+                url = cachedFile.absolutePath,
+                headers = emptyMap(),
+                userAgent = null,
+                expiresAtMs = null,
+            )
+            playBackend(
+                backend = activeBackend,
+                generation = generation,
+                item = item,
+                source = localSource,
+                startPositionMs = startPositionMs,
+                autoPlay = autoPlay,
+            )
+            return
+        }
+
         cacheJob?.cancel()
         cacheJob = scope.launch {
             try {
@@ -762,7 +789,6 @@ object MusicSourcePlaybackController {
                     TAG,
                     "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_END generation=$generation " +
                         "fromCache=${cached.fromCache} bytes=${cached.bytes} " +
-                        "contentType=${cached.contentType.ifBlank { "unknown" }} " +
                         "file=${cached.file.name}"
                 )
                 playBackend(
@@ -780,8 +806,7 @@ object MusicSourcePlaybackController {
                 AppLogger.e(
                     TAG,
                     "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_FAIL generation=$generation " +
-                        "message=${error.message.orEmpty().replace('\n', ' ').replace('\r', ' ').take(512)} " +
-                        "url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}",
+                        "message=${error.message.orEmpty()} url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}",
                     error,
                 )
                 prepareMediaPlayer(

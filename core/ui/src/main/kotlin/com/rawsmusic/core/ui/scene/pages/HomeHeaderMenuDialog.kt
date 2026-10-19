@@ -25,9 +25,12 @@ import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
 import com.rawsmusic.core.ui.widget.RawWindowDropdownPreference
 import top.yukonga.miuix.kmp.basic.DropdownEntry
 import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.SliderDefaults
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import kotlin.math.roundToInt
 
 @Composable
 internal fun HomeHeaderSettingsSection(
@@ -101,6 +104,25 @@ internal fun HomeHeaderSettingsSection(
                 showValue = true,
                 maxHeight = 220.dp,
                 collapseOnSelection = false,
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(15.dp))
+                .background(scheme.surfaceContainer.copy(alpha = 0.82f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        ) {
+            SliderPreference(
+                title = stringResource(R.string.home_header_carousel_reflection_alpha_title),
+                summary = stringResource(R.string.home_header_carousel_reflection_alpha_summary),
+                valueText = if (options.carouselReflectionAlpha < 0.02f) "0% (关闭)" else "${(options.carouselReflectionAlpha * 100).roundToInt()}%",
+                value = options.carouselReflectionAlpha,
+                onValueChange = options::updateCarouselReflectionAlpha,
+                valueRange = 0f..1.0f,
+                steps = 19,
+                hapticEffect = SliderDefaults.SliderHapticEffect.Step,
             )
         }
     }
@@ -290,6 +312,8 @@ internal fun HomeHeaderMenuDialog(
     onCarouselLyricVisibleChange: (Boolean) -> Unit,
     carouselStyle: HomeArtworkCarouselStyle,
     onCarouselStyleChange: (HomeArtworkCarouselStyle) -> Unit,
+    carouselReflectionAlpha: Float = 0.85f,
+    onCarouselReflectionAlphaChange: (Float) -> Unit = {},
     onDismissRequest: () -> Unit
 ) {
     RawMiuixOverlayDialog(
@@ -387,6 +411,27 @@ internal fun HomeHeaderMenuDialog(
                     showValue = true,
                     maxHeight = 260.dp,
                     collapseOnSelection = true
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(scheme.surfaceContainerHigh.copy(alpha = 0.45f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                SliderPreference(
+                    title = stringResource(R.string.home_header_carousel_reflection_alpha_title),
+                    summary = stringResource(R.string.home_header_carousel_reflection_alpha_summary),
+                    valueText = if (carouselReflectionAlpha < 0.02f) "0% (关闭)" else "${(carouselReflectionAlpha * 100).roundToInt()}%",
+                    value = carouselReflectionAlpha,
+                    onValueChange = onCarouselReflectionAlphaChange,
+                    valueRange = 0f..1.0f,
+                    steps = 19,
+                    hapticEffect = SliderDefaults.SliderHapticEffect.Step,
                 )
             }
         }

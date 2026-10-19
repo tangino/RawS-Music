@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.PagerDefaults
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -61,6 +63,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,6 +96,7 @@ internal fun HomeOrbitCoverFlow(
     songs: List<AudioFile>,
     currentSong: AudioFile?,
     isPlaying: Boolean,
+    reflectionAlpha: Float = 0.85f,
     onSelectSong: (AudioFile, Int) -> Unit,
     onPlayPause: () -> Unit = {},
     onArtworkDoubleTap: () -> Unit = {},
@@ -320,8 +324,10 @@ internal fun HomeOrbitCoverFlow(
                                 modifier = Modifier
                                     .size(cardSize)
                                     .graphicsLayer {
-                                        if (isCurrentPage && hideCenterForFullscreenTransition) {
-                                            alpha = 0f
+                                        alpha = if (isCurrentPage && hideCenterForFullscreenTransition) {
+                                            0f
+                                        } else {
+                                            1f
                                         }
                                     }
                             ) {
@@ -330,42 +336,56 @@ internal fun HomeOrbitCoverFlow(
                                     isPlayingThis = isPlayingThis,
                                     isPlaying = isPlaying,
                                     isCurrentCenter = isCurrentPage,
-                                    showSongInfo = true,
+                                    showSongInfo = false,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
 
-                            // 2. 真实拟物镜面倒影 (Reflection) - 直接反转封面，从上往下平滑减弱消隐
-                            Box(
-                                modifier = Modifier
-                                    .size(width = cardSize, height = reflectionHeight)
-                                    .clipToBounds()
-                                    .graphicsLayer {
-                                        compositingStrategy = CompositingStrategy.Offscreen
-                                        if (isCurrentPage && hideCenterForFullscreenTransition) {
-                                            alpha = 0f
-                                        }
-                                    }
-                                    .drawWithContent {
-                                        drawContent()
-                                        // 倒影透明度：从顶部85%平滑过渡到底部100%完全透明消隐
-                                        drawRect(
-                                            brush = Brush.verticalGradient(
-                                                colors = listOf(
-                                                    Color.White.copy(alpha = 0.85f),
-                                                    Color.White.copy(alpha = 0.35f),
-                                                    Color.Transparent
-                                                )
-                                            ),
-                                            blendMode = BlendMode.DstIn
-                                        )
-                                    }
-                            ) {
+                            // 2. 真实拟物镜面倒影 (Reflection) - 直接反转封面，原封面底边像素绝对精准对齐倒影顶部接缝
+                            if (reflectionAlpha > 0.01f) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxSize()
+                                        .size(width = cardSize, height = reflectionHeight)
+                                        .clipToBounds()
                                         .graphicsLayer {
-                                            scaleY = -1f // 直接垂直反转封面，原封面底边像素精准对齐倒影顶部接缝
+                                            compositingStrategy = CompositingStrategy.Offscreen
+                                            alpha = if (isCurrentPage && hideCenterForFullscreenTransition) {
+                                                0f
+                                            } else {
+                                                reflectionAlpha
+                                            }
+                                        }
+                                        .drawWithContent {
+                                            drawContent()
+                                            // 倒影透明度：从顶部平滑过渡到底部完全透明消隐，随 reflectionAlpha 联动
+                                            drawRect(
+                                                brush = Brush.verticalGradient(
+                                                    colors = listOf(
+                                                        Color.White.copy(alpha = reflectionAlpha),
+                                                        Color.White.copy(alpha = reflectionAlpha * 0.40f),
+                                                        Color.Transparent
+                                                    )
+                                                ),
+                                                blendMode = BlendMode.DstIn
+                                            )
+                                        },
+                                    contentAlignment = Alignment.TopCenter
+                                ) {
+                                Box(
+                                    modifier = Modifier
+                                        .layout { measurable, constraints ->
+                                            val sizePx = cardSize.roundToPx()
+                                            val placeable = measurable.measure(
+                                                Constraints.fixed(sizePx, sizePx)
+                                            )
+                                            layout(constraints.maxWidth, constraints.maxHeight) {
+                                                placeable.place(0, 0)
+                                            }
+                                        }
+                                        .graphicsLayer {
+                                            transformOrigin = TransformOrigin(0.5f, 0f)
+                                            scaleY = -1f
+                                            translationY = size.height
                                         }
                                 ) {
                                     CoverArtworkCard(
@@ -382,10 +402,43 @@ internal fun HomeOrbitCoverFlow(
                     }
                 }
             }
+        }
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // 当开启歌词时在倒影下方展示歌词；歌曲名称和歌手已集成在封面内部下方
+            // 居中展示当前选中项的标题与副标题信息 (参考 orbitplayer CoverFlowLayout)
+            val currentSelectedSong = displaySongs.getOrNull(pagerState.currentPage)
+            if (currentSelectedSong != null && (!showLyrics || lyricRenderClock == null)) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                ) {
+                    Text(
+                        text = currentSelectedSong.displayName,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    if (currentSelectedSong.artist.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = currentSelectedSong.artist,
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            // 当开启歌词时在倒影下方展示歌词
             if (showLyrics && lyricRenderClock != null) {
                 HomeHorizontalCarouselLyric(
                     renderClock = lyricRenderClock,
