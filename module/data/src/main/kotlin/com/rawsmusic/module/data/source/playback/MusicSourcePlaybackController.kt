@@ -223,7 +223,6 @@ object MusicSourcePlaybackController {
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        backend?.stop()
         val activeQueue = if (queue.isNotEmpty() && queue.size > 1) {
             queue
         } else {
@@ -250,16 +249,19 @@ object MusicSourcePlaybackController {
         val activeIndex = activeQueue.indexOfFirst { it.stableIdentity == item.stableIdentity }
             .takeIf { it >= 0 }
             ?: if (index in activeQueue.indices) index else 0
+        val origPlatform = resolvePlatformDisplayName(originalPlatform ?: item.sourceId)
+        val resPlatform = resolvePlatformDisplayName(resolvedPlatform ?: source.platform ?: origPlatform)
+        val tag = sourceTag ?: source.sourceName ?: "在线音源"
         mutableSnapshot.value = MusicSourcePlaybackSnapshot(
             queue = activeQueue,
             currentIndex = activeIndex,
             currentItem = item,
-            status = MusicSourcePlaybackStatus.Resolving,
+            status = MusicSourcePlaybackStatus.Preparing,
             requestedQuality = source.quality,
             resolvedQuality = source.quality,
-            originalPlatform = originalPlatform,
-            resolvedPlatform = resolvedPlatform,
-            sourceTag = sourceTag,
+            originalPlatform = origPlatform,
+            resolvedPlatform = resPlatform,
+            sourceTag = tag,
             durationMs = item.durationMs,
         )
         prepareResolved(
@@ -480,16 +482,22 @@ object MusicSourcePlaybackController {
         mediaFallbackJob = null
         cacheJob?.cancel()
         cacheJob = null
+        preloadJob?.cancel()
+        preloadJob = null
         prepared = false
         completionHandledGeneration = Long.MIN_VALUE
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        backend?.stop()
         releaseMediaPlayer(abandonFocus = false)
-        val preloadedSource = preloadedResolvedMap.remove(item.stableIdentity)
+
+        val origPlatform = resolvePlatformDisplayName(item.sourceId)
+
+        // 1. 宽容多级检索预加载映射（精确 stableIdentity -> remoteId 后缀 -> title+artist 元数据）
+        val preloadedSource = findAndConsumePreloadedSource(item)
         if (preloadedSource != null) {
-            AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_HIT title=${item.title} quality=${preloadedSource.quality}")
+            val resPlatform = resolvePlatformDisplayName(preloadedSource.platform ?: item.sourceId)
+            AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_HIT title=${item.title} quality=${preloadedSource.quality} platform=$resPlatform")
             mutableSnapshot.value = MusicSourcePlaybackSnapshot(
                 queue = queue,
                 currentIndex = index,
@@ -497,6 +505,9 @@ object MusicSourcePlaybackController {
                 status = MusicSourcePlaybackStatus.Preparing,
                 requestedQuality = preloadedSource.quality,
                 resolvedQuality = preloadedSource.quality,
+                originalPlatform = origPlatform,
+                resolvedPlatform = resPlatform,
+                sourceTag = preloadedSource.sourceName ?: "预加载直链",
                 durationMs = item.durationMs,
             )
             prepareResolved(
@@ -510,8 +521,35 @@ object MusicSourcePlaybackController {
         }
 
         val targetPreferredQuality = requestedQualityOverride ?: loadPreferredQuality()
-        // 对齐 OrBitPlayer 核心机制：检查本地磁盘是否已存在有效缓存文件
-        // 若已命中完整缓存，直接以离线本地文件起播，跳过 Resolving（正在寻源...）阶段，实现 0 延时离线秒开！
+
+        // 2. 同步探测内存 LRU 直链缓存 (0ms 秒开起播，杜绝切歌时闪现 Resolving)
+        val memoryHit = MusicSourceAudioResolver.peekMemoryCache(item, targetPreferredQuality)
+        if (memoryHit != null) {
+            val resPlatform = resolvePlatformDisplayName(memoryHit.platform ?: item.sourceId)
+            AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} MEMORY_PEEK_HIT title=${item.title} quality=${memoryHit.quality} platform=$resPlatform")
+            mutableSnapshot.value = MusicSourcePlaybackSnapshot(
+                queue = queue,
+                currentIndex = index,
+                currentItem = item,
+                status = MusicSourcePlaybackStatus.Preparing,
+                requestedQuality = memoryHit.quality,
+                resolvedQuality = memoryHit.quality,
+                originalPlatform = origPlatform,
+                resolvedPlatform = resPlatform,
+                sourceTag = memoryHit.sourceName ?: "内存直链",
+                durationMs = item.durationMs,
+            )
+            prepareResolved(
+                generation = generation,
+                item = item,
+                source = memoryHit,
+                startPositionMs = startPositionMs.coerceAtLeast(0L),
+                autoPlay = autoPlay,
+            )
+            return
+        }
+
+        // 3. 对齐 OrBitPlayer 核心机制：检查本地磁盘是否已存在有效缓存文件 (0ms 秒开起播)
         val cachedHit = OnlineAudioFileCache.findValidCachedFile(
             context = context,
             item = item,
@@ -528,6 +566,8 @@ object MusicSourcePlaybackController {
                 url = cachedFile.absolutePath,
                 quality = cachedQuality,
                 headers = emptyMap(),
+                platform = origPlatform,
+                sourceName = "本地缓存",
             )
             mutableSnapshot.value = MusicSourcePlaybackSnapshot(
                 queue = queue,
@@ -536,6 +576,9 @@ object MusicSourcePlaybackController {
                 status = MusicSourcePlaybackStatus.Preparing,
                 requestedQuality = cachedQuality,
                 resolvedQuality = cachedQuality,
+                originalPlatform = origPlatform,
+                resolvedPlatform = origPlatform,
+                sourceTag = "本地缓存",
                 durationMs = item.durationMs,
             )
             prepareResolved(
@@ -552,19 +595,34 @@ object MusicSourcePlaybackController {
             item = item,
             preferred = targetPreferredQuality,
         )
+        // 初始设为 Preparing（正在缓冲），让普通切歌展现为平滑缓冲；若后台网络寻源耗时超过 800ms，再显示“正在寻源...”
         mutableSnapshot.value = MusicSourcePlaybackSnapshot(
             queue = queue,
             currentIndex = index,
             currentItem = item,
-            status = MusicSourcePlaybackStatus.Resolving,
+            status = MusicSourcePlaybackStatus.Preparing,
             requestedQuality = requestedQuality,
             resolvedQuality = requestedQuality,
+            originalPlatform = origPlatform,
+            resolvedPlatform = origPlatform,
+            sourceTag = "正在寻源",
             durationMs = item.durationMs,
         )
 
         resolveJob = scope.launch {
+            val delayResolvingNotification = launch {
+                delay(800L)
+                if (isActive && generation == generations.get() &&
+                    mutableSnapshot.value.status == MusicSourcePlaybackStatus.Preparing
+                ) {
+                    mutableSnapshot.value = mutableSnapshot.value.copy(
+                        status = MusicSourcePlaybackStatus.Resolving
+                    )
+                }
+            }
             try {
                 val resolved = MusicSourceAudioResolver.resolve(context, item, requestedQuality)
+                delayResolvingNotification.cancel()
                 if (generation != generations.get()) return@launch
                 prepareResolved(
                     generation = generation,
@@ -574,12 +632,53 @@ object MusicSourcePlaybackController {
                     autoPlay = autoPlay,
                 )
             } catch (cancelled: CancellationException) {
+                delayResolvingNotification.cancel()
                 throw cancelled
             } catch (error: Throwable) {
+                delayResolvingNotification.cancel()
                 if (generation != generations.get()) return@launch
                 fail(error.message.orEmpty().ifBlank { "在线播放失败" }.take(1_024))
             }
         }
+    }
+
+    fun resolvePlatformDisplayName(rawPlatformOrSourceId: String?): String {
+        if (rawPlatformOrSourceId.isNullOrBlank()) return "在线音源"
+        val p = rawPlatformOrSourceId.trim().lowercase()
+        return when {
+            p == "netease" || p == "wy" || p.contains("163") || p.contains("网易") -> "网易云音乐"
+            p == "qq" || p == "tx" || p.contains("tencent") || p.contains("qq") -> "QQ音乐"
+            p == "kugou" || p == "kg" || p.contains("酷狗") -> "酷狗音乐"
+            p == "kuwo" || p == "kw" || p.contains("酷我") -> "酷我音乐"
+            p == "migu" || p == "mg" || p.contains("咪咕") -> "咪咕音乐"
+            else -> rawPlatformOrSourceId
+        }
+    }
+
+    private fun findAndConsumePreloadedSource(item: RawSourceMediaItem): RawResolvedAudioSource? {
+        // 1. 精确匹配 stableIdentity
+        preloadedResolvedMap.remove(item.stableIdentity)?.let { return it }
+        // 2. 匹配以 remoteId 结尾的 key
+        val remoteIdMatch = preloadedResolvedMap.keys().toList().firstOrNull { key ->
+            key.endsWith("/${item.remoteId}") || key.substringAfterLast('/') == item.remoteId
+        }
+        if (remoteIdMatch != null) {
+            preloadedResolvedMap.remove(remoteIdMatch)?.let { return it }
+        }
+        // 3. 基于曲目名称和歌手兜底匹配
+        val queue = mutableSnapshot.value.queue
+        val itemTitle = item.title.trim()
+        val itemArtist = item.artists.firstOrNull()?.trim() ?: ""
+        val metaMatch = preloadedResolvedMap.keys().toList().firstOrNull { key ->
+            val matchedInQueue = queue.firstOrNull { it.stableIdentity == key }
+            matchedInQueue != null &&
+                matchedInQueue.title.equals(itemTitle, ignoreCase = true) &&
+                (itemArtist.isBlank() || matchedInQueue.artists.contains(itemArtist))
+        }
+        if (metaMatch != null) {
+            preloadedResolvedMap.remove(metaMatch)?.let { return it }
+        }
+        return null
     }
 
     private fun schedulePreloadNext() {
@@ -616,15 +715,23 @@ object MusicSourcePlaybackController {
 
         if (nextIndex !in queue.indices || nextIndex == state.currentIndex) return
         val nextItem = queue[nextIndex]
+        AppLogger.i(
+            TAG,
+            "${OnlinePlaybackDiagnostics.PREFIX} SCHEDULE_PRELOAD started. currentIndex=${state.currentIndex} " +
+                "nextIndex=$nextIndex nextTitle=${nextItem.title} nextSourceId=${nextItem.sourceId}"
+        )
 
         // 若下一首在本地磁盘已拥有有效缓存，直接装载到 preloadedResolvedMap 并跳过网络预热
         val nextCached = OnlineAudioFileCache.findValidCachedFile(context, nextItem)
         if (nextCached != null) {
             val (cachedFile, cachedQuality) = nextCached
+            val origPlatform = resolvePlatformDisplayName(nextItem.sourceId)
             preloadedResolvedMap[nextItem.stableIdentity] = RawResolvedAudioSource(
                 url = cachedFile.absolutePath,
                 quality = cachedQuality,
                 headers = emptyMap(),
+                platform = origPlatform,
+                sourceName = "本地缓存",
             )
             AppLogger.d(TAG, "下一首【${nextItem.title}】已在本地完整缓存(${cachedQuality})，跳过网络预热")
             return
@@ -644,19 +751,26 @@ object MusicSourcePlaybackController {
 
                 AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_RESOLVED nextTitle=${nextItem.title} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)}")
 
-                // 🚀 核心对齐 OrBitPlayer 机制：拿到直链后立即在后台静默物化至本地磁盘缓存！
-                // 不仅规避防盗链 Token/时间戳在数分钟后过期失效（403 Forbidden），更让切歌瞬间从本地磁盘 0 延迟秒开！
+                // 🌟 核心对齐 OrBitPlayer 机制：
+                // 1. 直链解析成功瞬间立即写入预加载映射，切歌时可直接以 PRELOAD_HIT 秒开起播，杜绝退回 Resolving 寻源状态！
+                val platformName = resolved.platform ?: resolvePlatformDisplayName(nextItem.sourceId)
+                val resolvedWithPlatform = resolved.copy(platform = platformName)
+                preloadedResolvedMap[nextItem.stableIdentity] = resolvedWithPlatform
+
+                // 2. 在后台静默物化全量音频文件至本地磁盘缓存，完成后平滑升级为本地离线文件
                 if (resolved.url.startsWith("http://", ignoreCase = true) || resolved.url.startsWith("https://", ignoreCase = true)) {
                     val materializedResult = OnlineAudioFileCache.materialize(
                         context = context,
                         item = nextItem,
-                        source = resolved,
+                        source = resolvedWithPlatform,
                     ) { _, _, _ -> }
-                    val localSource = resolved.copy(
+                    val localSource = resolvedWithPlatform.copy(
                         url = materializedResult.file.absolutePath,
                         headers = emptyMap(),
                         userAgent = null,
                         expiresAtMs = null,
+                        platform = platformName,
+                        sourceName = "本地缓存",
                     )
                     preloadedResolvedMap[nextItem.stableIdentity] = localSource
                     AppLogger.i(
@@ -664,8 +778,6 @@ object MusicSourcePlaybackController {
                         "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_MATERIALIZED nextTitle=${nextItem.title} " +
                             "bytes=${materializedResult.bytes} file=${materializedResult.file.name}"
                     )
-                } else {
-                    preloadedResolvedMap[nextItem.stableIdentity] = resolved
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -685,9 +797,16 @@ object MusicSourcePlaybackController {
         activeResolvedSource = source
         activeStartPositionMs = startPositionMs
         activeAutoPlay = autoPlay
-        mutableSnapshot.value = mutableSnapshot.value.copy(
+        val currentSnapshot = mutableSnapshot.value
+        val origPlatform = currentSnapshot.originalPlatform ?: resolvePlatformDisplayName(item.sourceId)
+        val resPlatform = resolvePlatformDisplayName(source.platform ?: currentSnapshot.resolvedPlatform ?: origPlatform)
+        val tag = source.sourceName ?: currentSnapshot.sourceTag ?: "官方直链"
+        mutableSnapshot.value = currentSnapshot.copy(
             status = MusicSourcePlaybackStatus.Preparing,
             resolvedQuality = source.quality,
+            originalPlatform = origPlatform,
+            resolvedPlatform = resPlatform,
+            sourceTag = tag,
             error = "",
             positionMs = startPositionMs,
             bufferedPercent = 0,
@@ -840,6 +959,8 @@ object MusicSourcePlaybackController {
                 autoPlay = autoPlay,
             )
         )
+        // 🌟 核心保底：只要起播指令已交由底层渲染，立即调度下一首预加载与静默全量缓存物化
+        schedulePreloadNext()
     }
 
     private fun pauseInternal() {

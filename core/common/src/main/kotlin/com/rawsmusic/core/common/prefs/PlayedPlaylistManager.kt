@@ -16,6 +16,8 @@ data class PlayedPlaylistEntry(
     val platformId: String? = null,
     val coverUrl: String? = null,
     val trackCount: Int = 0,
+    val lastPlayedSongTitle: String? = null,
+    val lastPlayedSongArtist: String? = null,
     val lastPlayedTimeMs: Long = System.currentTimeMillis(),
 )
 
@@ -40,6 +42,8 @@ object PlayedPlaylistManager {
         platformId: String? = null,
         coverUrl: String? = null,
         trackCount: Int = 0,
+        lastPlayedSongTitle: String? = null,
+        lastPlayedSongArtist: String? = null,
     ) {
         if (id.isBlank() || name.isBlank()) return
         val current = _currentPlaylist.value
@@ -52,6 +56,8 @@ object PlayedPlaylistManager {
             platformId = platformId,
             coverUrl = effectiveCover,
             trackCount = trackCount,
+            lastPlayedSongTitle = lastPlayedSongTitle ?: current?.takeIf { it.id == id }?.lastPlayedSongTitle,
+            lastPlayedSongArtist = lastPlayedSongArtist ?: current?.takeIf { it.id == id }?.lastPlayedSongArtist,
             lastPlayedTimeMs = System.currentTimeMillis(),
         )
         if (current != null && current.id == id && current.isOnline == isOnline) {
@@ -113,6 +119,8 @@ object PlayedPlaylistManager {
                 platformId = json.optString("platformId").takeIf { it.isNotBlank() },
                 coverUrl = json.optString("coverUrl").takeIf { it.isNotBlank() },
                 trackCount = json.optInt("trackCount", 0),
+                lastPlayedSongTitle = json.optString("lastPlayedSongTitle").takeIf { it.isNotBlank() },
+                lastPlayedSongArtist = json.optString("lastPlayedSongArtist").takeIf { it.isNotBlank() },
                 lastPlayedTimeMs = json.optLong("lastPlayedTimeMs", 0L),
             )
         } catch (_: Exception) {
@@ -133,6 +141,8 @@ object PlayedPlaylistManager {
                 put("platformId", entry.platformId.orEmpty())
                 put("coverUrl", entry.coverUrl.orEmpty())
                 put("trackCount", entry.trackCount)
+                put("lastPlayedSongTitle", entry.lastPlayedSongTitle.orEmpty())
+                put("lastPlayedSongArtist", entry.lastPlayedSongArtist.orEmpty())
                 put("lastPlayedTimeMs", entry.lastPlayedTimeMs)
             }
             kv.encode(key, json.toString())

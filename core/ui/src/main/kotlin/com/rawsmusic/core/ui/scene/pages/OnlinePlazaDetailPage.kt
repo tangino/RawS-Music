@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,9 +94,18 @@ internal fun OnlinePlaylistDetailPage(
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
 
-    val platform = remember(argument) { OnlinePlatform.fromId(argument.substringBefore(ARGUMENT_SEPARATOR)) }
-    val playlistId = remember(argument) {
-        Uri.decode(argument.substringAfter(ARGUMENT_SEPARATOR, ""))
+    // 记忆有效参数，防止在重组瞬态或进入播放页返回时参数短暂为空导致误报“歌单参数无效”
+    var rememberedArgument by rememberSaveable { mutableStateOf(argument.takeIf { it.isNotBlank() }.orEmpty()) }
+    if (argument.isNotBlank() && argument != rememberedArgument) {
+        rememberedArgument = argument
+    }
+    val effectiveArgument = argument.takeIf { it.isNotBlank() } ?: rememberedArgument
+
+    val platform = remember(effectiveArgument) {
+        OnlinePlatform.fromId(effectiveArgument.substringBefore(ARGUMENT_SEPARATOR))
+    }
+    val playlistId = remember(effectiveArgument) {
+        Uri.decode(effectiveArgument.substringAfter(ARGUMENT_SEPARATOR, ""))
     }
 
     var detail by remember { mutableStateOf<Pair<OnlinePlaylist, List<OnlineSongItem>>?>(null) }
@@ -119,7 +129,7 @@ internal fun OnlinePlaylistDetailPage(
     }
     val isFavorite = favoriteKey != null && favorites.any { it.playlistKey == favoriteKey }
 
-    LaunchedEffect(argument, reloadToken) {
+    LaunchedEffect(effectiveArgument, reloadToken) {
         if (platform == null || playlistId.isBlank()) {
             loading = false
             return@LaunchedEffect
@@ -129,8 +139,9 @@ internal fun OnlinePlaylistDetailPage(
         repository.getPlaylistDetail(playlistId = playlistId, platform = platform)
             .onSuccess { detail = it }
             .onFailure {
-                detail = null
-                errorText = loadFailedMessage
+                if (detail == null) {
+                    errorText = loadFailedMessage
+                }
                 AppNoticeBus.error(loadFailedMessage)
             }
         loading = false

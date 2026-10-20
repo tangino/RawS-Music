@@ -531,6 +531,8 @@ class MainActivity : ComponentActivity() {
     private var prePlayerWasInFragmentMode: Boolean = false
     /** 进入播放器前主 Compose 导航的当前场景 */
     private var prePlayerContainerScene: com.rawsmusic.core.ui.scene.NavScene? = null
+    /** 进入播放器前主 Compose 导航的当前场景参数 */
+    private var prePlayerContainerArgument: String = ""
     /** 播放器关闭后需要进入的 Compose 设置场景。 */
     private var pendingSettingsSceneAfterPlayerClose: com.rawsmusic.core.ui.scene.NavScene? = null
     /**
@@ -564,6 +566,7 @@ class MainActivity : ComponentActivity() {
             prePlayerFragmentDestination = { prePlayerFragmentDest },
             prePlayerWasInFragmentMode = { prePlayerWasInFragmentMode },
             prePlayerContainerScene = { prePlayerContainerScene },
+            prePlayerContainerArgument = { prePlayerContainerArgument },
             songsDestinationId = R.id.nav_songs,
             setLegacyDestination = { destinationId -> legacyDestinationId = destinationId },
             legacyDestination = { legacyDestinationId },
@@ -750,6 +753,7 @@ class MainActivity : ComponentActivity() {
         savedInstanceState?.getString("prePlayerContainerScene")?.let {
             prePlayerContainerScene = com.rawsmusic.core.ui.scene.NavScene.entries.find { s -> s.name == it }
         }
+        prePlayerContainerArgument = savedInstanceState?.getString("prePlayerContainerArgument").orEmpty()
         FontManager.init(this)
         metadataEditorHelper
 
@@ -916,6 +920,9 @@ class MainActivity : ComponentActivity() {
         prePlayerFragmentDest?.let { outState.putInt("prePlayerFragmentDest", it) }
         outState.putInt("legacyDestinationId", legacyDestinationId)
         prePlayerContainerScene?.let { outState.putString("prePlayerContainerScene", it.name) }
+        if (prePlayerContainerArgument.isNotBlank()) {
+            outState.putString("prePlayerContainerArgument", prePlayerContainerArgument)
+        }
     }
 
     private val dialogHelper by lazy {
@@ -2711,6 +2718,8 @@ class MainActivity : ComponentActivity() {
                         // Compose 主界面会保持当前页面
                         prePlayerFragmentDest = null
                         prePlayerWasInFragmentMode = false
+                        prePlayerContainerScene = null
+                        prePlayerContainerArgument = ""
                     }
                     pendingSettingsSceneAfterPlayerClose?.let { pendingScene ->
                         pendingSettingsSceneAfterPlayerClose = null
@@ -2826,6 +2835,7 @@ class MainActivity : ComponentActivity() {
             }
             if (prePlayerContainerScene == null && true) {
                 prePlayerContainerScene = mainNavState.currentScene
+                prePlayerContainerArgument = mainNavState.currentArgument
             }
             playerSceneController.closePlayPageWithCoverAlign(true)
         }
@@ -4328,6 +4338,7 @@ class MainActivity : ComponentActivity() {
         val uiCoverPath = resolveSongCoverForCompose(uiSong)
 
         prePlayerContainerScene = mainNavState.currentScene
+        prePlayerContainerArgument = mainNavState.currentArgument
         if (isSideMenuOpen) closeSideMenu()
 
         // Commit one immutable media identity before mounting the player. Reusing the previous
@@ -4418,6 +4429,7 @@ class MainActivity : ComponentActivity() {
         val uiCoverPath = resolveSongCoverForCompose(uiSong)
 
         prePlayerContainerScene = mainNavState.currentScene
+        prePlayerContainerArgument = mainNavState.currentArgument
         if (isSideMenuOpen) closeSideMenu()
         lockedPlayerCoverPathForTransition = uiCoverPath
         updateComposeRootVisibility(true)
@@ -4839,6 +4851,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (prePlayerContainerScene == null && true) {
                     prePlayerContainerScene = mainNavState.currentScene
+                    prePlayerContainerArgument = mainNavState.currentArgument
                 }
                 playerSceneController.closePlayPageWithCoverAlign(true)
                 return
@@ -4960,6 +4973,7 @@ class MainActivity : ComponentActivity() {
                             // as a normally opened player.
                             if (targetScene != PlayerSceneController.Scene.MAIN && prePlayerContainerScene == null) {
                                 prePlayerContainerScene = mainNavState.currentScene
+                                prePlayerContainerArgument = mainNavState.currentArgument
                             }
                             // Re-seed the presentation generation at the same cold-restore boundary.
                             // The initial StateFlow collection and queue hydration can otherwise race:

@@ -1404,6 +1404,8 @@ class PlayerController private constructor(context: Context) {
     /** 切歌/暂停进行中，禁止 applyUsbVolume 写入 */
     @Volatile
     private var transportTransitioning = false
+    @Volatile
+    private var lastTrackSwitchAtMs = 0L
 
     private var cachedCueOffsetMs = 0L
     private var cachedCueEndMs = 0L
@@ -1636,6 +1638,59 @@ class PlayerController private constructor(context: Context) {
                         "Ignoring stale backend state callback=$state current=$currentBackendState",
                     )
                     return@launch
+                }
+                // 🌟 切歌与退役曲目屏障（本地与网络统一防护）：
+                val elapsedSinceSwitch = SystemClock.elapsedRealtime() - lastTrackSwitchAtMs
+                if (state == FfmpegAudioPlayer.State.COMPLETED) {
+                    if (transportTransitioning) {
+                        AppLogger.w(TAG, "Ignoring stale COMPLETED during transportTransitioning")
+                        return@launch
+                    }
+                    val cur = _currentSong.value
+                    if (cur == null) {
+                        AppLogger.w(TAG, "Ignoring COMPLETED with null currentSong")
+                        return@launch
+                    }
+                    if (com.rawsmusic.core.common.model.isOnlineSongKey(cur.path)) {
+                        AppLogger.w(TAG, "Ignoring backend COMPLETED while online song is resolving/preparing: ${cur.title}")
+                        return@launch
+                    }
+                    // 1. 底层实际音轨路径与当前歌曲路径校验
+                    val rendererSong = PlaybackSourceOverridePolicy.rendererSong(cur, _playbackSourceOverride.value)
+                    val expectedPath = rendererSong.path
+                    val actualPath = ffmpegPlayer.currentTrackPath
+                    if (actualPath != null && expectedPath != actualPath && !rendererSourceMatches(expectedPath, actualPath)) {
+                        AppLogger.w(
+                            TAG,
+                            "Ignoring stale COMPLETED from retired track: actualPath=$actualPath expectedPath=$expectedPath curSong=${cur.title}"
+                        )
+                        return@launch
+                    }
+                    // 2. 切歌冷却与物理进度合理性检查：自然完成必然在曲目末尾，新歌刚切歌或刚起播绝不可能自然完成
+                    val currentPos = _position.value
+                    val totalDur = _duration.value.takeIf { it > 0 } ?: cur.duration
+                    val isPremature = _playState.value == PlayState.PREPARING ||
+                        elapsedSinceSwitch < 2_500L ||
+                        (totalDur >= 8_000L && currentPos < (totalDur - 5_000L)) ||
+                        (totalDur > 3_000L && currentPos <= 2_000L)
+                    if (isPremature) {
+                        AppLogger.w(
+                            TAG,
+                            "Ignoring premature COMPLETED: currentPos=$currentPos totalDur=$totalDur elapsedSinceSwitch=${elapsedSinceSwitch}ms state=${_playState.value} song=${cur.title}"
+                        )
+                        return@launch
+                    }
+                }
+                if (state == FfmpegAudioPlayer.State.ERROR) {
+                    if (transportTransitioning || elapsedSinceSwitch < 2_500L) {
+                        AppLogger.w(TAG, "Ignoring transient ERROR during/shortly after track switch: elapsed=${elapsedSinceSwitch}ms")
+                        return@launch
+                    }
+                    val cur = _currentSong.value
+                    if (cur != null && com.rawsmusic.core.common.model.isOnlineSongKey(cur.path)) {
+                        AppLogger.w(TAG, "Ignoring backend ERROR while online song is resolving/preparing: ${cur.title}")
+                        return@launch
+                    }
                 }
                 backendStateControlCoordinator.onStateChanged(currentBackendState.toBackendControlState())
             }
@@ -5635,6 +5690,7 @@ class PlayerController private constructor(context: Context) {
                 if (song.channelCount > 2) 1 else 0)
         }
         pausedSelectionPendingStart = false
+        lastTrackSwitchAtMs = SystemClock.elapsedRealtime()
         if (!deferPublicCommitToRenderer) pendingRendererUiCommit = null
         Log.d(TAG, "play() called: title=${song.title}, path=${song.path}, isReleased=$isReleased")
         if (isReleased) {
@@ -5665,13 +5721,21 @@ class PlayerController private constructor(context: Context) {
                 return
             }
 
-            // 即将进入网络寻源。如果当前底层正在播放/准备，立即停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
+            // 即将进入网络寻源。如果当前底层正在播放/准备，平滑淡出并停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
             val isRendererBusy = _playState.value == PlayState.PLAYING ||
                 _playState.value == PlayState.PREPARING ||
                 ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
                 ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING
             if (isRendererBusy) {
+                if (ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING) {
+                    // 极速 25ms 微淡出：平滑将上一首声波衰减到零轴，彻底消除切歌瞬间因硬截断引发的爆音尾音
+                    runCatching {
+                        ffmpegPlayer.pauseWithFadeBlocking(25, "online_switch_prep")
+                    }
+                }
                 ffmpegPlayer.stop()
+                backendStateControlCoordinator.resetFailures()
+                lastPlayerError = null
             }
             val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
             val finalQueue = if (effectiveQueue.isNotEmpty()) effectiveQueue else listOf(song)
@@ -5744,7 +5808,11 @@ class PlayerController private constructor(context: Context) {
                 _playbackSourceOverride.value = null
             }
         }
-        MusicSourcePlaybackController.resetForLocalPlayback()
+        if (song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER &&
+            !com.rawsmusic.core.common.model.isOnlineSongKey(song.path)
+        ) {
+            MusicSourcePlaybackController.resetForLocalPlayback()
+        }
         val rendererSong = PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
         val playbackPath = rendererSong.path
         if (_usbExclusiveActive.value) {
@@ -6064,7 +6132,16 @@ class PlayerController private constructor(context: Context) {
         val nextSong = q.songs[nextIdx]
         precacheJob = scope.launch(Dispatchers.IO) {
             // 流式解码器模式（USB 和 AudioTrack 均使用），无需预缓存文件
-            Log.d(TAG, "precacheNextSong: streaming decoder mode, skip file-based precache")
+        }
+    }
+
+    fun peekNextQueueIndex(): Int? {
+        val q = _queue.value
+        if (q.songs.isEmpty()) return null
+        return if (playbackModeController.isShuffleEnabled) {
+            shuffleQueueController.peekNextIndex(q)
+        } else {
+            (q.currentIndex + 1) % q.songs.size
         }
     }
 
@@ -6355,9 +6432,10 @@ class PlayerController private constructor(context: Context) {
                 AppLogger.e(TAG, "player_stop kept USB session alive: playback Runnable did not exit")
             }
         } else {
-            if (_playState.value == PlayState.PLAYING && transportFadeMs > 0) {
+            val effectiveFadeMs = if (transportFadeMs > 0) transportFadeMs else 25
+            if (_playState.value == PlayState.PLAYING) {
                 ffmpegPlayer.fadeOutForTransitionBlocking(
-                    durationMs = transportFadeMs,
+                    durationMs = effectiveFadeMs,
                     reason = "player_stop",
                 )
             }
@@ -6662,7 +6740,10 @@ class PlayerController private constructor(context: Context) {
         var playInternalAfterSwitch = true
         var deferUiCommitToRenderer = rendererOwnedCurrentAtRequest
         transportTransitioning = true
-        if (!com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
+        lastTrackSwitchAtMs = SystemClock.elapsedRealtime()
+        if (!com.rawsmusic.core.common.model.isOnlineSongKey(song.path) &&
+            song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+        ) {
             MusicSourcePlaybackController.resetForLocalPlayback()
         }
         try {
@@ -6771,7 +6852,9 @@ class PlayerController private constructor(context: Context) {
                     current.cueOffsetMs == 0L && current.cueTrackIndex == 0 &&
                     song.cueOffsetMs == 0L && song.cueTrackIndex == 0 &&
                     !com.rawsmusic.core.common.model.isOnlineSongKey(song.path) &&
-                    !com.rawsmusic.core.common.model.isOnlineSongKey(current.path)
+                    !com.rawsmusic.core.common.model.isOnlineSongKey(current.path) &&
+                    current.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER &&
+                    song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
                 // Library metadata is not the renderer geometry. The pending FFmpeg decoder is
                 // opened against the active output format, so a 44.1 kHz source followed by a
                 // 96 kHz source may still produce matching decoded PCM for this live renderer.

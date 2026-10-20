@@ -91,6 +91,9 @@ internal class NativeAudioEngineLifecycleController(
         flush: Boolean = false
     ) {
         if (engine == null) return
+        // 防爆音：先置零音量并优雅暂停，再 stop / flush / close
+        runCatching { engine.setVolume(0f) }
+        runCatching { engine.pause() }
         if (stop) {
             try {
                 engine.stop()

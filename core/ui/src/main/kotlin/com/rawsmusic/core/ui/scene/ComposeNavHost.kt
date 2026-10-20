@@ -492,13 +492,15 @@ fun ComposeNavHost(
             )
 
             NavScene.ONLINE_PLAYLIST_DETAIL -> OnlinePlaylistDetailPage(
-                argument = state.currentArgument,
+                argument = state.currentArgument.takeIf { it.isNotBlank() }
+                    ?: state.argumentForScene(NavScene.ONLINE_PLAYLIST_DETAIL),
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )
 
             NavScene.ONLINE_ARTIST_DETAIL -> OnlineArtistDetailPage(
-                argument = state.currentArgument,
+                argument = state.currentArgument.takeIf { it.isNotBlank() }
+                    ?: state.argumentForScene(NavScene.ONLINE_ARTIST_DETAIL),
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )

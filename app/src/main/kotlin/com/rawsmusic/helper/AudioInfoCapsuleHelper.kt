@@ -223,8 +223,9 @@ class AudioInfoCapsuleHelper(
             if (rate != null) "$backend:${formatSampleRate(rate).uppercase()}" else backend
         }
 
+        val onlineInfo = getOnlineSourceInfo(song)
         val format = when {
-            !song?.format.isNullOrBlank() -> song?.format?.uppercase()
+            !song?.format.isNullOrBlank() && song.format != "ONLINE" -> song.format.uppercase()
             song?.isDsdSourceFile() == true -> "DSD"
             else -> null
         }
@@ -239,6 +240,8 @@ class AudioInfoCapsuleHelper(
             com.rawsmusic.core.common.utils.BitrateNormalizer.formatKbps(it, song.duration, song.fileSize).uppercase()
         }
         val sourceHead = when {
+            onlineInfo != null && format != null && bits != null -> "${onlineInfo.first} · ${onlineInfo.second}  $format:$bits"
+            onlineInfo != null -> "${onlineInfo.first} · ${onlineInfo.second}"
             format != null && bits != null -> "$format:$bits"
             format != null -> format
             bits != null -> bits
@@ -248,7 +251,39 @@ class AudioInfoCapsuleHelper(
         return "$output  $source"
     }
 
+    private fun getOnlineSourceInfo(song: com.rawsmusic.core.common.model.AudioFile?): Pair<String, String>? {
+        val isOnlineSong = song != null && com.rawsmusic.core.common.model.isOnlineSongKey(song.path)
+        val onlineSnapshot = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value
+        val hasOnlineSnapshot = onlineSnapshot.currentItem != null ||
+            onlineSnapshot.status != com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Idle
+        if (!isOnlineSong && !hasOnlineSnapshot) return null
+
+        val orig = onlineSnapshot.originalPlatform
+        val res = onlineSnapshot.resolvedPlatform ?: orig
+        val platformText = when {
+            !orig.isNullOrBlank() && !res.isNullOrBlank() && orig != res -> "$orig ➔ $res"
+            !res.isNullOrBlank() -> res
+            !orig.isNullOrBlank() -> orig
+            else -> {
+                val rest = song?.path?.removePrefix("online://") ?: ""
+                val pId = rest.substringBefore('/', "")
+                com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.resolvePlatformDisplayName(pId)
+            }
+        }
+        val qualityText = when (onlineSnapshot.resolvedQuality) {
+            com.rawsmusic.core.common.source.RawSourceQuality.HiRes -> "Hi-Res"
+            com.rawsmusic.core.common.source.RawSourceQuality.Lossless -> "SQ无损"
+            com.rawsmusic.core.common.source.RawSourceQuality.Super,
+            com.rawsmusic.core.common.source.RawSourceQuality.High -> "HQ极高"
+            com.rawsmusic.core.common.source.RawSourceQuality.Standard -> "标准音质"
+        }
+        return Pair(platformText, qualityText)
+    }
+
     private fun sourceFormatText(song: com.rawsmusic.core.common.model.AudioFile?): String {
+        val onlineInfo = getOnlineSourceInfo(song)
+        val onlineTag = if (onlineInfo != null) "${onlineInfo.first} · ${onlineInfo.second}" else null
+
         val bits = when {
             song?.isDsdSourceFile() == true -> "1 BIT"
             song?.bitsPerSample?.let { it > 0 } == true -> "${song.bitsPerSample} BIT"
@@ -261,12 +296,15 @@ class AudioInfoCapsuleHelper(
         }
         val format = when {
             song?.isDsdSourceFile() == true -> "DSD"
-            else -> song?.format?.takeIf { it.isNotBlank() }?.uppercase()
+            else -> song?.format?.takeIf { it.isNotBlank() && it != "ONLINE" }?.uppercase()
         }
-        return listOfNotNull(bits, sampleRate, bitRate, format)
-            .takeIf { it.isNotEmpty() }
-            ?.joinToString("  ")
-            ?: "LOCAL AUDIO"
+        val localParams = listOfNotNull(format, bits, sampleRate, bitRate).takeIf { it.isNotEmpty() }?.joinToString("  ")
+        return when {
+            onlineTag != null && localParams != null -> "$onlineTag  $localParams"
+            onlineTag != null -> onlineTag
+            localParams != null -> localParams
+            else -> "LOCAL AUDIO"
+        }
     }
 
     private fun outputFormatText(
@@ -604,7 +642,18 @@ class AudioInfoCapsuleHelper(
             }
         }
         val trackLines = buildList {
-            add(InfoLine("${fmt.ifBlank { "未知格式" }}  ${formatBitDepth(srcBd, fmt)}  ${formatSampleRate(srcSr)}  ${formatBitrate(song.bitRate)}"))
+            val onlineInfo = getOnlineSourceInfo(song)
+            val onlineSnapshot = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value
+            if (onlineInfo != null) {
+                val orig = onlineSnapshot.originalPlatform ?: onlineInfo.first
+                val res = onlineSnapshot.resolvedPlatform ?: orig
+                val platformDisplay = if (orig != res && !orig.isBlank() && !res.isBlank()) "$orig ➔ $res (跨平台搜救)" else res
+                add(InfoLine("寻源平台：$platformDisplay"))
+                add(InfoLine("音质档位：${onlineInfo.second} (${onlineSnapshot.resolvedQuality})"))
+                val tag = onlineSnapshot.sourceTag ?: "官方直链"
+                add(InfoLine("音源通道：$tag"))
+            }
+            add(InfoLine("${fmt.ifBlank { if (onlineInfo != null) "网络音频" else "未知格式" }}  ${formatBitDepth(srcBd, fmt)}  ${formatSampleRate(srcSr)}  ${formatBitrate(song.bitRate)}"))
             add(InfoLine("${formatChannelCount(song.channelCount)}  /  ${formatDuration(song.duration)}"))
             if (song.genre.isNotBlank()) {
                 add(InfoLine("流派：${song.genre}", underline = true, action = AudioInfoLink.Library(NavScene.GENRE_DETAIL, song.genre)))

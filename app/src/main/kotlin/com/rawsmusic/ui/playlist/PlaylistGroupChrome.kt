@@ -47,6 +47,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.online.model.OnlinePlatform
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
+import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.core.common.model.isOnlineEntry
+import com.rawsmusic.core.common.model.toAudioFile
 
 /**
  * 歌单分组 UI 的「无状态」部分：网格排布、分组筛选 Chip 栏、`PlaylistGroupOpResult` 文案映射。
@@ -486,3 +502,426 @@ private fun PlaylistFilterChip(
     }
 }
 
+/** 伪歌单卡的图标：喜欢沿用既有心形，「不喜欢」用新加的拇指向下图形。 */
+internal fun playlistCardIconRes(playlist: UserPlaylist): Int = when {
+    playlist.id == ATTITUDE_DISLIKED_PLAYLIST_ID -> R.drawable.ic_thumb_down_fill
+    playlist.isFavorites || playlist.id == ATTITUDE_FAVORITES_PLAYLIST_ID -> R.drawable.ic_heart_fill
+    else -> R.drawable.ic_music_note
+}
+
+private fun playlistFrameAccent(playlist: UserPlaylist): Color {
+    if (playlist.isFavorites) return Color(0xFFD58A9D)
+    val palette = listOf(
+        Color(0xFF8997C6),
+        Color(0xFF91A889),
+        Color(0xFFC39575),
+        Color(0xFF7899AF),
+        Color(0xFFA38CB4),
+        Color(0xFFB59D72),
+    )
+    val index = (playlist.id.hashCode() and Int.MAX_VALUE) % palette.size
+    return palette[index]
+}
+
+@Composable
+private fun PlaylistCollageCover(
+    coverUrl: String?,
+    collageSongs: List<AudioFile>,
+    iconRes: Int,
+    accent: Color,
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.22f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!coverUrl.isNullOrBlank()) {
+            BitmapImage(
+                key = coverUrl,
+                contentDescription = title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                targetWidth = 320,
+                targetHeight = 320,
+            )
+        } else if (collageSongs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                accent.copy(alpha = 0.40f),
+                                Color.Black.copy(alpha = 0.65f),
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(Color.White.copy(alpha = 0.16f))
+                        .border(1.dp, Color.White.copy(alpha = 0.30f), RoundedCornerShape(22.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(iconRes),
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.95f),
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+        } else {
+            val song = collageSongs.firstOrNull()
+            if (song != null && song.coverKey.isNotBlank()) {
+                BitmapImage(
+                    key = song.coverKey,
+                    contentDescription = title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 320,
+                    targetHeight = 320,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(accent.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(iconRes),
+                        contentDescription = null,
+                        tint = accent.copy(alpha = 0.92f),
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun PlaylistFrameCard(
+    playlist: UserPlaylist,
+    collageSongs: List<AudioFile>,
+    modifier: Modifier = Modifier,
+    iconRes: Int,
+    accentOverride: Color? = null,
+    songCountOverride: Int? = null,
+    actionsEnabled: Boolean = !playlist.isFavorites,
+    onClick: () -> Unit,
+    onActions: () -> Unit,
+) {
+    val colors = themeColors()
+    val accent = remember(playlist.id, playlist.isFavorites, accentOverride) {
+        accentOverride ?: playlistFrameAccent(playlist)
+    }
+    val cardShape = RoundedCornerShape(22.dp)
+
+    Column(
+        modifier = modifier
+            .aspectRatio(0.86f)
+            .shadow(
+                elevation = 8.dp,
+                shape = cardShape,
+                clip = false,
+                ambientColor = accent.copy(alpha = 0.15f),
+                spotColor = accent.copy(alpha = 0.20f),
+            )
+            .clip(cardShape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.22f),
+                        colors.surface.copy(alpha = 0.94f),
+                        Color.Black.copy(alpha = 0.72f),
+                    )
+                )
+            )
+            .border(1.dp, accent.copy(alpha = 0.35f), cardShape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = if (actionsEnabled) onActions else null,
+            )
+            .padding(8.dp),
+    ) {
+        PlaylistCollageCover(
+            coverUrl = playlist.coverUrl,
+            collageSongs = collageSongs,
+            iconRes = iconRes,
+            accent = accent,
+            title = playlist.name,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            accent.copy(alpha = 0.22f),
+                            colors.surface.copy(alpha = 0.85f),
+                            Color.Black.copy(alpha = 0.55f),
+                        )
+                    )
+                )
+                .border(0.8.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(start = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = playlist.name,
+                    color = colors.onSurface,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = appFontFamily(),
+                )
+                val totalCount = songCountOverride ?: playlist.songs.size
+                val onlineCount = playlist.songs.count { it.isOnlineEntry() }
+                val localCount = (playlist.songs.size - onlineCount).coerceAtLeast(0)
+                val isHybrid = onlineCount > 0 && localCount > 0
+                val countText = when {
+                    totalCount == 0 -> stringResource(R.string.playlist_song_count, 0)
+                    isHybrid -> "${totalCount} 首 (网 $onlineCount · 本 $localCount)"
+                    onlineCount > 0 && onlineCount == playlist.songs.size -> "${totalCount} 首 (网络)"
+                    else -> stringResource(R.string.playlist_song_count, totalCount)
+                }
+
+                Text(
+                    text = countText,
+                    color = colors.onSurface.copy(alpha = 0.50f),
+                    fontSize = 10.5.sp,
+                    maxLines = 1,
+                    fontFamily = appFontFamily(),
+                )
+            }
+
+            if (actionsEnabled) {
+                IconButton(
+                    onClick = onActions,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_more_vert),
+                        contentDescription = "更多操作",
+                        tint = colors.onSurface.copy(alpha = 0.60f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun OnlinePlaylistFrameCard(
+    favorite: OnlinePlaylistFavoriteEntity,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onActions: () -> Unit,
+) {
+    val colors = themeColors()
+    val platform = remember(favorite.platform) { OnlinePlatform.fromId(favorite.platform) }
+    val accent = remember(favorite.platform, favorite.playlistKey) {
+        when (favorite.platform.lowercase()) {
+            "netease" -> Color(0xFFE53935)
+            "qq" -> Color(0xFF00C853)
+            "kugou" -> Color(0xFF2979FF)
+            "kuwo" -> Color(0xFFFF9800)
+            "migu" -> Color(0xFFE040FB)
+            else -> {
+                val palette = listOf(
+                    Color(0xFF8997C6),
+                    Color(0xFF8BAE97),
+                    Color(0xFFD4A574),
+                    Color(0xFF9E8DB5),
+                    Color(0xFF6B9EA8),
+                    Color(0xFFC78B8B),
+                )
+                val idx = (favorite.playlistKey.hashCode() and Int.MAX_VALUE) % palette.size
+                palette[idx]
+            }
+        }
+    }
+    val cardShape = RoundedCornerShape(22.dp)
+
+    Column(
+        modifier = modifier
+            .aspectRatio(0.86f)
+            .shadow(
+                elevation = 8.dp,
+                shape = cardShape,
+                clip = false,
+                ambientColor = accent.copy(alpha = 0.15f),
+                spotColor = accent.copy(alpha = 0.20f),
+            )
+            .clip(cardShape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.22f),
+                        colors.surface.copy(alpha = 0.94f),
+                        Color.Black.copy(alpha = 0.72f),
+                    )
+                )
+            )
+            .border(1.dp, accent.copy(alpha = 0.35f), cardShape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onActions,
+            )
+            .padding(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black.copy(alpha = 0.22f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            val coverUrl = favorite.coverUrl
+            if (coverUrl.isNotBlank()) {
+                BitmapImage(
+                    key = coverUrl,
+                    contentDescription = favorite.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 320,
+                    targetHeight = 320,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(accent.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_play_list_fill),
+                        contentDescription = null,
+                        tint = accent.copy(alpha = 0.92f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            accent.copy(alpha = 0.22f),
+                            colors.surface.copy(alpha = 0.85f),
+                            Color.Black.copy(alpha = 0.55f),
+                        )
+                    )
+                )
+                .border(0.8.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(start = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val platformLabel = platform?.displayName ?: favorite.platform.uppercase()
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(accent.copy(alpha = 0.22f))
+                    .border(0.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = platformLabel,
+                    color = accent,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = favorite.title,
+                    color = colors.onSurface,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = appFontFamily(),
+                )
+                Text(
+                    text = stringResource(R.string.playlist_song_count, favorite.trackCount),
+                    color = colors.onSurface.copy(alpha = 0.50f),
+                    fontSize = 10.5.sp,
+                    maxLines = 1,
+                    fontFamily = appFontFamily(),
+                )
+            }
+
+            IconButton(
+                onClick = onActions,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_more_vert),
+                    contentDescription = "更多操作",
+                    tint = colors.onSurface.copy(alpha = 0.60f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}

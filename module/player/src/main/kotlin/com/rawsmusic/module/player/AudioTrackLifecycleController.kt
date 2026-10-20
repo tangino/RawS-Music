@@ -49,14 +49,19 @@ internal class AudioTrackLifecycleController(
     ) {
         if (track == null) return
 
+        // 防爆音核心：无论何时释放 AudioTrack，先静音（volume = 0f）并先 pause，
+        // 防止硬件 DMA 环形缓冲区中的非零电平样本在截断时激发出高频脉冲（Click/Pop 爆音尾音）
+        runCatching { track.setVolume(0f) }
+        runCatching {
+            if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                track.pause()
+            }
+        }
+        runCatching { track.flush() }
+
         if (stop) {
             runCatching { track.stop() }
                 .onFailure { AppLogger.w(tag, "AudioTrack stop before release failed: reason=$reason", it) }
-        }
-
-        if (flush) {
-            runCatching { track.flush() }
-                .onFailure { AppLogger.w(tag, "AudioTrack flush before release failed: reason=$reason", it) }
         }
 
         runCatching { track.release() }

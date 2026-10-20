@@ -89,15 +89,28 @@ object OnlineAudioSourceResolver {
     private val quickJsEngines = ConcurrentHashMap<String, LxSourceEngine>()
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
     init {
         // 挂载到底层解析器，当底层遇到未注册音源 ID 的在线曲目时自动走在线寻源
-        MusicSourceAudioResolver.onlineFallbackResolver = MusicSourceAudioResolver.OnlineAudioFallbackResolver { context, item, requestedQuality ->
-            resolveFallbackForMediaItem(context, item, requestedQuality)
+        MusicSourceAudioResolver.onlineFallbackResolver = object : MusicSourceAudioResolver.OnlineAudioFallbackResolver {
+            override suspend fun resolveOnline(
+                context: Context,
+                item: RawSourceMediaItem,
+                requestedQuality: RawSourceQuality,
+            ): RawResolvedAudioSource? {
+                return resolveFallbackForMediaItem(context, item, requestedQuality)
+            }
+
+            override fun peekCachedSource(
+                item: RawSourceMediaItem,
+                requestedQuality: RawSourceQuality,
+            ): RawResolvedAudioSource? {
+                return this@OnlineAudioSourceResolver.peekCachedSource(item, requestedQuality)
+            }
         }
         // 挂载直链探活校验器，确保第三方插件返回的直链经过防试听与流完整性校验
         MusicSourceAudioResolver.audioUrlValidator = MusicSourceAudioResolver.AudioUrlValidator { url, expectedDurationMs, _ ->
@@ -437,12 +450,12 @@ object OnlineAudioSourceResolver {
             candidates.add(MatchedPlatformSong(targetPlatform, songId, hash = songId, matchTitle = title, matchArtist = artist, durationMs = expectedDurationMs))
         }
 
-        // 跨平台寻源或原平台初步失败时，搜索匹配符合严格规则的候选集（2800ms 超时保护）
+        // 跨平台寻源或原平台初步失败时，搜索匹配符合严格规则的候选集（2500ms 超时保护，只取最匹配的前 1 首）
         if (!isOriginal || candidates.isEmpty()) {
-            val searched = kotlinx.coroutines.withTimeoutOrNull(2800L) {
+            val searched = kotlinx.coroutines.withTimeoutOrNull(2500L) {
                 searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
             } ?: emptyList()
-            candidates.addAll(searched)
+            candidates.addAll(searched.take(1))
         }
 
         if (candidates.isEmpty()) {
@@ -451,12 +464,12 @@ object OnlineAudioSourceResolver {
 
         val sourceKey = platformToSourceKey(targetPlatform)
 
-        // 遍历所有满足匹配规则的候选曲目进行解析
+        // 遍历满足匹配规则的候选曲目进行解析 (精准收敛至最高分候选)
         for (cand in candidates) {
             val effectiveId = cand.songId
             val effectiveHash = cand.hash ?: cand.songId
 
-            // 1. 尝试通过音源脚本引擎解析 (优先通过 QuickJS 原生引擎，失败或未就绪时平滑降级至 WebView)
+            // 1. 通过 QuickJS 原生沙箱引擎极速解析 (微秒级执行，零跨进程 IPC 开销)
             if (lxSource != null) {
                 val qjsEngine = getOrCreateQuickJsEngine(context, lxSource)
                 val musicInfo = JSONObject().apply {
@@ -478,27 +491,9 @@ object OnlineAudioSourceResolver {
                 }
 
                 for (q in qualityTryList) {
-                    val rawQuality = stringToRawSourceQuality(q)
                     try {
-                        val timeout = if (q == qualityTryList.first()) 2500L else 2000L
-                        // 1.1 优先走主进程内单线程 QuickJS 原生引擎极速解析
-                        var url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
-                        if (url.isNullOrBlank() || !url.startsWith("http", ignoreCase = true)) {
-                            // 1.2 降级走原有通道
-                            val mediaItem = RawSourceMediaItem(
-                                sourceId = lxSource.id,
-                                remoteId = "$sourceKey:$effectiveId",
-                                mediaType = RawSourceMediaType.Music,
-                                title = cand.matchTitle ?: title,
-                                artists = listOf(cand.matchArtist ?: artist),
-                                album = album,
-                                durationMs = if (cand.durationMs > 0L) cand.durationMs else expectedDurationMs,
-                                artworkUrl = "",
-                                sourcePayload = musicInfo.toString(),
-                            )
-                            val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, lxSource, mediaItem, rawQuality, timeoutMs = timeout)
-                            url = resolved.url
-                        }
+                        val timeout = if (q == qualityTryList.first()) 2500L else 1500L
+                        val url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
                         if (!url.isNullOrBlank() && url.startsWith("http", ignoreCase = true)) {
                             val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
                             if (probePair != null) {
@@ -647,10 +642,10 @@ object OnlineAudioSourceResolver {
                 )
             }
 
-            // 跨平台寻源时获取该平台严格匹配的候选单曲（按评分降序取前 3 首）
+            // 跨平台寻源时获取该平台严格匹配的候选单曲（按评分降序精准取第 1 首，完全对齐 OrbitPlayer）
             if (!isOriginal) {
                 val searched = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
-                candidates.addAll(searched.take(3))
+                candidates.addAll(searched.take(1))
             }
 
             if (candidates.isEmpty()) {
@@ -664,7 +659,7 @@ object OnlineAudioSourceResolver {
                 val effectiveId = cand.songId
                 val effectiveHash = cand.hash ?: cand.songId
 
-                // 4.1 在当前候选曲目上依次轮询各个启用的音源脚本 (优先走 QuickJS 原生引擎)
+                // 4.1 在当前候选曲目上依次轮询各个启用的音源脚本 (纯 QuickJS 原生引擎极速调用)
                 for (holder in orderedEngines) {
                     val qjsEngine = getOrCreateQuickJsEngine(context, holder)
                     val musicInfo = JSONObject().apply {
@@ -686,25 +681,9 @@ object OnlineAudioSourceResolver {
                     }
 
                     for (q in qualityTryList) {
-                        val rawQuality = stringToRawSourceQuality(q)
                         try {
-                            val timeout = if (q == qualityTryList.first()) 2500L else 2000L
-                            var url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
-                            if (url.isNullOrBlank() || !url.startsWith("http", ignoreCase = true)) {
-                                val mediaItem = RawSourceMediaItem(
-                                    sourceId = holder.id,
-                                    remoteId = "$sourceKey:$effectiveId",
-                                    mediaType = RawSourceMediaType.Music,
-                                    title = cand.matchTitle ?: title,
-                                    artists = listOf(cand.matchArtist ?: artist),
-                                    album = album,
-                                    durationMs = if (cand.durationMs > 0L) cand.durationMs else expectedDurationMs,
-                                    artworkUrl = "",
-                                    sourcePayload = musicInfo.toString(),
-                                )
-                                val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, holder, mediaItem, rawQuality, timeoutMs = timeout)
-                                url = resolved.url
-                            }
+                            val timeout = if (q == qualityTryList.first()) 2500L else 1500L
+                            val url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
                             if (!url.isNullOrBlank() && url.startsWith("http", ignoreCase = true)) {
                                 val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
                                 if (probePair != null) {
@@ -782,85 +761,69 @@ object OnlineAudioSourceResolver {
                 }
             }
 
-            // 4.4 若原平台原始 ID 解析失败，但在原平台上尚未搜索其他版本，进行原平台二度搜救
+            // 4.4 若原平台原始 ID 解析失败，但在原平台上尚未搜索其他版本，进行原平台二度搜救 (只取第 1 首)
             if (resolvedResult == null && isOriginal) {
                 val searchedOriginal = (kotlinx.coroutines.withTimeoutOrNull(2500L) {
                     searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
                 } ?: emptyList())
                     .filter { it.songId != songId }
-                    .take(2)
+                    .take(1)
                 for (cand in searchedOriginal) {
                     val effectiveId = cand.songId
                     val effectiveHash = cand.hash ?: cand.songId
                     for (holder in orderedEngines) {
                         val qjsEngine = getOrCreateQuickJsEngine(context, holder)
-                    val musicInfo = JSONObject().apply {
-                        put("source", sourceKey)
-                        put("songmid", effectiveId)
-                        put("id", effectiveId)
-                        put("copyrightId", effectiveId)
-                        put("platform", sourceKey)
-                        put("hash", effectiveHash)
-                        put("name", cand.matchTitle ?: title)
-                        put("singer", cand.matchArtist ?: artist)
-                        put("albumName", album)
-                        put("types", org.json.JSONArray().apply {
-                            put(JSONObject().put("type", "128k"))
-                            put(JSONObject().put("type", "320k"))
-                            put(JSONObject().put("type", "flac"))
-                            put(JSONObject().put("type", "flac24bit"))
-                        })
-                    }
-
-                    for (q in qualityTryList) {
-                        val rawQuality = stringToRawSourceQuality(q)
-                        try {
-                            val timeout = if (q == qualityTryList.first()) 2500L else 2000L
-                            var url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
-                            if (url.isNullOrBlank() || !url.startsWith("http", ignoreCase = true)) {
-                                val mediaItem = RawSourceMediaItem(
-                                    sourceId = holder.id,
-                                    remoteId = "$sourceKey:$effectiveId",
-                                    mediaType = RawSourceMediaType.Music,
-                                    title = cand.matchTitle ?: title,
-                                    artists = listOf(cand.matchArtist ?: artist),
-                                    album = album,
-                                    durationMs = if (cand.durationMs > 0L) cand.durationMs else expectedDurationMs,
-                                    artworkUrl = "",
-                                    sourcePayload = musicInfo.toString(),
-                                )
-                                val resolved = MusicSourceRuntimeClient.resolveLxAudio(context, holder, mediaItem, rawQuality, timeoutMs = timeout)
-                                url = resolved.url
-                            }
-                            if (!url.isNullOrBlank() && url.startsWith("http", ignoreCase = true)) {
-                                val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
-                                if (probePair != null) {
-                                    val (validUrl, detectedDur) = probePair
-                                    val finalDur = if (detectedDur > 0L) detectedDur else if (cand.durationMs > 0L) cand.durationMs else expectedDurationMs
-                                    resolvedResult = ResolvedAudioSource(
-                                        url = validUrl,
-                                        platform = targetPlatform,
-                                        sourceName = "${targetPlatform.displayName} (${holder.name})",
-                                        quality = q,
-                                        durationMs = finalDur,
-                                        isFallback = false,
-                                        fallbackReason = null,
-                                    )
-                                    AppLogger.i(TAG, "[ClassicPolling] Successfully re-resolved $title via original platform re-search on ${targetPlatform.displayName}: $validUrl")
-                                    break
-                                }
-                            }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (e: Throwable) {
-                            AppLogger.d(TAG, "[ClassicPolling] Original re-search resolve error for $effectiveId: ${e.message}")
+                        val musicInfo = JSONObject().apply {
+                            put("source", sourceKey)
+                            put("songmid", effectiveId)
+                            put("id", effectiveId)
+                            put("copyrightId", effectiveId)
+                            put("platform", sourceKey)
+                            put("hash", effectiveHash)
+                            put("name", cand.matchTitle ?: title)
+                            put("singer", cand.matchArtist ?: artist)
+                            put("albumName", album)
+                            put("types", org.json.JSONArray().apply {
+                                put(JSONObject().put("type", "128k"))
+                                put(JSONObject().put("type", "320k"))
+                                put(JSONObject().put("type", "flac"))
+                                put(JSONObject().put("type", "flac24bit"))
+                            })
                         }
+
+                        for (q in qualityTryList) {
+                            try {
+                                val timeout = if (q == qualityTryList.first()) 2500L else 1500L
+                                val url = qjsEngine?.resolveMusicUrl(sourceKey, musicInfo, q, timeoutMs = timeout)
+                                if (!url.isNullOrBlank() && url.startsWith("http", ignoreCase = true)) {
+                                    val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, targetPlatform)
+                                    if (probePair != null) {
+                                        val (validUrl, detectedDur) = probePair
+                                        val finalDur = if (detectedDur > 0L) detectedDur else if (cand.durationMs > 0L) cand.durationMs else expectedDurationMs
+                                        resolvedResult = ResolvedAudioSource(
+                                            url = validUrl,
+                                            platform = targetPlatform,
+                                            sourceName = "${targetPlatform.displayName} (${holder.name})",
+                                            quality = q,
+                                            durationMs = finalDur,
+                                            isFallback = false,
+                                            fallbackReason = null,
+                                        )
+                                        AppLogger.i(TAG, "[ClassicPolling] Successfully re-resolved $title via original platform re-search on ${targetPlatform.displayName}: $validUrl")
+                                        break
+                                    }
+                                }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (e: Throwable) {
+                                AppLogger.d(TAG, "[ClassicPolling] Original re-search resolve error for $effectiveId: ${e.message}")
+                            }
+                        }
+                        if (resolvedResult != null) break
                     }
                     if (resolvedResult != null) break
                 }
-                if (resolvedResult != null) break
             }
-        }
 
             // 一旦成功获取并通过流长度与时长检验的有效直链，立即结束平台轮询
             if (resolvedResult != null) {
@@ -981,10 +944,15 @@ object OnlineAudioSourceResolver {
         if (resolvedResult == null) {
             val fallbackPlatforms = CLASSIC_POLLING_PLATFORMS.filter { it != platform }
             val channel = Channel<ResolvedAudioSource?>(fallbackPlatforms.size)
+            val isFound = java.util.concurrent.atomic.AtomicBoolean(false)
 
             coroutineScope {
                 val jobs = fallbackPlatforms.map { targetPlatform ->
                     launch(Dispatchers.IO) {
+                        if (isFound.get()) {
+                            channel.send(null)
+                            return@launch
+                        }
                         val result = resolveSinglePlatformSource(
                             context = context,
                             targetPlatform = targetPlatform,
@@ -997,7 +965,11 @@ object OnlineAudioSourceResolver {
                             lxSource = primarySource,
                             qualityTryList = qualityTryList,
                         )
-                        channel.send(result)
+                        if (result != null && isFound.compareAndSet(false, true)) {
+                            channel.send(result)
+                        } else {
+                            channel.send(null)
+                        }
                     }
                 }
 
@@ -1019,11 +991,16 @@ object OnlineAudioSourceResolver {
             val allPlatforms = CLASSIC_POLLING_PLATFORMS
             val totalRequests = backupSources.size * allPlatforms.size
             val backupChannel = Channel<ResolvedAudioSource?>(totalRequests)
+            val isBackupFound = java.util.concurrent.atomic.AtomicBoolean(false)
 
             coroutineScope {
                 val backupJobs = backupSources.flatMap { holder ->
                     allPlatforms.map { targetPlatform ->
                         launch(Dispatchers.IO) {
+                            if (isBackupFound.get()) {
+                                backupChannel.send(null)
+                                return@launch
+                            }
                             val isOrig = (targetPlatform == platform)
                             val res = resolveSinglePlatformSource(
                                 context = context,
@@ -1043,7 +1020,11 @@ object OnlineAudioSourceResolver {
                                     fallbackReason = "主音源全平台无有效音源，由备用源「${holder.name}」成功解析",
                                 )
                             }
-                            backupChannel.send(res)
+                            if (res != null && isBackupFound.compareAndSet(false, true)) {
+                                backupChannel.send(res)
+                            } else {
+                                backupChannel.send(null)
+                            }
                         }
                     }
                 }
@@ -1061,43 +1042,45 @@ object OnlineAudioSourceResolver {
             }
         }
 
-        // 6. 第四阶段：若启用了 MusicFree 源，且上述均未命中，进行 MusicFree 补充兜底
+        // 6. 第四阶段：若启用了 MusicFree 源，且上述均未命中，进行 MusicFree 补充兜底 (限时 3000ms 超时保护)
         if (resolvedResult == null) {
             val enabledMusicFree = MusicSourcePluginStore.sources.value.filter { it.enabled }
             if (enabledMusicFree.isNotEmpty()) {
                 try {
-                    val query = "$title $artist".trim()
-                    val aggregated = MusicSourceSearchCoordinator.search(
-                        context = context,
-                        sources = enabledMusicFree,
-                        lxSources = emptyList(),
-                        query = query,
-                    )
-                    val best = OnlinePlaybackBridge.selectBestCandidate(
-                        target = com.rawsmusic.module.online.model.OnlineSongItem(
-                            id = songId,
-                            platform = platform,
-                            title = title,
-                            artist = artist,
-                            album = album,
-                            durationMs = expectedDurationMs,
-                        ),
-                        candidates = aggregated.items,
-                    )
-                    if (best != null) {
-                        val rawResolved = MusicSourceAudioResolver.resolve(context, best, RawSourceQuality.Standard)
-                        val validated = OnlinePlaybackProbe.probeAndValidateAudioUrl(rawResolved.url, expectedDurationMs, platform)
-                        if (validated != null) {
-                            val (validUrl, dur) = validated
-                            resolvedResult = ResolvedAudioSource(
-                                url = validUrl,
+                    kotlinx.coroutines.withTimeoutOrNull(3000L) {
+                        val query = "$title $artist".trim()
+                        val aggregated = MusicSourceSearchCoordinator.search(
+                            context = context,
+                            sources = enabledMusicFree,
+                            lxSources = emptyList(),
+                            query = query,
+                        )
+                        val best = OnlinePlaybackBridge.selectBestCandidate(
+                            target = com.rawsmusic.module.online.model.OnlineSongItem(
+                                id = songId,
                                 platform = platform,
-                                sourceName = "MusicFree 插件",
-                                quality = "128k",
-                                durationMs = if (dur > 0L) dur else expectedDurationMs,
-                                isFallback = true,
-                                fallbackReason = "全网多源搜救降级至 MusicFree 插件解析",
-                            )
+                                title = title,
+                                artist = artist,
+                                album = album,
+                                durationMs = expectedDurationMs,
+                            ),
+                            candidates = aggregated.items,
+                        )
+                        if (best != null) {
+                            val rawResolved = MusicSourceAudioResolver.resolve(context, best, RawSourceQuality.Standard)
+                            val validated = OnlinePlaybackProbe.probeAndValidateAudioUrl(rawResolved.url, expectedDurationMs, platform)
+                            if (validated != null) {
+                                val (validUrl, dur) = validated
+                                resolvedResult = ResolvedAudioSource(
+                                    url = validUrl,
+                                    platform = platform,
+                                    sourceName = "MusicFree 插件",
+                                    quality = "128k",
+                                    durationMs = if (dur > 0L) dur else expectedDurationMs,
+                                    isFallback = true,
+                                    fallbackReason = "全网多源搜救降级至 MusicFree 插件解析",
+                                )
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -1107,16 +1090,18 @@ object OnlineAudioSourceResolver {
         }
 
         // 成功获取后，写入 15 分钟 LRU 缓存
-        if (resolvedResult != null) {
+        val finalResult = resolvedResult
+        if (finalResult != null) {
             val expireAt = now + 15 * 60 * 1000L
-            memoryUrlCache.put(cacheKey, CachedUrl(resolvedResult.url, expireAt, resolvedResult.quality))
+            memoryUrlCache.put(cacheKey, CachedUrl(finalResult.url, expireAt, finalResult.quality))
         }
 
-        resolvedResult
+        finalResult
     }
 
     /**
      * 统一入口：根据用户配置的寻源策略动态调度（经典多源轮询 vs 并发智能寻源）。
+     * 内置 15 秒硬超时熔断器保护，严格保证最慢绝不超过 15 秒响应。
      */
     suspend fun resolvePlayableSource(
         context: Context,
@@ -1128,30 +1113,32 @@ object OnlineAudioSourceResolver {
         expectedDurationMs: Long = 0L,
         explicitQuality: String? = null,
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
-        val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
-        val strategy = AppPreferences.Source.resolveStrategy
-        if (strategy == ResolveStrategy.CLASSIC_POLLING) {
-            resolvePlayableSourceClassicPolling(
-                context = context,
-                platform = platform,
-                songId = songId,
-                title = title,
-                artist = artist,
-                album = album,
-                expectedDurationMs = expectedDurationMs,
-                explicitQuality = targetQuality,
-            )
-        } else {
-            resolvePlayableSourceConcurrent(
-                context = context,
-                platform = platform,
-                songId = songId,
-                title = title,
-                artist = artist,
-                album = album,
-                expectedDurationMs = expectedDurationMs,
-                explicitQuality = targetQuality,
-            )
+        kotlinx.coroutines.withTimeoutOrNull(15_000L) {
+            val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
+            val strategy = AppPreferences.Source.resolveStrategy
+            if (strategy == ResolveStrategy.CLASSIC_POLLING) {
+                resolvePlayableSourceClassicPolling(
+                    context = context,
+                    platform = platform,
+                    songId = songId,
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    expectedDurationMs = expectedDurationMs,
+                    explicitQuality = targetQuality,
+                )
+            } else {
+                resolvePlayableSourceConcurrent(
+                    context = context,
+                    platform = platform,
+                    songId = songId,
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    expectedDurationMs = expectedDurationMs,
+                    explicitQuality = targetQuality,
+                )
+            }
         }
     }
 
@@ -1192,6 +1179,8 @@ object OnlineAudioSourceResolver {
                 url = cached.url,
                 quality = requestedQuality,
                 headers = emptyMap(),
+                platform = platform.displayName,
+                sourceName = "内存缓存",
             )
         }
 
@@ -1210,6 +1199,45 @@ object OnlineAudioSourceResolver {
             url = resolved.url,
             quality = requestedQuality,
             headers = emptyMap(),
+            platform = resolved.platform.displayName,
+            sourceName = resolved.sourceName,
         )
+    }
+
+    /** 同步探测指定曲目的内存直链缓存，用于切歌时 0ms 命中避免闪现“正在寻源” */
+    fun peekCachedSource(
+        item: RawSourceMediaItem,
+        requestedQuality: RawSourceQuality,
+    ): RawResolvedAudioSource? {
+        val platform = OnlinePlatform.fromId(item.sourceId) ?: run {
+            try {
+                val json = JSONObject(item.sourcePayload)
+                val pStr = json.optString("platform")
+                OnlinePlatform.fromId(pStr)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: OnlinePlatform.NETEASE
+
+        val songId = item.remoteId.substringAfter(':', item.remoteId)
+        val qualityStr = when (requestedQuality) {
+            RawSourceQuality.HiRes -> "flac24bit"
+            RawSourceQuality.Lossless -> "flac"
+            RawSourceQuality.Super, RawSourceQuality.High -> "320k"
+            else -> "128k"
+        }
+        val cacheKey = "${platform.id}:$songId:$qualityStr"
+        val now = System.currentTimeMillis()
+        val cached = memoryUrlCache.get(cacheKey) ?: memoryUrlCache.get("${platform.id}:$songId")
+        if (cached != null && cached.expireAtMs > now) {
+            return RawResolvedAudioSource(
+                url = cached.url,
+                quality = requestedQuality,
+                headers = emptyMap(),
+                platform = platform.displayName,
+                sourceName = "内存缓存",
+            )
+        }
+        return null
     }
 }

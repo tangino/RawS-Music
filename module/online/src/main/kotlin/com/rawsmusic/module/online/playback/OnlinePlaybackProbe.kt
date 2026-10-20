@@ -29,8 +29,8 @@ object OnlinePlaybackProbe {
         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -227,17 +227,7 @@ object OnlinePlaybackProbe {
                     return@withContext null
                 }
             } else {
-                // 未探出真实时长时（超时或未解析出）的防试听防漏兜底防御：
-                // 1) 预期长歌（>=60s），但流体积偏小（<1.5MB，28秒试听一般在 300KB~900KB）：坚决拦截
-                if (expectedDurationMs >= 60_000L && totalContentLength in 1..1_500_000L) {
-                    AppLogger.w(
-                        TAG,
-                        "Audio probe rejected suspicious small stream without duration verification " +
-                            "($totalContentLength bytes for expected ${expectedDurationMs}ms) for $validUrl",
-                    )
-                    return@withContext null
-                }
-                // 2) 未知时长但文件流过小（<1MB）：疑似试听片段
+                // 若 MediaMetadataRetriever 超时或未解析出时长，且已知文件流偏小 (如未知时长但流小于 1MB)，杜绝试听音频混入
                 if (expectedDurationMs <= 0L && totalContentLength in 1..1_000_000L) {
                     AppLogger.w(
                         TAG,

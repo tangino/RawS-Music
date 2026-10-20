@@ -54,12 +54,17 @@ object MusicSourceAudioResolver {
             .ifEmpty { listOf(RawSourceQuality.Standard) }
     }
 
-    fun interface OnlineAudioFallbackResolver {
+    interface OnlineAudioFallbackResolver {
         suspend fun resolveOnline(
             context: Context,
             item: RawSourceMediaItem,
             requestedQuality: RawSourceQuality,
         ): RawResolvedAudioSource?
+
+        fun peekCachedSource(
+            item: RawSourceMediaItem,
+            requestedQuality: RawSourceQuality,
+        ): RawResolvedAudioSource? = null
     }
 
     fun interface AudioUrlValidator {
@@ -88,12 +93,52 @@ object MusicSourceAudioResolver {
     @Volatile
     var quickJsLxAudioResolver: QuickJsLxAudioResolver? = null
 
+    private data class CachedResolvedSource(val source: RawResolvedAudioSource, val expireAtMs: Long)
+    private val memorySourceCache = android.util.LruCache<String, CachedResolvedSource>(200)
+
+    private fun buildCacheKey(item: RawSourceMediaItem, quality: RawSourceQuality): String {
+        val identity = item.remoteId.ifBlank { item.stableIdentity }
+        return "${item.sourceId}:$identity:${quality.name}"
+    }
+
+    fun peekMemoryCache(item: RawSourceMediaItem, quality: RawSourceQuality): RawResolvedAudioSource? {
+        val cacheKey = buildCacheKey(item, quality)
+        val now = System.currentTimeMillis()
+        val cached = memorySourceCache.get(cacheKey)
+        if (cached != null && cached.expireAtMs > now) {
+            return cached.source
+        }
+        return onlineFallbackResolver?.peekCachedSource(item, quality)
+    }
+
+    fun evictCache(item: RawSourceMediaItem, quality: RawSourceQuality? = null) {
+        if (quality != null) {
+            memorySourceCache.remove(buildCacheKey(item, quality))
+        } else {
+            RawSourceQuality.entries.forEach { q ->
+                memorySourceCache.remove(buildCacheKey(item, q))
+            }
+        }
+    }
+
     suspend fun resolve(
         context: Context,
         item: RawSourceMediaItem,
         requestedQuality: RawSourceQuality,
     ): RawResolvedAudioSource {
         val startedAt = SystemClock.elapsedRealtime()
+        val cacheKey = buildCacheKey(item, requestedQuality)
+        val now = System.currentTimeMillis()
+        val cached = memorySourceCache.get(cacheKey)
+        if (cached != null && cached.expireAtMs > now) {
+            AppLogger.i(
+                TAG,
+                "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_HIT_MEMORY cacheKey=$cacheKey " +
+                    "quality=${cached.source.quality} url=${OnlinePlaybackDiagnostics.safeUrl(cached.source.url)}"
+            )
+            return cached.source
+        }
+
         val musicFreeSource = MusicSourcePluginStore.sources.value.firstOrNull {
             it.id == item.sourceId && it.enabled
         }
@@ -117,6 +162,7 @@ object MusicSourceAudioResolver {
                 try {
                     val resolved = fallback.resolveOnline(context, item, requestedQuality)
                     if (resolved != null) {
+                        memorySourceCache.put(cacheKey, CachedResolvedSource(resolved, now + 15 * 60 * 1000L))
                         AppLogger.i(
                             TAG,
                             "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK fallback=online sourceId=${item.sourceId} " +
@@ -147,6 +193,7 @@ object MusicSourceAudioResolver {
             }
             musicFreeSource?.let { MusicSourcePluginStore.setLastError(it.id, "") }
             lxSource?.let { LxSourcePluginStore.setLastError(it.id, "") }
+            memorySourceCache.put(cacheKey, CachedResolvedSource(resolved, now + 15 * 60 * 1000L))
             AppLogger.i(
                 TAG,
                 "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK sourceId=${item.sourceId} " +
@@ -169,6 +216,7 @@ object MusicSourceAudioResolver {
                 try {
                     val resolvedFallback = fallback.resolveOnline(context, item, requestedQuality)
                     if (resolvedFallback != null) {
+                        memorySourceCache.put(cacheKey, CachedResolvedSource(resolvedFallback, now + 15 * 60 * 1000L))
                         AppLogger.i(
                             TAG,
                             "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK fallback=online after plugin failure sourceId=${item.sourceId} " +

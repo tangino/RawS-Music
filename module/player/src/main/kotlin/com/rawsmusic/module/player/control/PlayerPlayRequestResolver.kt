@@ -85,6 +85,10 @@ internal class PlayerPlayRequestResolver(
         usbExclusiveActive: Boolean,
         configuredManualFadeMs: Int,
     ): Boolean {
+        // 网络音源解析交付的音频载荷已由控制器在寻源前完成过渡，直接起播，绝不能再次作为切歌动作触发二次淡出或 crossfade 产生残响回响
+        if (requestedSong.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER) {
+            return false
+        }
         val current = currentSong ?: return false
         if (sameItem(current, requestedSong)) return false
         if (!controllerPlaying && !enginePlaying) return false

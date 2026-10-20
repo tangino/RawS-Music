@@ -2822,6 +2822,27 @@ private fun Color.softenedForPlayer(): Color {
 }
 
 internal fun audioChainText(song: AudioFile?): String {
+    val onlineSnapshot = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value
+    val isOnline = song?.path?.startsWith("online://") == true || onlineSnapshot.currentItem != null
+    val onlineTag = if (isOnline) {
+        val orig = onlineSnapshot.originalPlatform
+        val res = onlineSnapshot.resolvedPlatform ?: orig
+        val platform = when {
+            !orig.isNullOrBlank() && !res.isNullOrBlank() && orig != res -> "$orig ➔ $res"
+            !res.isNullOrBlank() -> res
+            !orig.isNullOrBlank() -> orig
+            else -> "在线音源"
+        }
+        val quality = when (onlineSnapshot.resolvedQuality) {
+            com.rawsmusic.core.common.source.RawSourceQuality.HiRes -> "Hi-Res"
+            com.rawsmusic.core.common.source.RawSourceQuality.Lossless -> "SQ无损"
+            com.rawsmusic.core.common.source.RawSourceQuality.Super,
+            com.rawsmusic.core.common.source.RawSourceQuality.High -> "HQ极高"
+            com.rawsmusic.core.common.source.RawSourceQuality.Standard -> "标准音质"
+        }
+        "$platform · $quality"
+    } else null
+
     val audio = song
     val bits = audio?.bitsPerSample?.takeIf { it > 0 }?.let { "$it BIT" }
     val sampleRate = audio?.let { current ->
@@ -2840,11 +2861,14 @@ internal fun audioChainText(song: AudioFile?): String {
             com.rawsmusic.core.common.utils.BitrateNormalizer.formatKbps(it, current.duration, current.fileSize).uppercase()
         }
     }
-    val format = audio?.format?.takeIf { it.isNotBlank() }?.uppercase()
-    return listOfNotNull(bits, sampleRate, bitRate, format)
-        .takeIf { it.isNotEmpty() }
-        ?.joinToString("  ")
-        ?: "LOCAL AUDIO"
+    val format = audio?.format?.takeIf { it.isNotBlank() && it != "ONLINE" }?.uppercase()
+    val localParams = listOfNotNull(format, bits, sampleRate, bitRate).takeIf { it.isNotEmpty() }?.joinToString("  ")
+    return when {
+        onlineTag != null && localParams != null -> "$onlineTag  $localParams"
+        onlineTag != null -> onlineTag
+        localParams != null -> localParams
+        else -> "LOCAL AUDIO"
+    }
 }
 
 

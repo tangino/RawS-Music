@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,12 +84,18 @@ internal fun OnlineArtistDetailPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val parts = remember(argument) { argument.split(ARGUMENT_SEPARATOR) }
-    val platform = remember(argument) { OnlinePlatform.fromId(parts.getOrElse(0) { "" }) ?: OnlinePlatform.NETEASE }
-    val artistId = remember(argument) { Uri.decode(parts.getOrElse(1) { "" }) }
-    val artistName = remember(argument) { Uri.decode(parts.getOrElse(2) { "" }) }
-    val avatarUrl = remember(argument) { Uri.decode(parts.getOrElse(3) { "" }) }
-    val artist = remember(argument) {
+    var rememberedArgument by rememberSaveable { mutableStateOf(argument.takeIf { it.isNotBlank() }.orEmpty()) }
+    if (argument.isNotBlank() && argument != rememberedArgument) {
+        rememberedArgument = argument
+    }
+    val effectiveArgument = argument.takeIf { it.isNotBlank() } ?: rememberedArgument
+
+    val parts = remember(effectiveArgument) { effectiveArgument.split(ARGUMENT_SEPARATOR) }
+    val platform = remember(effectiveArgument) { OnlinePlatform.fromId(parts.getOrElse(0) { "" }) ?: OnlinePlatform.NETEASE }
+    val artistId = remember(effectiveArgument) { Uri.decode(parts.getOrElse(1) { "" }) }
+    val artistName = remember(effectiveArgument) { Uri.decode(parts.getOrElse(2) { "" }) }
+    val avatarUrl = remember(effectiveArgument) { Uri.decode(parts.getOrElse(3) { "" }) }
+    val artist = remember(effectiveArgument) {
         OnlineArtist(
             id = artistId,
             name = artistName,

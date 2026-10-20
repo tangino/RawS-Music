@@ -2,18 +2,9 @@
 chcp 65001 >nul 2>&1
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: ============================================================================
-:: RawS-Music Quick Installer (Debug) - Windows
-::
-::   install_debug.bat               安装最新生成的 Debug APK (若不存在则自动构建)
-::   install_debug.bat -b, --build   强制重新构建 Debug APK 后安装
-::   install_debug.bat -q, --quick   跳过构建，直接安装现有最新 APK
-::   install_debug.bat -l, --launch  安装完成后自动启动应用
-::   install_debug.bat -a, --all     直接安装到所有已连接设备
-::   install_debug.bat -c, --clean   执行 clean 后重新构建并安装
-::   install_debug.bat -s <serial>   多设备连接时指定目标设备序列号
-::   install_debug.bat -h, --help    显示帮助信息
-:: ============================================================================
+rem ============================================================================
+rem  RawS-Music Build Script: install_debug.bat
+rem ============================================================================
 
 set "VARIANT=debug"
 set "VARIANT_LABEL=Debug"

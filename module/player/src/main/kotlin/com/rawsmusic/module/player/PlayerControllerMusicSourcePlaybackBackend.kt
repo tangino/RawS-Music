@@ -129,6 +129,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         val ownsCurrent = ownsCurrentSong()
         val hadActiveRequest = activeRequest != null
         activeRequest = null
+        completionConsumePath = null
         pendingSeekMs = 0L
         pendingSeekApplied = false
         pauseAfterStart = false
@@ -168,7 +169,8 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
     fun onRendererStateChanged(state: FfmpegAudioPlayer.State) {
         val request = activeRequest ?: return
         val currentPath = controller.currentSong.value?.path
-        val ownsCurrent = currentPath == request.source.url
+        val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+        val ownsCurrent = currentPath == request.source.url || currentPath == targetKey
         if (ownsCurrent) {
             hasOwnedRendererSession = true
         } else {
@@ -284,15 +286,20 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
 
     /** Prevent the global local-queue repeat policy from consuming an online completion. */
     fun consumePlaybackCompletion(): Boolean {
-        val completedPath = completionConsumePath ?: return false
-        if (controller.currentSong.value?.path != completedPath) return false
+        val completedPath = completionConsumePath
         completionConsumePath = null
-        val queue = controller.queue.value
-        val hasContinuation = queue.songs.size > 1 || controller.playMode.value == com.rawsmusic.core.common.model.PlayMode.REPEAT_ONE
-        if (hasContinuation) {
-            return false
+        val currentSong = controller.currentSong.value
+        val isOnlineCurrent = currentSong != null && (
+            com.rawsmusic.core.common.model.isOnlineSongKey(currentSong.path) ||
+            currentSong.encodingFormat == MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
+            currentSong.path.startsWith("http://") || currentSong.path.startsWith("https://")
+        )
+        if (completedPath != null || isOnlineCurrent) {
+            // 无论是旧曲目退役时的完成事件，还是当前网络曲目，全局本地队列的 PlayerBackendStateControlCoordinator
+            // 都不应该调用 automaticAdvanceTransport，网络歌曲由 MusicSourcePlaybackController 独立调度 next(automatic = true)
+            return true
         }
-        return true
+        return false
     }
 
     fun close() {

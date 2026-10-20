@@ -146,6 +146,13 @@ class PlayerBackendStateControlCoordinator(
             return
         }
 
+        // 严禁单次错误直接无脑切歌跳过当前曲目！
+        // 如果是刚刚切歌或首发单次错误，停留在当前歌曲处于错误状态，绝不能在用户切到歌2的一瞬间自动跳到歌3把歌2跳过
+        if (consecutiveFailures <= 1) {
+            callbacks.logWarning("First playback error for current song, will not auto-advance immediately to prevent song skipping")
+            return
+        }
+
         if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) {
             callbacks.logWarning("Too many consecutive failures, stopping playback")
             callbacks.stopTransport()
@@ -162,6 +169,16 @@ class PlayerBackendStateControlCoordinator(
 
     private fun shouldAutoAdvanceOnError(message: String?): Boolean {
         if (callbacks.isUsbExclusiveActive() || callbacks.backendUsbExclusiveMode()) return false
+        val currentSong = callbacks.currentSong()
+        if (currentSong != null && (
+            com.rawsmusic.core.common.model.isOnlineSongKey(currentSong.path) ||
+            currentSong.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
+            currentSong.path.startsWith("http://") || currentSong.path.startsWith("https://")
+        )) {
+            // 在线歌曲的错误处理由 MusicSourcePlaybackController 内部的 fallback 与状态机管理，
+            // 严禁在此处强制推进本地队列跳过当前歌曲，避免用户看到歌曲一闪而过！
+            return false
+        }
         val normalized = message?.lowercase().orEmpty()
         return OUTPUT_ERROR_MARKERS.none(normalized::contains)
     }

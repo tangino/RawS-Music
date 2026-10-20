@@ -59,6 +59,21 @@ class PlayerBackendStateControlCoordinatorTest {
     }
 
     @Test
+    fun onlineSongErrorDoesNotAutoAdvance() {
+        val onlineSong = AudioFile(path = "online://netease/123", title = "Online")
+        val harness = Harness().apply {
+            currentSong = onlineSong
+            lastError = "http 403 forbidden"
+            queue = PlayQueue(listOf(onlineSong, songB), 0)
+        }
+        harness.coordinator.onStateChanged(
+            PlayerBackendStateControlCoordinator.BackendState.ERROR
+        )
+        assertEquals(0, harness.playCount)
+        assertTrue(harness.warnings.any { it.contains("Not auto-advancing") })
+    }
+
+    @Test
     fun sixthUnavailableSourceOpensFailureFuseAndStops() {
         val harness = Harness()
         repeat(5) {

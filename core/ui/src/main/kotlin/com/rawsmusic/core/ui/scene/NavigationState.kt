@@ -506,9 +506,9 @@ class NavigationState {
 
     /**
      * 静默切换场景（不触发动画，不修改返回栈）。
-     * 用于从播放器返回时恢复之前的场景。
+     * 用于从播放器返回时恢复之前的场景与参数。
      */
-    fun switchToSilent(scene: NavScene) {
+    fun switchToSilent(scene: NavScene, argument: String = "") {
         // Invalidate any suspended SceneTransitionHost coroutine before publishing the silent
         // restore. Otherwise its finally block can mistake the restored route for its own endpoint.
         transitionRequestId += 1
@@ -520,10 +520,35 @@ class NavigationState {
         transitionFromScene = scene
         transitionToScene = scene
         currentScene = scene
-        val stackIndex = _backStack.lastIndexOf(scene)
-        if (stackIndex >= 0) {
-            currentArgument = argumentStack.getOrElse(stackIndex) { "" }
+        if (argument.isNotBlank()) {
+            currentArgument = argument
+        } else {
+            val stackIndex = _backStack.lastIndexOf(scene)
+            if (stackIndex >= 0) {
+                val restoredArg = argumentStack.getOrElse(stackIndex) { "" }
+                if (restoredArg.isNotBlank() || currentArgument.isBlank()) {
+                    currentArgument = restoredArg
+                }
+            }
         }
+    }
+
+    /**
+     * 恢复当前场景的有效参数（仅在传入非空参数且当前参数为空白时生效）。
+     */
+    fun restoreArgument(argument: String) {
+        if (argument.isNotBlank() && currentArgument.isBlank()) {
+            currentArgument = argument
+        }
+    }
+
+    /**
+     * 查询指定场景在当前返回栈最近一次入栈时所关联的参数。
+     * 用于在页面渲染或返回时作为兜底，防止 currentArgument 因瞬态抖动而取空。
+     */
+    fun argumentForScene(scene: NavScene): String {
+        val stackIndex = _backStack.lastIndexOf(scene)
+        return if (stackIndex >= 0) argumentStack.getOrElse(stackIndex) { "" } else ""
     }
 
     // ==================== 查询方法 ====================

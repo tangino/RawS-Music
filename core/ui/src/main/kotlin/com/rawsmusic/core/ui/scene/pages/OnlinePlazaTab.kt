@@ -2,6 +2,7 @@ package com.rawsmusic.core.ui.scene.pages
 
 import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
+import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -124,7 +125,8 @@ internal fun OnlinePlazaTab(
 
     val loadFailedMessage = stringResource(R.string.online_plaza_load_failed)
 
-    BackHandler(enabled = isSearchMode) {
+    val sceneMotionFrozen = LocalSceneBackgroundFrozen.current
+    BackHandler(enabled = isSearchMode && !sceneMotionFrozen) {
         isSearchMode = false
     }
 

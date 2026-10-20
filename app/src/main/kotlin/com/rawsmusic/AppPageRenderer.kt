@@ -137,8 +137,21 @@ class AppPageRendererImpl(
             NavScene.PLAYLISTS,
             NavScene.PLAYLIST_LIST -> {
                 val playlistStore = PlaylistStore.getInstance(context)
+                val librarySongs by com.rawsmusic.module.data.repository.MusicRepository.songs.collectAsState()
+                val playState = pc?.playState?.collectAsState()?.value
+                val isPlaying = playState == com.rawsmusic.core.common.model.PlayState.PLAYING
+                val scope = rememberCoroutineScope()
                 PlaylistScreen(
                     playlistStore = playlistStore,
+                    librarySongs = librarySongs,
+                    isPlaying = isPlaying,
+                    onTogglePlayEngine = {
+                        if (pc?.isPlaying == true) {
+                            pc.pause()
+                        } else {
+                            pc?.resume()
+                        }
+                    },
                     onBack = onBack,
                     virtualListState = virtualListState,
                     onPlaylistClick = { playlistId, _ ->
@@ -149,6 +162,67 @@ class AppPageRendererImpl(
                             NavScene.ONLINE_PLAYLIST_DETAIL,
                             onlinePlaylistDetailArgument(platform, remoteId),
                         )
+                    },
+                    onNavigateToOnlineSquare = {
+                        navState?.navigateTo(NavScene.ONLINE_MUSIC)
+                    },
+                    onPlayLocalPlaylist = { playlist ->
+                        val songs = if (isAttitudePlaylistId(playlist.id)) {
+                            val dislikedKeys = com.rawsmusic.module.data.repository.SongAttitudeRepository.dislikedKeys.value
+                            attitudePlaylistView(context, playlistStore, librarySongs, playlist.id, dislikedKeys)?.songs
+                                .orEmpty()
+                                .map { it.toAudioFile() }
+                        } else {
+                            playlist.songs.map { it.toAudioFile() }
+                        }
+                        if (songs.isNotEmpty()) {
+                            val first = songs.first()
+                            pc?.play(first, songs, 0)
+                            val cover = playlist.coverUrl?.takeIf { it.isNotBlank() }
+                                ?: first.coverKey.takeIf { it.isNotBlank() }
+                                ?: first.albumArtPath.takeIf { it.isNotBlank() }.orEmpty()
+                            PlayedPlaylistManager.recordPlayedPlaylist(
+                                id = playlist.id,
+                                name = playlist.name,
+                                isOnline = false,
+                                platformId = "",
+                                coverUrl = cover,
+                                trackCount = songs.size,
+                                lastPlayedSongTitle = first.title,
+                                lastPlayedSongArtist = first.artist,
+                            )
+                        } else {
+                            AppNoticeBus.error("歌单暂无可播放曲目")
+                        }
+                    },
+                    onPlayOnlinePlaylist = { entity ->
+                        val platform = OnlinePlatform.fromId(entity.platform)
+                        if (platform != null) {
+                            scope.launch {
+                                AppNoticeBus.post("正在获取在线歌单...", AppNoticeIcon.PLAYLIST)
+                                val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
+                                repo.getPlaylistDetail(entity.remoteId, platform).onSuccess { (_, songs) ->
+                                    if (songs.isNotEmpty()) {
+                                        val first = songs.first()
+                                        OnlinePlaybackLauncher.play(context, first, queue = songs, index = 0)
+                                        PlayedPlaylistManager.recordPlayedPlaylist(
+                                            id = entity.remoteId,
+                                            name = entity.title,
+                                            isOnline = true,
+                                            platformId = entity.platform,
+                                            coverUrl = entity.coverUrl.orEmpty(),
+                                            trackCount = songs.size,
+                                            lastPlayedSongTitle = first.title,
+                                            lastPlayedSongArtist = first.artist,
+                                        )
+                                    } else {
+                                        AppNoticeBus.error("在线歌单曲目为空")
+                                    }
+                                }.onFailure {
+                                    AppNoticeBus.error("获取歌单失败: ${it.localizedMessage}")
+                                }
+                            }
+                        }
                     },
                 )
             }

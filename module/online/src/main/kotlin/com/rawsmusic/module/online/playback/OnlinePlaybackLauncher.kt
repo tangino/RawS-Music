@@ -193,9 +193,13 @@ object OnlinePlaybackLauncher {
             // 2. 补充兜底：若全平台多源搜救未果，尝试从用户安装的 MusicFree 插件库检索
             val candidate = findPlayableCandidate(context, item)
             if (candidate != null) {
+                val updatedQueue = rawQueue.toMutableList()
+                if (resolvedIndex in updatedQueue.indices) {
+                    updatedQueue[resolvedIndex] = candidate
+                }
                 MusicSourcePlaybackController.play(
                     context = context,
-                    queue = rawQueue,
+                    queue = updatedQueue,
                     index = resolvedIndex,
                 )
                 OnlinePlayResult.Started

@@ -1,19 +1,10 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul 2>&1
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: ============================================================================
-:: RawS-Music Quick Installer (Release) - Windows
-::
-::   install_release.bat               安装最新生成的 Release APK (若不存在则自动构建)
-::   install_release.bat -b, --build   强制重新构建 Release APK 后安装
-::   install_release.bat -q, --quick   跳过构建，直接安装现有最新 APK
-::   install_release.bat -l, --launch  安装完成后自动启动应用
-::   install_release.bat -a, --all     直接安装到所有已连接设备
-::   install_release.bat -c, --clean   执行 clean 后重新构建并安装
-::   install_release.bat -s <serial>   多设备连接时指定目标设备序列号
-::   install_release.bat -h, --help    显示帮助信息
-:: ============================================================================
+rem ============================================================================
+rem  RawS-Music Build Script: install_release.bat
+rem ============================================================================
 
 set "VARIANT=release"
 set "VARIANT_LABEL=Release"

@@ -290,6 +290,8 @@ class FfmpegAudioPlayer(private val context: Context) {
             automaticTransitionCancellation.onTrackChanged(playbackSession.currentTrackPath, value)
             playbackSession.currentTrackPath = value
         }
+    val currentTrackPath: String?
+        get() = currentPath ?: sourcePath ?: playbackSession.sessionSourcePath
     private var resampledPath: String? = null
     private val ffmpegAudioCache = FfmpegAudioCache(context)
     private val androidAudioTrackFactory = AndroidAudioTrackFactory(context)
@@ -2683,6 +2685,8 @@ class FfmpegAudioPlayer(private val context: Context) {
     fun stopForManualTrackSwitch(reason: String) {
         AppLogger.w(TAG, "=== stopForManualTrackSwitch(): reason=$reason state=$_state ===")
         isPaused.set(true)
+        runCatching { audioTrack?.setVolume(0f) }
+        runCatching { nativeAudioEngineLifecycle.setVolumeCurrent(0f, "manualTrackSwitch_$reason") }
         nativeAudioEngineLifecycle.stopCurrent("manualTrackSwitch_$reason")
         try { audioTrack?.pause() } catch (_: Exception) {}
         try { audioTrack?.flush() } catch (_: Exception) {}
@@ -2992,6 +2996,11 @@ class FfmpegAudioPlayer(private val context: Context) {
 
     fun stop() {
         AppLogger.w(TAG, "=== stop() called")
+        // 防爆音：若当前处于发声状态，立即将硬件输出音量置零，防止硬件 FIFO 队列截断激发出高频脉冲爆音
+        if (_state == State.PLAYING || isPlaying.get()) {
+            runCatching { audioTrack?.setVolume(0f) }
+            runCatching { nativeAudioEngineLifecycle.setVolumeCurrent(0f, "stop") }
+        }
         val token = transitionTrace.beginTransport(
             PlaybackTransitionReason.STOP,
             playbackSession.generation,

@@ -23,6 +23,7 @@ internal class MainActivitySceneNavigationCoordinator(
     private val prePlayerFragmentDestination: () -> Int?,
     private val prePlayerWasInFragmentMode: () -> Boolean,
     private val prePlayerContainerScene: () -> NavScene?,
+    private val prePlayerContainerArgument: () -> String = { "" },
     private val songsDestinationId: Int,
     private val setLegacyDestination: (Int) -> Unit,
     private val legacyDestination: () -> Int,
@@ -95,15 +96,17 @@ internal class MainActivitySceneNavigationCoordinator(
         return changed
     }
 
-    fun switchToContainerMode(targetScene: NavScene? = null) {
+    fun switchToContainerMode(targetScene: NavScene? = null, targetArgument: String = "") {
         // PLAYER keeps the Compose navigation tree mounted underneath the sheet. Re-publishing the
         // exact same route through switchToSilent still bumps transitionRequestId and rewrites all
         // scene endpoints, which can make the retained HOME/list owner rebuild one layout frame at
         // the start/end of a return gesture. Only perform a silent route restore when the requested
         // scene actually differs from the already-mounted navigation owner.
-        targetScene
-            ?.takeIf { it != navigationState.currentScene }
-            ?.let(navigationState::switchToSilent)
+        if (targetScene != null && targetScene != navigationState.currentScene) {
+            navigationState.switchToSilent(targetScene, targetArgument)
+        } else if (targetArgument.isNotBlank() && navigationState.currentArgument.isBlank()) {
+            navigationState.restoreArgument(targetArgument)
+        }
         updateComposeRootVisibility(true)
     }
 
@@ -112,7 +115,10 @@ internal class MainActivitySceneNavigationCoordinator(
             (prePlayerFragmentDestination() == null || prePlayerFragmentDestination() == songsDestinationId)
         when {
             songsDestination -> switchToContainerMode(NavScene.SONGS)
-            !prePlayerWasInFragmentMode() -> switchToContainerMode(prePlayerContainerScene())
+            !prePlayerWasInFragmentMode() -> switchToContainerMode(
+                targetScene = prePlayerContainerScene(),
+                targetArgument = prePlayerContainerArgument(),
+            )
             else -> updateComposeRootVisibility(true)
         }
     }

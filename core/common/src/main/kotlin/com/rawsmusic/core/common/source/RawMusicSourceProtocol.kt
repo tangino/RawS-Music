@@ -82,6 +82,8 @@ data class RawResolvedAudioSource(
     val userAgent: String? = null,
     val quality: RawSourceQuality = RawSourceQuality.Standard,
     val expiresAtMs: Long? = null,
+    val platform: String? = null,
+    val sourceName: String? = null,
 )
 
 data class RawSourceLyric(
