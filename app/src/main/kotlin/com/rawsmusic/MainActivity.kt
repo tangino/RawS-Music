@@ -4764,6 +4764,16 @@ class MainActivity : ComponentActivity() {
     @Deprecated("Deprecated in Java")
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
+        // ── 临时诊断（返回链路）── 确认 fallback 是否被调用、以及当时的播放器/导航状态。
+        com.rawsmusic.core.common.utils.AppLogger.i(
+            "BackTrace",
+            "FALLBACK controllerScene=" +
+                (if (::playerSceneController.isInitialized) playerSceneController.currentScene else "uninit") +
+                " isTransitioning=" +
+                (if (::playerSceneController.isInitialized) playerSceneController.isTransitioning else "?") +
+                " playerSceneState=" + playerSceneState.currentScene +
+                " backStack=" + mainNavState.backStack.joinToString(">") { it.name },
+        )
         // A MIUIX overlay owns this back event. This guard also makes the one-frame redispatch
         // fallback safe on library/device combinations where no lower callback is available.
         if (com.rawsmusic.core.ui.widget.MiuixOverlayBackRuntime.activeCount > 0) return

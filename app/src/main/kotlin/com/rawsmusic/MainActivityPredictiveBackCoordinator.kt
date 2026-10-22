@@ -141,6 +141,14 @@ internal class MainActivityPredictiveBackCoordinator(
                         }
                     }
                 }
+                // ── 临时诊断（返回链路）── 只在手势开始时打一条，用来确认这一次返回
+                // 到底被哪一支接走、以及播放器层当时在哪个场景。
+                com.rawsmusic.core.common.utils.AppLogger.i(
+                    "BackTrace",
+                    "START dragType=$dragType sheetTarget=${sceneController.hasMainPlayerSheetBackTarget()} " +
+                        "sharedWindow=${audioInfoSharedWindowActive()} canNavBack=${mainNavigation.canNavigateBack()} " +
+                        "controllerScene=${sceneController.currentScene} atHome=${mainNavigation.isAtHome()}",
+                )
             }
 
             override fun handleOnBackProgressed(backEvent: BackEventCompat) {
@@ -156,6 +164,10 @@ internal class MainActivityPredictiveBackCoordinator(
             }
 
             override fun handleOnBackPressed() {
+                com.rawsmusic.core.common.utils.AppLogger.i(
+                    "BackTrace",
+                    "PRESSED dragType=$dragType",
+                )
                 when (dragType) {
                     BackDragType.COVER -> {
                         playerSceneController()?.releaseCoverDrag(true, 0f)

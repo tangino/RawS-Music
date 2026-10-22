@@ -573,11 +573,21 @@ class NavigationState {
         if (argumentStack.size > 1) argumentStack[argumentStack.lastIndex - 1] else ""
 
     private fun popBackStack() {
+        // ── 临时诊断（返回链路）── 直接看导航栈被弹掉了谁。这是判断
+        // "第一次返回是否静默弹掉了一层" 最直接的证据。
+        com.rawsmusic.core.common.utils.AppLogger.i(
+            "BackTrace",
+            "POP before=" + _backStack.joinToString(">") { it.name },
+        )
         _backStack.removeAt(_backStack.lastIndex)
         argumentStack.removeAt(argumentStack.lastIndex)
         entryMotionStack.removeAt(entryMotionStack.lastIndex)
         currentScene = _backStack.last()
         currentArgument = argumentStack.lastOrNull().orEmpty()
+        com.rawsmusic.core.common.utils.AppLogger.i(
+            "BackTrace",
+            "POP after=" + _backStack.joinToString(">") { it.name },
+        )
     }
 
     private fun currentEntryMotionHint(): NavigationMotionHint {
