@@ -4782,9 +4782,20 @@ class MainActivity : ComponentActivity() {
             playerSceneState.currentScene != com.rawsmusic.core.ui.widget.PlayerScene.PLAYER &&
             playerSceneState.currentScene != com.rawsmusic.core.ui.widget.PlayerScene.LYRIC
         ) {
-            playerSceneState.backToPlayer()
-            updateComposeRootVisibility()
-            return
+            // 只有当控制器**确实还停在辅助场景**时才需要"回到播放页"。
+            // 若控制器其实已经是 PLAYER（playerSceneState 与控制器尚未同步，例如队列浮层/播放器内
+            // 专辑详情刚关掉、或同步是单向的），这里再调 backToPlayer() 是**零可见变化**的，
+            // 却把这一次返回吞掉了 —— 用户表现为「按一次没反应、必须按两次」，
+            // 而且第二次会把"收起播放页 + 弹导航栈一层"一起做完，于是直接落到更外层（专辑列表）。
+            // 控制器已在 PLAYER 时应当继续往下走，由下面的 PLAYER 分支真正关闭播放页。
+            val controllerStillOnAuxiliaryScene =
+                !::playerSceneController.isInitialized ||
+                    playerSceneController.currentScene != PlayerSceneController.Scene.PLAYER
+            if (controllerStillOnAuxiliaryScene) {
+                playerSceneState.backToPlayer()
+                updateComposeRootVisibility()
+                return
+            }
         }
         if (::playerSceneController.isInitialized && playerSceneController.isTransitioning) {
             return
