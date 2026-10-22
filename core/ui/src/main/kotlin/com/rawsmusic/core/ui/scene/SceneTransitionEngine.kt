@@ -17,6 +17,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -2120,6 +2121,29 @@ internal fun SceneTransitionHost(
                 currentTransform = if (retainedVirtualListPivot) currentSceneItemTransform else null,
             )
 
+            // ── 临时诊断（问题 1：内容 ViewGroup 比顶栏晚 ~650ms 换页）──────────────────
+            // 目的：揪出那段"动画已结束但仍未换页"的窗口里，究竟是哪个输入还是旧值。
+            // presentationScene 的分支依赖下面全部输入，所以把它们一起打出来，
+            // 就能反推出当时走的是哪一支、为什么没变成目标场景。只在输入变化时打一条。
+            val diagInputs = buildString {
+                append("displayed=").append(displayedScene.name)
+                append(" from=").append(fromScene.name)
+                append(" inTransition=").append(inTransition)
+                append(" isBack=").append(isBackTransition)
+                append(" retainedPivot=").append(retainedVirtualListPivot)
+                append(" presentationVisible=").append(persistentLibraryPresentationVisible)
+                append(" persistentLibraryScene=").append(persistentLibraryScene?.name)
+                append(" mixedLibrary=").append(mixedPersistentLibraryTransition)
+                append(" isAnimating=").append(isAnimating)
+                append(" isGestureActive=").append(isGestureActive)
+            }
+            val diagLast = remember { arrayOfNulls<String>(1) }
+            SideEffect {
+                if (diagLast[0] != diagInputs) {
+                    diagLast[0] = diagInputs
+                    AppLogger.i("SceneDiag", "[DIAG] $diagInputs")
+                }
+            }
             // This is the structural equivalent of retained-view implementation's one retained scene layout/VirtualList owner:
             // it is a fixed sibling of route content. H/C transitions only update locals and the
             // persistent provider body; they do not move the presentation host through movable
