@@ -98,7 +98,16 @@ internal class MainActivityPredictiveBackCoordinator(
                             BackDragType.NONE
                         }
                     }
-                    audioInfoSharedWindowActive() && mainNavigation.canNavigateBack() -> {
+                    // ⚠️ 必须限定「播放器层已在 MAIN」才允许走导航返回。
+                    // 原先这一支没有播放器状态判断，于是播放页（或歌词页/队列/播放器内专辑详情）
+                    // 盖在上面时，返回手势会被这里当成"库导航返回"，直接把导航栈弹掉一层 ——
+                    // 而用户完全看不见（播放页还在最上面）。第二次手势才轮到下面播放器分支，
+                    // 收起播放页 → 于是直接落到更外层（实测：歌手详情 → 专辑网格 → 专辑详情 → 播放，
+                    // 返回两次后直接到专辑列表，且中途从未看到专辑详情）。
+                    // 下面 ③~⑥ 已经覆盖了音频层所有非 MAIN 场景，所以加这个限定不会漏掉任何情况。
+                    audioInfoSharedWindowActive() &&
+                        mainNavigation.canNavigateBack() &&
+                        sceneController.currentScene == PlayerSceneController.Scene.MAIN -> {
                         val direction = if (swipeRight) 1f else -1f
                         dragType = if (startContainerBack(direction)) {
                             BackDragType.CONTAINER
