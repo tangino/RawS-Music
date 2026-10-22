@@ -1727,6 +1727,13 @@ private fun LyricHeader(
                     .height(25.dp),
                 visible = animateLongText
             )
+            // 歌词页没有时间轴，在线曲的「正在寻源/缓冲」放在标题下方，
+            // 让用户在音频就绪前知道这是准备中而不是卡住。
+            OnlinePlaybackBusyBadge(
+                song = currentSong,
+                color = secondaryColor,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         Spacer(Modifier.width(12.dp))
         Box(
@@ -1790,6 +1797,13 @@ private fun LyricTitleOnlyHeader(
                 visible = animateLongText
             )
         }
+        OnlinePlaybackBusyBadge(
+            song = currentSong,
+            color = secondaryColor,
+            fontSizeSp = 10f,
+            spinnerSize = 10.dp,
+            modifier = Modifier.padding(end = 8.dp),
+        )
         Spacer(Modifier.width(12.dp))
         Box(
             modifier = Modifier

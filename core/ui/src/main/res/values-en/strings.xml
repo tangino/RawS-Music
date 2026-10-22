@@ -517,4 +517,8 @@
     <string name="ui_scale_200">Huge (2.0x)</string>
     <string name="ui_scale_225">Ultra (2.25x - 4K Car)</string>
     <string name="ui_scale_status_format">Raw: %1$d DPI (%2$.1fx) · Effective: %3$d DPI (%4$.2fx) · %5$d × %6$d dp</string>
+
+    <!-- Online playback preparation -->
+    <string name="player_online_resolving">Finding source...</string>
+    <string name="player_online_buffering">Buffering...</string>
 </resources>

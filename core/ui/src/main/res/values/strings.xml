@@ -993,4 +993,8 @@
     <string name="ui_scale_200">超大 (2.0x)</string>
     <string name="ui_scale_225">巨大 (2.25x 推荐 4K 车机)</string>
     <string name="ui_scale_status_format">原始: %1$d DPI (%2$.1fx) · 生效: %3$d DPI (%4$.2fx) · %5$d × %6$d dp</string>
+
+    <!-- 在线播放准备中提示 -->
+    <string name="player_online_resolving">正在寻源...</string>
+    <string name="player_online_buffering">正在缓冲...</string>
 </resources>

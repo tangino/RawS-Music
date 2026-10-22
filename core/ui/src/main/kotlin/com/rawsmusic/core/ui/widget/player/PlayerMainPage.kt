@@ -568,7 +568,7 @@ fun PlayerMainPage(
                         Spacer(Modifier.height(if (isTabletWindow) 12.dp else 0.dp))
                         StandardTransportButtons(
                             compactHeight = !isTabletWindow,
-                            isOnline = currentSong?.path?.startsWith("online://") == true,
+                            currentSong = currentSong,
                             isPlaying = isPlaying,
                             previousIconRes = previousIconRes,
                             playIconRes = playIconRes,
@@ -1887,7 +1887,7 @@ private fun StandardPlayerBody(
         ) {
             StandardTransportButtons(
                 isPlaying = isPlaying,
-                isOnline = currentSong?.path?.startsWith("online://") == true,
+                currentSong = currentSong,
                 previousIconRes = previousIconRes,
                 playIconRes = playIconRes,
                 pauseIconRes = pauseIconRes,
@@ -2052,6 +2052,15 @@ private fun ColumnScope.StandardPlayerTimelineLane(
             )
         }
     }
+    // Classic 时间轴自带「正在寻源/缓冲」提示；其余进度样式在这里补一个同样口径的提示，
+    // 保证无论用户选哪种进度样式，在线曲准备期都能看到明确状态。
+    if (progressStyle != ImmersiveProgressStyle.Classic) {
+        OnlinePlaybackBusyBadge(
+            song = currentSong,
+            color = rememberStandardPlayerTone().tertiary,
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        )
+    }
 }
 
 @Composable
@@ -2179,7 +2188,7 @@ private fun StandardTransportButtons(
     onPlayMode: () -> Unit,
     onQueuePlaceholder: () -> Unit,
     compactHeight: Boolean = false,
-    isOnline: Boolean = false,
+    currentSong: AudioFile? = null,
 ) {
     val tone = rememberStandardPlayerTone()
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -2192,7 +2201,7 @@ private fun StandardTransportButtons(
         PlayerTransportIcon(iconRes = playModeIconRes, size = 40.dp * controlScale, iconSize = 30.dp * controlScale, tint = tone.tertiary, onClick = onPlayMode)
         PlayerTransportIcon(iconRes = previousIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onPrevious)
         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-        val isOnlineBusy = isOnline && onlineSnapshot.isBusy
+        val isOnlineBusy = isOnlinePlaybackBusy(currentSong, onlineSnapshot)
         if (isOnlineBusy) {
             Box(
                 modifier = Modifier.size(56.dp * controlScale),

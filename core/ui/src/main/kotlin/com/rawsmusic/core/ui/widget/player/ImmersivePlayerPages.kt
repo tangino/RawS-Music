@@ -843,7 +843,7 @@ internal fun ImmersivePlayerMainPage(
                         IconCircle(iconRes = playModeIconRes, size = 34.dp, tint = tone.iconSoft, onClick = onPlayMode)
                         IconCircle(iconRes = previousIconRes, size = 42.dp, tint = tone.icon, onClick = onPrevious)
                         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
-                        val isOnlineBusy = currentSong?.path?.startsWith("online://") == true && onlineSnapshot.isBusy
+                        val isOnlineBusy = isOnlinePlaybackBusy(currentSong, onlineSnapshot)
                         if (isOnlineBusy) {
                             Box(modifier = Modifier.size(52.dp), contentAlignment = Alignment.Center) {
                                 androidx.compose.material3.CircularProgressIndicator(
@@ -1757,6 +1757,14 @@ internal fun ImmersiveProgress(
             onSeekStop = onSeekStop,
         )
     }
+    // Classic 时间轴自带提示；其余样式在这里补统一口径的「正在寻源/缓冲」，避免两处同时出现。
+    if (progressStyle != ImmersiveProgressStyle.Classic) {
+        OnlinePlaybackBusyBadge(
+            song = currentSong,
+            color = rememberPlayerForegroundTone().tertiary,
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        )
+    }
 }
 
 @Composable
@@ -1863,6 +1871,14 @@ internal fun ClassicTimelineProgress(
         onSeekStart = onSeekStart,
         onSeekStop = onSeekStop,
         modifier = modifier,
+    )
+    // 在线曲准备期的「正在寻源/缓冲」提示放在时间轴下方（与其它进度样式同一位置）。
+    // 为什么不放回 ClassicTimelineEffects 的时间标签行里：那里会被左右两个时间码夹在中间，
+    // 窄屏下容易和时长数字挤在一起；单独一行在所有进度样式下位置一致，也不受时间轴自身宽度影响。
+    OnlinePlaybackBusyBadge(
+        song = currentSong,
+        color = timeColor ?: foregroundTone.tertiary,
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
     )
 }
 
