@@ -25,6 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import com.rawsmusic.core.common.utils.AppLogger
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -190,14 +192,6 @@ internal fun BoxScope.HomeFloatingHeaderHost(
         currentScene == NavScene.HOME &&
         transitionFrame.fromScene == transitionFrame.toScene &&
         transitionFrame.fromScene != NavScene.HOME
-    if (
-        currentScene != NavScene.HOME &&
-        !activeHomeTransition &&
-        !routeHandoffFromHome
-    ) return
-    val registration = controller.registration() ?: return
-    val mainButtonsSurface by
-        PersonalizationPreferences.libraryBottomButtonsSurface.collectAsState()
     val sceneRole = when {
         routeHandoffFromHome -> LibraryTopChromeSceneRole.EXIT
         routeHandoffToHome -> LibraryTopChromeSceneRole.ENTER
@@ -206,6 +200,40 @@ internal fun BoxScope.HomeFloatingHeaderHost(
         transitionFrame.toScene == NavScene.HOME -> LibraryTopChromeSceneRole.ENTER
         else -> LibraryTopChromeSceneRole.IDLE
     }
+    // ── 临时诊断（问题 1：主界面顶栏与页面内容过渡不同步）─────────────────────────
+    // 目的：确认"顶部按钮先消失/先出现、页面内容还停在原处"到底是
+    //   (A) 顶栏在过渡结束时立刻从组合里移除（而内容还有保留场景多画几帧），还是
+    //   (B) routeHandoff* 那两个一帧偏移补偿分支判定落空，导致角色/进度错位。
+    // 只在上面这些输入**发生变化**时打一条，不逐帧刷屏；定位完成后整块删除。
+    val diagUnmount = currentScene != NavScene.HOME &&
+        !activeHomeTransition &&
+        !routeHandoffFromHome
+    // 触发键**不含 progress**：progress 每帧都变，带上会把日志刷屏。
+    val diagKey = buildString {
+        append("scene=").append(currentScene.name)
+        append(" active=").append(transitionFrame.active)
+        append(" from=").append(transitionFrame.fromScene.name)
+        append(" to=").append(transitionFrame.toScene.name)
+        append(" back=").append(transitionFrame.isBack)
+        append(" activeHomeTransition=").append(activeHomeTransition)
+        append(" handoffFromHome=").append(routeHandoffFromHome)
+        append(" handoffToHome=").append(routeHandoffToHome)
+        append(" role=").append(sceneRole.name)
+        append(" unmount=").append(diagUnmount)
+    }
+    val diagLast = remember { arrayOfNulls<String>(1) }
+    SideEffect {
+        if (diagLast[0] != diagKey) {
+            diagLast[0] = diagKey
+            // progress 只作为这一条日志的现场快照，不参与触发判定。
+            val progress = "%.3f".format(transitionFrame.progress)
+            AppLogger.i("HomeChrome", "[DIAG] $diagKey progress=$progress")
+        }
+    }
+    if (diagUnmount) return
+    val registration = controller.registration() ?: return
+    val mainButtonsSurface by
+        PersonalizationPreferences.libraryBottomButtonsSurface.collectAsState()
     val sceneProgressProvider = remember(
         transitionFrame,
         routeHandoffFromHome,
