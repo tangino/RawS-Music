@@ -2059,7 +2059,25 @@ internal fun SceneTransitionHost(
                 // completes so progress=0 is pixel-identical to the settled source. Back/gesture
                 // motion already leaves displayedScene on the visible source until commit.
                 presentationScene = if (!persistentLibraryPresentationVisible) {
-                    persistentLibraryScene
+                    // 库→库的「返回」在提交之后仍有一段落定期：动画已在 SCENE_END 结束，
+                    // 但 frame.active 要到输入重新挂上才变 false（实测 ~650ms，
+                    // 见日志 08.634 SCENE_END displayed=HOME → 09.287 VISIBLE_CONTROLLER_ATTACH scene=HOME）。
+                    // 这段窗口里 persistentLibraryPresentationVisible 恰好是 false，
+                    // 而 persistentLibraryScene 偏好 fromScene（源），于是歌单页会继续以 alpha=1
+                    // 整页画着 —— 而顶部按钮是 Compose 层、已按新场景显示，
+                    // 表现为「按钮先回主界面、页面还停在歌单页」。
+                    // 返回方向 displayedScene 才是当前该画的那一页：提交前它等于源、提交后它等于目标。
+                    // 前进方向不能这样改 —— displayedScene 在首帧前就被提升成目标，
+                    // 那会破坏「动画结束前一直挂载源控制器」的既有语义。
+                    if (
+                        isBackTransition &&
+                        isPersistentHomeCategoryScene(fromScene) &&
+                        isPersistentHomeCategoryScene(displayedScene)
+                    ) {
+                        displayedScene
+                    } else {
+                        persistentLibraryScene
+                    }
                 } else if (mixedPersistentLibraryTransition) {
                     mixedPersistentLibraryScene
                 } else {
@@ -2071,7 +2089,15 @@ internal fun SceneTransitionHost(
                 },
                 presentationProviderIdentity = transitionProviderIdentity(
                     if (!persistentLibraryPresentationVisible) {
-                        persistentLibraryScene
+                        if (
+                            isBackTransition &&
+                            isPersistentHomeCategoryScene(fromScene) &&
+                            isPersistentHomeCategoryScene(displayedScene)
+                        ) {
+                            displayedScene
+                        } else {
+                            persistentLibraryScene
+                        }
                     } else if (mixedPersistentLibraryTransition) {
                         mixedPersistentLibraryScene
                     } else {
