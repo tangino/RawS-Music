@@ -108,6 +108,7 @@ enum class NavScene(
         ARTIST_ALL_SONGS,
         ARTIST_BIOGRAPHY,
         PLAYLIST_DETAIL,
+        PLAYLIST_DETAIL_PAGE,
         FOLDER_DETAIL,
         GENRE_DETAIL,
         YEAR_DETAIL,

@@ -47,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -71,8 +72,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.common.model.DISLIKED_PLAYLIST_ID
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.isOnlineSongKey
+import com.rawsmusic.core.common.model.playlistIdentityKey
 import com.rawsmusic.core.common.prefs.PlayedPlaylistEntry
 import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.core.common.ui.AppNoticeBus
@@ -82,6 +85,7 @@ import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListState
+import com.rawsmusic.core.ui.widget.virtuallist.LocalReferenceLibraryProviderPublicationOnly
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
 import com.rawsmusic.module.data.prefs.PlaylistStore
@@ -134,9 +138,37 @@ fun PlaylistScreen(
     val previousPlayedPlaylist by PlayedPlaylistManager.previousPlaylist.collectAsState()
 
     LaunchedEffect(Unit) {
+        // 避开进入歌单页面的转场动画黄金期（约 300ms），待转场落定后再异步刷新，避免连续重组打断动画引起卡顿
+        kotlinx.coroutines.delay(350)
         SongAttitudeRepository.refresh(context)
         PlaylistGroupStore.refresh(context)
         OnlinePlaylistFavoriteStore.refresh(context)
+    }
+
+    // 按需提取当前各歌单首曲所关心的 songId，避免在全量曲库（如数千首）上做无意义的 O(N) 遍历
+    val neededCoverSongIds = remember(playlists) {
+        val set = HashSet<Long>()
+        for (pl in playlists) {
+            pl.songs.firstOrNull()?.let { set.add(it.id) }
+        }
+        set
+    }
+    val songCoverMap = remember(allLibrarySongs, neededCoverSongIds) {
+        if (neededCoverSongIds.isEmpty()) {
+            emptyMap()
+        } else {
+            val map = HashMap<Long, String>(neededCoverSongIds.size)
+            for (song in allLibrarySongs) {
+                if (song.id in neededCoverSongIds) {
+                    val cover = song.coverKey.ifBlank { song.albumArtPath }
+                    if (cover.isNotBlank()) {
+                        map[song.id] = cover
+                    }
+                    if (map.size == neededCoverSongIds.size) break
+                }
+            }
+            map
+        }
     }
 
     // 弹窗状态
@@ -154,17 +186,26 @@ fun PlaylistScreen(
     val windowLayoutProfile = LocalRawWindowLayoutProfile.current
     val useTabletLayout = windowLayoutProfile.widthClass != com.rawsmusic.core.ui.scene.RawWindowWidthClass.Compact
 
-    // 喜欢与踩伪歌单
+    // 喜欢与踩伪歌单（列表展示仅按需提取轻量信息，不遍历全库歌曲生成完整内存实体）
     val favoriteKeyCount = remember(playlists, onlineFavoriteKeys) {
         val favPlaylistSongs = playlists.firstOrNull { it.isFavorites }?.songs?.size ?: 0
         maxOf(favPlaylistSongs, (playlistStore.favoriteSongKeys() + onlineFavoriteKeys).size)
     }
-    val attitudePlaylists = remember(playlists, dislikedKeys, allLibrarySongs) {
-        listOfNotNull(
-            attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys),
-            attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys),
-        )
+    val favPlaylistEntity = remember(playlists) { playlists.firstOrNull { it.isFavorites } }
+    val disPlaylistEntity = remember(playlists) { playlists.firstOrNull { it.id == DISLIKED_PLAYLIST_ID } }
+    val favFirstCover = remember(favPlaylistEntity, songCoverMap) {
+        favPlaylistEntity?.songs?.firstOrNull()?.let { s ->
+            s.albumArtPath.ifBlank { songCoverMap[s.id] }
+        }
     }
+    val disFirstCover = remember(disPlaylistEntity, dislikedKeys, allLibrarySongs, songCoverMap) {
+        disPlaylistEntity?.songs?.firstOrNull()?.let { s ->
+            s.albumArtPath.ifBlank { songCoverMap[s.id] }
+        } ?: allLibrarySongs.firstOrNull { it.playlistIdentityKey() in dislikedKeys }?.let { it.coverKey.ifBlank { it.albumArtPath } }
+    }
+    val favTitle = stringResource(R.string.playlist_attitude_favorites_title)
+    val disTitle = stringResource(R.string.playlist_attitude_disliked_title)
+
     val filteredLocalPlaylists = remember(playlists) { playlists.filterNot { it.isFavorites || it.isDisliked } }
     val allGroupNames = remember(playlistGroups) {
         playlistGroups.map { it.name }.ifEmpty { listOf(DEFAULT_PLAYLIST_GROUP) }
@@ -179,19 +220,23 @@ fun PlaylistScreen(
 
     // 二级分类导航 Chips 构造
     var selectedPlaylistGroup by remember { mutableStateOf("ALL") }
-    val localTotalCount = filteredLocalPlaylists.size + attitudePlaylists.size
+    val attitudeCardCount = 1 + (if (dislikedKeys.isNotEmpty()) 1 else 0)
+    val localTotalCount = filteredLocalPlaylists.size + attitudeCardCount
     val totalPlaylistsCount = localTotalCount + onlineFavorites.size
     val totalSongsCount = playlists.sumOf { it.songs.size } + onlineFavorites.sumOf { it.trackCount }
 
-    val filterCategories = remember(playlistGroups, filteredLocalPlaylists, onlineFavorites, localTotalCount, neteaseFavorites, qqFavorites, kugouFavorites, kuwoFavorites, miguFavorites) {
+    val filterCategories = remember(playlistGroups, filteredLocalPlaylists, onlineFavorites, localTotalCount, playlistGroupMap, neteaseFavorites.size, qqFavorites.size, kugouFavorites.size, kuwoFavorites.size, miguFavorites.size) {
         buildList {
             add(Triple("ALL", "全部", totalPlaylistsCount))
-            // 用户自定义分组
-            playlistGroups.forEach { grp ->
-                val count = filteredLocalPlaylists.count { playlistGroupMap[it.id] == grp.name } +
-                        onlineFavorites.count { it.groupName == grp.name }
-                if (count > 0) {
-                    add(Triple("GRP:${grp.name}", grp.name, count))
+            // 用户自定义分组：一次性分组聚合统计，避免 O(G * (N + M)) 嵌套遍历
+            if (playlistGroups.isNotEmpty() && (filteredLocalPlaylists.isNotEmpty() || onlineFavorites.isNotEmpty())) {
+                val localGroupCounts = filteredLocalPlaylists.groupingBy { playlistGroupMap[it.id] ?: DEFAULT_PLAYLIST_GROUP }.eachCount()
+                val onlineGroupCounts = onlineFavorites.groupingBy { it.groupName }.eachCount()
+                playlistGroups.forEach { grp ->
+                    val count = (localGroupCounts[grp.name] ?: 0) + (onlineGroupCounts[grp.name] ?: 0)
+                    if (count > 0) {
+                        add(Triple("GRP:${grp.name}", grp.name, count))
+                    }
                 }
             }
             if (localTotalCount > 0) {
@@ -217,6 +262,57 @@ fun PlaylistScreen(
 
     // 分组折叠状态：存储已折叠的 groupKey，如 "LOCAL", "NETEASE", "QQ" 等
     var collapsedGroups by remember { mutableStateOf(setOf<String>()) }
+
+    // 计算当前筛选下的本地与在线歌单集合（提到外层 remember 提升性能）
+    val targetCustomGroupName = if (selectedPlaylistGroup.startsWith("GRP:")) selectedPlaylistGroup.removePrefix("GRP:") else null
+    val currentLocalList = remember(filteredLocalPlaylists, selectedPlaylistGroup, targetCustomGroupName, playlistGroupMap) {
+        when {
+            targetCustomGroupName != null -> filteredLocalPlaylists.filter { (playlistGroupMap[it.id] ?: DEFAULT_PLAYLIST_GROUP) == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "LOCAL") -> filteredLocalPlaylists
+            else -> emptyList()
+        }
+    }
+    val showFavInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP)
+    val showDislikedInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP) && dislikedKeys.isNotEmpty()
+    val activeLocalCount = currentLocalList.size + (if (showFavInCurrent) 1 else 0) + (if (showDislikedInCurrent) 1 else 0)
+
+    val currentNeteaseList = remember(neteaseFavorites, selectedPlaylistGroup, targetCustomGroupName) {
+        when {
+            targetCustomGroupName != null -> neteaseFavorites.filter { it.groupName == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "NETEASE") -> neteaseFavorites
+            else -> emptyList()
+        }
+    }
+    val currentQqList = remember(qqFavorites, selectedPlaylistGroup, targetCustomGroupName) {
+        when {
+            targetCustomGroupName != null -> qqFavorites.filter { it.groupName == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "QQ") -> qqFavorites
+            else -> emptyList()
+        }
+    }
+    val currentKugouList = remember(kugouFavorites, selectedPlaylistGroup, targetCustomGroupName) {
+        when {
+            targetCustomGroupName != null -> kugouFavorites.filter { it.groupName == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "KUGOU") -> kugouFavorites
+            else -> emptyList()
+        }
+    }
+    val currentKuwoList = remember(kuwoFavorites, selectedPlaylistGroup, targetCustomGroupName) {
+        when {
+            targetCustomGroupName != null -> kuwoFavorites.filter { it.groupName == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "KUWO") -> kuwoFavorites
+            else -> emptyList()
+        }
+    }
+    val currentMiguList = remember(miguFavorites, selectedPlaylistGroup, targetCustomGroupName) {
+        when {
+            targetCustomGroupName != null -> miguFavorites.filter { it.groupName == targetCustomGroupName }
+            selectedPlaylistGroup in listOf("ALL", "MIGU") -> miguFavorites
+            else -> emptyList()
+        }
+    }
+
+    val currentTotalVisible = activeLocalCount + currentNeteaseList.size + currentQqList.size + currentKugouList.size + currentKuwoList.size + currentMiguList.size
 
     // 顶栏右侧快捷操作
     val headerTrailingAction: @Composable () -> Unit = {
@@ -284,6 +380,9 @@ fun PlaylistScreen(
         virtualListState = virtualListState,
         contentOverlap = 0.dp
     ) { topPadding, backdropSource ->
+        // 在预准备（Preflight）阶段直接短路退出，不创建重型列表与分组组件树
+        if (LocalReferenceLibraryProviderPublicationOnly.current) return@LibraryListScaffold
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -303,59 +402,6 @@ fun PlaylistScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
-
-            // ==========================================
-            // 计算当前筛选下的本地与在线歌单集合
-            // ==========================================
-            val targetCustomGroupName = if (selectedPlaylistGroup.startsWith("GRP:")) selectedPlaylistGroup.removePrefix("GRP:") else null
-            val currentLocalList = remember(filteredLocalPlaylists, selectedPlaylistGroup, targetCustomGroupName, playlistGroupMap) {
-                when {
-                    targetCustomGroupName != null -> filteredLocalPlaylists.filter { (playlistGroupMap[it.id] ?: DEFAULT_PLAYLIST_GROUP) == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "LOCAL") -> filteredLocalPlaylists
-                    else -> emptyList()
-                }
-            }
-            val showFavInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP)
-            val showDislikedInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP) && dislikedKeys.isNotEmpty()
-            val activeLocalCount = currentLocalList.size + (if (showFavInCurrent) 1 else 0) + (if (showDislikedInCurrent) 1 else 0)
-
-            val currentNeteaseList = remember(neteaseFavorites, selectedPlaylistGroup, targetCustomGroupName) {
-                when {
-                    targetCustomGroupName != null -> neteaseFavorites.filter { it.groupName == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "NETEASE") -> neteaseFavorites
-                    else -> emptyList()
-                }
-            }
-            val currentQqList = remember(qqFavorites, selectedPlaylistGroup, targetCustomGroupName) {
-                when {
-                    targetCustomGroupName != null -> qqFavorites.filter { it.groupName == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "QQ") -> qqFavorites
-                    else -> emptyList()
-                }
-            }
-            val currentKugouList = remember(kugouFavorites, selectedPlaylistGroup, targetCustomGroupName) {
-                when {
-                    targetCustomGroupName != null -> kugouFavorites.filter { it.groupName == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "KUGOU") -> kugouFavorites
-                    else -> emptyList()
-                }
-            }
-            val currentKuwoList = remember(kuwoFavorites, selectedPlaylistGroup, targetCustomGroupName) {
-                when {
-                    targetCustomGroupName != null -> kuwoFavorites.filter { it.groupName == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "KUWO") -> kuwoFavorites
-                    else -> emptyList()
-                }
-            }
-            val currentMiguList = remember(miguFavorites, selectedPlaylistGroup, targetCustomGroupName) {
-                when {
-                    targetCustomGroupName != null -> miguFavorites.filter { it.groupName == targetCustomGroupName }
-                    selectedPlaylistGroup in listOf("ALL", "MIGU") -> miguFavorites
-                    else -> emptyList()
-                }
-            }
-
-            val currentTotalVisible = activeLocalCount + currentNeteaseList.size + currentQqList.size + currentKugouList.size + currentKuwoList.size + currentMiguList.size
 
             if (currentTotalVisible == 0) {
                 // 空状态
@@ -413,63 +459,65 @@ fun PlaylistScreen(
                         }
 
                         if (!isLocalCollapsed) {
-                            val favPlaylist = attitudePlaylists.firstOrNull { it.id == ATTITUDE_FAVORITES_PLAYLIST_ID }
-                            val disPlaylist = attitudePlaylists.firstOrNull { it.id == ATTITUDE_DISLIKED_PLAYLIST_ID }
-
-                            val favFirstCover = favPlaylist?.songs?.firstOrNull()?.let { s ->
-                                s.albumArtPath.ifBlank { allLibrarySongs.find { it.id == s.id }?.coverKey }
-                            }
-                            val disFirstCover = disPlaylist?.songs?.firstOrNull()?.let { s ->
-                                s.albumArtPath.ifBlank { allLibrarySongs.find { it.id == s.id }?.coverKey }
-                            }
-
                             if (useTabletLayout) {
                                 // 平板模式：伪歌单并排，自建歌单 chunked(2)
-                                if (showFavInCurrent && showDislikedInCurrent && favPlaylist != null && disPlaylist != null) {
+                                if (showFavInCurrent && showDislikedInCurrent) {
                                     item(key = "attitude_dual") {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
                                             FavoritePlaylistItemCard(
-                                                title = favPlaylist.name,
+                                                title = favTitle,
                                                 songCount = favoriteKeyCount,
                                                 coverKey = favFirstCover,
-                                                onClick = { onPlaylistClick(favPlaylist.id, favPlaylist.name) },
-                                                onPlayAll = { onPlayLocalPlaylist(favPlaylist) },
+                                                onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
+                                                onPlayAll = {
+                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
+                                                    if (pl != null) onPlayLocalPlaylist(pl)
+                                                },
                                                 modifier = Modifier.weight(1f)
                                             )
                                             DislikedPlaylistItemCard(
-                                                title = disPlaylist.name,
+                                                title = disTitle,
                                                 songCount = dislikedKeys.size,
                                                 coverKey = disFirstCover,
-                                                onClick = { onPlaylistClick(disPlaylist.id, disPlaylist.name) },
-                                                onPlayAll = { onPlayLocalPlaylist(disPlaylist) },
+                                                onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
+                                                onPlayAll = {
+                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
+                                                    if (pl != null) onPlayLocalPlaylist(pl)
+                                                },
                                                 modifier = Modifier.weight(1f)
                                             )
                                         }
                                     }
                                 } else {
-                                    if (showFavInCurrent && favPlaylist != null) {
+                                    if (showFavInCurrent) {
                                         item(key = "attitude_fav") {
                                             FavoritePlaylistItemCard(
-                                                title = favPlaylist.name,
+                                                title = favTitle,
                                                 songCount = favoriteKeyCount,
                                                 coverKey = favFirstCover,
-                                                onClick = { onPlaylistClick(favPlaylist.id, favPlaylist.name) },
-                                                onPlayAll = { onPlayLocalPlaylist(favPlaylist) },
+                                                onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
+                                                onPlayAll = {
+                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
+                                                    if (pl != null) onPlayLocalPlaylist(pl)
+                                                },
                                                 modifier = Modifier.fillMaxWidth()
                                             )
                                         }
                                     }
-                                    if (showDislikedInCurrent && disPlaylist != null) {
+                                    if (showDislikedInCurrent) {
                                         item(key = "attitude_dis") {
                                             DislikedPlaylistItemCard(
-                                                title = disPlaylist.name,
+                                                title = disTitle,
                                                 songCount = dislikedKeys.size,
                                                 coverKey = disFirstCover,
-                                                onClick = { onPlaylistClick(disPlaylist.id, disPlaylist.name) },
-                                                onPlayAll = { onPlayLocalPlaylist(disPlaylist) },
+                                                onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
+                                                onPlayAll = {
+                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
+                                                    if (pl != null) onPlayLocalPlaylist(pl)
+                                                },
                                                 modifier = Modifier.fillMaxWidth()
                                             )
                                         }
@@ -487,7 +535,7 @@ fun PlaylistScreen(
                                         LocalPlaylistItemCard(
                                             playlist = p1,
                                             groupName = g1,
-                                            librarySongs = allLibrarySongs,
+                                            songCoverMap = songCoverMap,
                                             onClick = { onPlaylistClick(p1.id, p1.name) },
                                             onPlay = { onPlayLocalPlaylist(p1) },
                                             onRename = { renameTarget = p1 },
@@ -502,7 +550,7 @@ fun PlaylistScreen(
                                             LocalPlaylistItemCard(
                                                 playlist = p2,
                                                 groupName = g2,
-                                                librarySongs = allLibrarySongs,
+                                                songCoverMap = songCoverMap,
                                                 onClick = { onPlaylistClick(p2.id, p2.name) },
                                                 onPlay = { onPlayLocalPlaylist(p2) },
                                                 onRename = { renameTarget = p2 },
@@ -518,26 +566,32 @@ fun PlaylistScreen(
                                 }
                             } else {
                                 // 手机模式：单列纵向排列
-                                if (showFavInCurrent && favPlaylist != null) {
+                                if (showFavInCurrent) {
                                     item(key = "local_fav") {
                                         FavoritePlaylistItemCard(
-                                            title = favPlaylist.name,
+                                            title = favTitle,
                                             songCount = favoriteKeyCount,
                                             coverKey = favFirstCover,
-                                            onClick = { onPlaylistClick(favPlaylist.id, favPlaylist.name) },
-                                            onPlayAll = { onPlayLocalPlaylist(favPlaylist) },
+                                            onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
+                                            onPlayAll = {
+                                                val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
+                                                if (pl != null) onPlayLocalPlaylist(pl)
+                                            },
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                     }
                                 }
-                                if (showDislikedInCurrent && disPlaylist != null) {
+                                if (showDislikedInCurrent) {
                                     item(key = "local_dis") {
                                         DislikedPlaylistItemCard(
-                                            title = disPlaylist.name,
+                                            title = disTitle,
                                             songCount = dislikedKeys.size,
                                             coverKey = disFirstCover,
-                                            onClick = { onPlaylistClick(disPlaylist.id, disPlaylist.name) },
-                                            onPlayAll = { onPlayLocalPlaylist(disPlaylist) },
+                                            onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
+                                            onPlayAll = {
+                                                val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
+                                                if (pl != null) onPlayLocalPlaylist(pl)
+                                            },
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                     }
@@ -547,7 +601,7 @@ fun PlaylistScreen(
                                     LocalPlaylistItemCard(
                                         playlist = playlist,
                                         groupName = group,
-                                        librarySongs = allLibrarySongs,
+                                        songCoverMap = songCoverMap,
                                         onClick = { onPlaylistClick(playlist.id, playlist.name) },
                                         onPlay = { onPlayLocalPlaylist(playlist) },
                                         onRename = { renameTarget = playlist },
@@ -1534,7 +1588,7 @@ private fun DislikedPlaylistItemCard(
 private fun LocalPlaylistItemCard(
     playlist: UserPlaylist,
     groupName: String,
-    librarySongs: List<AudioFile>,
+    songCoverMap: Map<Long, String>,
     onClick: () -> Unit,
     onPlay: () -> Unit,
     onRename: () -> Unit,
@@ -1546,13 +1600,11 @@ private fun LocalPlaylistItemCard(
     val colors = themeColors()
     var showMenu by remember { mutableStateOf(false) }
 
-    val firstCover = remember(playlist, librarySongs) {
+    val firstCover = remember(playlist.coverUrl, playlist.songs.firstOrNull(), songCoverMap) {
         val customCover = playlist.coverUrl?.takeIf { it.isNotBlank() }
         if (customCover != null) return@remember customCover
-        val firstSong = playlist.songs.firstOrNull()
-        if (firstSong != null) {
-            firstSong.albumArtPath.ifBlank { librarySongs.find { it.id == firstSong.id }?.coverKey }
-        } else null
+        val firstSong = playlist.songs.firstOrNull() ?: return@remember null
+        firstSong.albumArtPath.ifBlank { songCoverMap[firstSong.id] }
     }
 
     val totalCount = playlist.songs.size
@@ -1700,51 +1752,53 @@ private fun LocalPlaylistItemCard(
                     modifier = Modifier.size(18.dp)
                 )
             }
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false },
-                modifier = Modifier.background(colors.surface)
-            ) {
-                DropdownMenuItem(
-                    text = { Text("设置分组", color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onSetGroup()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_folder_2_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("导出歌单", color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onExport()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_playlist_export), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.playlist_rename), color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onRename()
-                    },
-                    leadingIcon = {
-                        Icon(Icons.Default.Edit, contentDescription = null, tint = colors.onSurface.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.playlist_delete_title), color = Color(0xFFEF4444), fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onDelete()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_delete_bin_6_fill), contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
-                    }
-                )
+            if (showMenu) {
+                DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(colors.surface)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("设置分组", color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onSetGroup()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_folder_2_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("导出歌单", color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onExport()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_playlist_export), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.playlist_rename), color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onRename()
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.Edit, contentDescription = null, tint = colors.onSurface.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.playlist_delete_title), color = Color(0xFFEF4444), fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_delete_bin_6_fill), contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                        }
+                    )
+                }
             }
         }
     }
@@ -1909,51 +1963,53 @@ private fun OnlinePlaylistItemCard(
                     modifier = Modifier.size(18.dp)
                 )
             }
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false },
-                modifier = Modifier.background(colors.surface)
-            ) {
-                DropdownMenuItem(
-                    text = { Text("设置分组", color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onSetGroup()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_folder_2_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("查看歌单详情", color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onShowDetail()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_play_list_fill), contentDescription = null, tint = colors.onSurface.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("导入为本地歌单", color = colors.onSurface, fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onImportToLocal()
-                    },
-                    leadingIcon = {
-                        Icon(painter = painterResource(R.drawable.ic_play_list_add_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("取消收藏", color = Color(0xFFEF4444), fontFamily = appFontFamily()) },
-                    onClick = {
-                        showMenu = false
-                        onRemoveFavorite()
-                    },
-                    leadingIcon = {
-                        Icon(imageVector = Icons.Default.FavoriteBorder, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
-                    }
-                )
+            if (showMenu) {
+                DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(colors.surface)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("设置分组", color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onSetGroup()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_folder_2_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("查看歌单详情", color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onShowDetail()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_play_list_fill), contentDescription = null, tint = colors.onSurface.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("导入为本地歌单", color = colors.onSurface, fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onImportToLocal()
+                        },
+                        leadingIcon = {
+                            Icon(painter = painterResource(R.drawable.ic_play_list_add_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(18.dp))
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("取消收藏", color = Color(0xFFEF4444), fontFamily = appFontFamily()) },
+                        onClick = {
+                            showMenu = false
+                            onRemoveFavorite()
+                        },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Default.FavoriteBorder, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                        }
+                    )
+                }
             }
         }
     }

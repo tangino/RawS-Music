@@ -231,7 +231,19 @@ internal val LocalReferenceLibraryBodyRender = staticCompositionLocalOf { false 
  * body. This is the Compose equivalent of Reference binding the destination adapter before the
  * GenericPivot layout starts.
  */
-internal val LocalReferenceLibraryProviderPublicationOnly = staticCompositionLocalOf { false }
+/**
+ * True only for the transient destination-preparation composition. The page/controller is allowed
+ * to publish its provider identity and callbacks, but must not create a second physical VirtualList
+ * body. This is the Compose equivalent of Reference binding the destination adapter before the
+ * GenericPivot layout starts.
+ *
+ * 公开（非 `internal`）是因为 **`:app` 的歌单页也要用同一套预准备短路**：
+ * `PlaylistScreen.kt` 在 `LibraryListScaffold` 的 content 里同样写了
+ * `if (LocalReferenceLibraryProviderPublicationOnly.current) return@LibraryListScaffold`，
+ * 与 `SongsPage` / `AlbumsPage` / `FoldersPage` 等库页面保持一致 —— 否则歌单页会在预准备阶段
+ * 就构建重型分组/列表组件树。`core:ui` 无法反向依赖 `:app`，所以只能放开可见性。
+ */
+val LocalReferenceLibraryProviderPublicationOnly = staticCompositionLocalOf { false }
 
 /** Previous provider/layout snapshot consumed by the one ComposeVirtualList body during GenericPivot. */
 internal val LocalReferenceRetainedVirtualListProvider =
