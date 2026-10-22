@@ -699,7 +699,20 @@ class PlayerSceneController {
 
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     if (sceneAnimator === animation) sceneAnimator = null
-                    if (cancelled || sceneAnimGeneration != gen) return
+                    if (sceneAnimGeneration != gen) return
+                    if (cancelled) {
+                        // 被取消时必须复位过渡标志，**与 settleScene（:938-950）保持一致**。
+                        // 原先这里直接 return，于是任何一次被取消的 sheet 收起动画
+                        // （拖动被中断、配置变化、beginMainPlayerSheetDrag 取消上一个 animator 等）
+                        // 都会让 isTransitioning 永久为 true —— 随后 MainActivity 的 fallback
+                        // 返回分支会一直静默 return，表现为「返回手势被吞掉、要返回两次」。
+                        // 注意：这里**不能**把 currentScene 改成 targetScene —— 目标并没有到达。
+                        isTransitioning = false
+                        composeIsTransitioning = false
+                        composeIsInteractiveGesture = false
+                        mainPlayerSheetDragActive = false
+                        return
+                    }
                     currentScene = targetScene
                     composeCurrentScene = targetScene
                     transitionRatio = 0f
