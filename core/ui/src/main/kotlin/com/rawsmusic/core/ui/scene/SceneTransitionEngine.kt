@@ -2161,7 +2161,23 @@ internal fun SceneTransitionHost(
                                 alpha = 0f
                                 return@graphicsLayer
                             }
-                            if (!mixedPersistentLibraryTransition) return@graphicsLayer
+                            if (!mixedPersistentLibraryTransition) {
+                                // 库→库（HOME ↔ 歌单/歌曲/专辑/队列…）：这一层是持久 ViewGroup，
+                                // 原先在这里直接 return@graphicsLayer —— **过渡期间完全没有 alpha 动画**。
+                                // 而它 zIndex(20f) 压在最上面，目标页只会在这层下面按 progress 淡入，
+                                // 于是整个过渡期间用户看到的仍是**不透明、纹丝不动的源页**，
+                                // 直到动画结束才瞬间换掉。这正是"顶部按钮已经切过去/回来了，
+                                // 页面还整页停在原处"的直接原因（与内容换页延迟是两回事）。
+                                // 修法：作为「源」时让它跟着进度淡出 —— 与顶栏（EXIT = 1 - progress）、
+                                // 与 SceneContent 的 currentAlpha 用同一条曲线，三层同拍。
+                                // 过渡期间这一层必然是源（前进时 presentationScene 被钉在 fromScene；
+                                // 返回时 displayedScene 在提交前仍等于源），所以无需再区分方向。
+                                if (inTransition) {
+                                    val p = sceneFrameProgressProvider().coerceIn(0f, 1f)
+                                    alpha = (1f - p).coerceIn(0f, 1f)
+                                }
+                                return@graphicsLayer
+                            }
                             val frameProgress = sceneFrameProgressProvider()
                             val motion = pageMotion
                             val transform = pageTransforms(
