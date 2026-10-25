@@ -94,6 +94,7 @@ uapp_java_reference/
 uapp_strings/
 radare2-master/
 frida/
+RawS-Music/
 build_log.txt
 cmake_error.txt
 cmake_error2.txt
@@ -112,3 +113,7 @@ app/src/main/cpp/reference/
 app/src/main/cpp/*.diff
 nul
 trim.ps1
+
+
+*.png
+*.qcow2

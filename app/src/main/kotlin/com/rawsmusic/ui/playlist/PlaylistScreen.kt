@@ -22,9 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -62,6 +59,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -84,8 +82,14 @@ import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualList
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListState
 import com.rawsmusic.core.ui.widget.virtuallist.LocalReferenceLibraryProviderPublicationOnly
+import com.rawsmusic.core.ui.widget.virtuallist.LocalVirtualListCustomProvider
+import com.rawsmusic.core.ui.widget.virtuallist.VirtualListCustomProvider
+import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
 import com.rawsmusic.module.data.prefs.PlaylistStore
@@ -138,11 +142,11 @@ fun PlaylistScreen(
     val previousPlayedPlaylist by PlayedPlaylistManager.previousPlaylist.collectAsState()
 
     LaunchedEffect(Unit) {
-        // 避开进入歌单页面的转场动画黄金期（约 300ms），待转场落定后再异步刷新，避免连续重组打断动画引起卡顿
-        kotlinx.coroutines.delay(350)
-        SongAttitudeRepository.refresh(context)
-        PlaylistGroupStore.refresh(context)
-        OnlinePlaylistFavoriteStore.refresh(context)
+        withContext(Dispatchers.IO) {
+            SongAttitudeRepository.refresh(context)
+            PlaylistGroupStore.refresh(context)
+            OnlinePlaylistFavoriteStore.refresh(context)
+        }
     }
 
     // 按需提取当前各歌单首曲所关心的 songId，避免在全量曲库（如数千首）上做无意义的 O(N) 遍历
@@ -367,73 +371,161 @@ fun PlaylistScreen(
         }
     }
 
-    val listState = rememberLazyListState()
+    val listState = virtualListState ?: rememberComposeVirtualListState("playlists")
 
-    LibraryListScaffold(
-        title = stringResource(com.rawsmusic.core.ui.R.string.library_title_playlists),
-        sceneId = NavScene.PLAYLISTS.name,
-        statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_playlists, totalPlaylistsCount, totalSongsCount),
-        onBack = onBack,
-        onCreatePlaylist = { createDialog = true },
-        onImportPlaylist = { importDialog = true },
-        headerTrailingContent = headerTrailingAction,
-        virtualListState = virtualListState,
-        contentOverlap = 0.dp
-    ) { topPadding, backdropSource ->
-        // 在预准备（Preflight）阶段直接短路退出，不创建重型列表与分组组件树
-        if (LocalReferenceLibraryProviderPublicationOnly.current) return@LibraryListScaffold
+    // 构建虚拟条目模型
+    val virtualRows = remember(
+        activeLocalCount,
+        collapsedGroups,
+        useTabletLayout,
+        showFavInCurrent,
+        showDislikedInCurrent,
+        currentLocalList,
+        selectedPlaylistGroup,
+        currentNeteaseList,
+        currentQqList,
+        currentKugouList,
+        currentKuwoList,
+        currentMiguList,
+    ) {
+        buildList<PlaylistVirtualItem> {
+            // 1. 本地歌单
+            if (activeLocalCount > 0) {
+                val isLocalCollapsed = collapsedGroups.contains("LOCAL")
+                add(PlaylistVirtualItem.LocalSectionHeader(activeLocalCount, isLocalCollapsed))
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .then(backdropSource)
-                .padding(top = topPadding)
-        ) {
-            // ==========================================
-            // 优雅二级分类过滤导航条 (Chip 轨道)
-            // ==========================================
-            PlaylistCategoryChipsBar(
-                categories = filterCategories,
-                selectedCategory = selectedPlaylistGroup,
-                onSelectCategory = { selectedPlaylistGroup = it },
-                onCreateGroup = { groupChrome.createGroupDialog = true },
-                onManageGroups = { groupChrome.groupMenuTarget = allGroupNames.firstOrNull() ?: DEFAULT_PLAYLIST_GROUP },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                if (!isLocalCollapsed) {
+                    if (useTabletLayout) {
+                        if (showFavInCurrent && showDislikedInCurrent) {
+                            add(PlaylistVirtualItem.AttitudeRow(showFav = true, showDisliked = true, isDualTablet = true))
+                        } else {
+                            if (showFavInCurrent) add(PlaylistVirtualItem.AttitudeRow(showFav = true, showDisliked = false, isDualTablet = false))
+                            if (showDislikedInCurrent) add(PlaylistVirtualItem.AttitudeRow(showFav = false, showDisliked = true, isDualTablet = false))
+                        }
+                        currentLocalList.chunked(2).forEach { chunk ->
+                            add(PlaylistVirtualItem.LocalPlaylistRow(chunk))
+                        }
+                    } else {
+                        if (showFavInCurrent) add(PlaylistVirtualItem.AttitudeRow(showFav = true, showDisliked = false, isDualTablet = false))
+                        if (showDislikedInCurrent) add(PlaylistVirtualItem.AttitudeRow(showFav = false, showDisliked = true, isDualTablet = false))
+                        currentLocalList.forEach { pl ->
+                            add(PlaylistVirtualItem.LocalPlaylistRow(listOf(pl)))
+                        }
+                    }
+                }
+            }
+
+            // 2. 各平台在线收藏歌单
+            val platformsWithFavorites = listOf(
+                Triple(OnlinePlatform.NETEASE, currentNeteaseList, Color(0xFFE60026)),
+                Triple(OnlinePlatform.QQ, currentQqList, Color(0xFF1ECF96)),
+                Triple(OnlinePlatform.KUGOU, currentKugouList, Color(0xFF0088FF)),
+                Triple(OnlinePlatform.KUWO, currentKuwoList, Color(0xFFFF9500)),
+                Triple(OnlinePlatform.MIGU, currentMiguList, Color(0xFFE91E63))
             )
 
-            if (currentTotalVisible == 0) {
-                // 空状态
-                PlaylistEmptyView(
-                    selectedGroup = selectedPlaylistGroup,
-                    customGroupName = targetCustomGroupName,
-                    onCreatePlaylist = { createDialog = true },
-                    onImportPlaylist = { importDialog = true },
-                    onNavigateToSquare = { onNavigateToOnlineSquare(OnlinePlatform.NETEASE) },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                LazyColumn(
-                    state = listState,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    // ==========================================
-                    // 1. 本地歌单列表 (LOCAL PLAYLISTS)
-                    // ==========================================
-                    if (activeLocalCount > 0) {
-                        val isLocalCollapsed = collapsedGroups.contains("LOCAL")
+            platformsWithFavorites.forEach { (platform, favList, brandColor) ->
+                val groupKey = platform.name.uppercase()
+                val shouldRenderPlatform = (selectedPlaylistGroup == "ALL" && favList.isNotEmpty()) ||
+                        (selectedPlaylistGroup == groupKey) ||
+                        (selectedPlaylistGroup.startsWith("GRP:") && favList.isNotEmpty())
 
-                        item(key = "header_local") {
+                if (shouldRenderPlatform && favList.isNotEmpty()) {
+                    val isPlatformCollapsed = collapsedGroups.contains(groupKey)
+                    val platformDisplayName = when (platform) {
+                        OnlinePlatform.NETEASE -> "网易云音乐"
+                        OnlinePlatform.QQ -> "QQ 音乐"
+                        OnlinePlatform.KUGOU -> "酷狗音乐"
+                        OnlinePlatform.KUWO -> "酷我音乐"
+                        OnlinePlatform.MIGU -> "咪咕音乐"
+                    }
+                    add(
+                        PlaylistVirtualItem.OnlineSectionHeader(
+                            platform = platform,
+                            displayName = platformDisplayName,
+                            count = favList.size,
+                            brandColor = brandColor,
+                            isCollapsed = isPlatformCollapsed,
+                        )
+                    )
+
+                    if (!isPlatformCollapsed) {
+                        if (useTabletLayout) {
+                            favList.chunked(2).forEach { chunk ->
+                                add(PlaylistVirtualItem.OnlinePlaylistRow(platform, brandColor, chunk))
+                            }
+                        } else {
+                            favList.forEach { entity ->
+                                add(PlaylistVirtualItem.OnlinePlaylistRow(platform, brandColor, listOf(entity)))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    val playlistVirtualSongs = remember(virtualRows) {
+        virtualRows.mapIndexed { index, item ->
+            val identity = when (item) {
+                is PlaylistVirtualItem.LocalSectionHeader -> 1000000L + item.count * 31L + if (item.isCollapsed) 1L else 0L
+                is PlaylistVirtualItem.AttitudeRow -> 2000000L + if (item.showFav) 10L else 0L + if (item.showDisliked) 1L else 0L
+                is PlaylistVirtualItem.LocalPlaylistRow -> 3000000L + item.playlists.fold(17L) { acc, pl -> acc * 31L + pl.id.hashCode() }
+                is PlaylistVirtualItem.OnlineSectionHeader -> 4000000L + item.platform.name.hashCode() * 31L + if (item.isCollapsed) 1L else 0L
+                is PlaylistVirtualItem.OnlinePlaylistRow -> 5000000L + item.entities.fold(17L) { acc, e -> acc * 31L + e.remoteId.hashCode() }
+            }
+            AudioFile(
+                id = Long.MIN_VALUE / 4L + identity,
+                title = "Playlist virtual row $index",
+                encodingFormat = "$PLAYLIST_VIRTUAL_ITEM_PREFIX$index",
+            )
+        }
+    }
+
+    val playlistCustomProvider = remember(
+        virtualRows,
+        useTabletLayout,
+        collapsedGroups,
+        colors,
+        songCoverMap,
+        playlistGroupMap,
+        favTitle,
+        favoriteKeyCount,
+        favFirstCover,
+        disTitle,
+        dislikedKeys,
+        disFirstCover,
+    ) {
+        VirtualListCustomProvider(
+            itemHeight = { song, index ->
+                val rowIndex = song.encodingFormat.removePrefix(PLAYLIST_VIRTUAL_ITEM_PREFIX).toIntOrNull() ?: index
+                when (virtualRows.getOrNull(rowIndex)) {
+                    is PlaylistVirtualItem.LocalSectionHeader,
+                    is PlaylistVirtualItem.OnlineSectionHeader -> 44.dp
+                    is PlaylistVirtualItem.AttitudeRow,
+                    is PlaylistVirtualItem.LocalPlaylistRow,
+                    is PlaylistVirtualItem.OnlinePlaylistRow -> 88.dp
+                    null -> null
+                }
+            },
+            handles = { song, _ -> song.encodingFormat.startsWith(PLAYLIST_VIRTUAL_ITEM_PREFIX) },
+            content = { song, index, modifier ->
+                val rowIndex = song.encodingFormat.removePrefix(PLAYLIST_VIRTUAL_ITEM_PREFIX).toIntOrNull() ?: index
+                val item = virtualRows.getOrNull(rowIndex) ?: return@VirtualListCustomProvider
+                Box(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 5.dp)
+                ) {
+                    when (item) {
+                        is PlaylistVirtualItem.LocalSectionHeader -> {
                             PlaylistSectionHeader(
                                 title = "本地歌单",
-                                count = activeLocalCount,
+                                count = item.count,
                                 accentColor = colors.primary,
-                                isCollapsed = isLocalCollapsed,
+                                isCollapsed = item.isCollapsed,
                                 onToggleCollapse = {
-                                    collapsedGroups = if (isLocalCollapsed) collapsedGroups - "LOCAL" else collapsedGroups + "LOCAL"
+                                    collapsedGroups = if (item.isCollapsed) collapsedGroups - "LOCAL" else collapsedGroups + "LOCAL"
                                 },
                                 actionContent = {
                                     TextButton(
@@ -457,289 +549,285 @@ fun PlaylistScreen(
                                 }
                             )
                         }
-
-                        if (!isLocalCollapsed) {
-                            if (useTabletLayout) {
-                                // 平板模式：伪歌单并排，自建歌单 chunked(2)
-                                if (showFavInCurrent && showDislikedInCurrent) {
-                                    item(key = "attitude_dual") {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            FavoritePlaylistItemCard(
-                                                title = favTitle,
-                                                songCount = favoriteKeyCount,
-                                                coverKey = favFirstCover,
-                                                onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
-                                                onPlayAll = {
-                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
-                                                    if (pl != null) onPlayLocalPlaylist(pl)
-                                                },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            DislikedPlaylistItemCard(
-                                                title = disTitle,
-                                                songCount = dislikedKeys.size,
-                                                coverKey = disFirstCover,
-                                                onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
-                                                onPlayAll = {
-                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
-                                                    if (pl != null) onPlayLocalPlaylist(pl)
-                                                },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    if (showFavInCurrent) {
-                                        item(key = "attitude_fav") {
-                                            FavoritePlaylistItemCard(
-                                                title = favTitle,
-                                                songCount = favoriteKeyCount,
-                                                coverKey = favFirstCover,
-                                                onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
-                                                onPlayAll = {
-                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
-                                                    if (pl != null) onPlayLocalPlaylist(pl)
-                                                },
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                    }
-                                    if (showDislikedInCurrent) {
-                                        item(key = "attitude_dis") {
-                                            DislikedPlaylistItemCard(
-                                                title = disTitle,
-                                                songCount = dislikedKeys.size,
-                                                coverKey = disFirstCover,
-                                                onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
-                                                onPlayAll = {
-                                                    val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
-                                                    if (pl != null) onPlayLocalPlaylist(pl)
-                                                },
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                    }
+                        is PlaylistVirtualItem.AttitudeRow -> {
+                            if (item.isDualTablet) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    FavoritePlaylistItemCard(
+                                        title = favTitle,
+                                        songCount = favoriteKeyCount,
+                                        coverKey = favFirstCover,
+                                        onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
+                                        onPlayAll = {
+                                            val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
+                                            if (pl != null) onPlayLocalPlaylist(pl)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    DislikedPlaylistItemCard(
+                                        title = disTitle,
+                                        songCount = dislikedKeys.size,
+                                        coverKey = disFirstCover,
+                                        onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
+                                        onPlayAll = {
+                                            val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
+                                            if (pl != null) onPlayLocalPlaylist(pl)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
                                 }
-
-                                val chunks = currentLocalList.chunked(2)
-                                items(chunks, key = { chunk -> "local_chunk_${chunk.joinToString("_") { it.id }}" }) { pair ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        val p1 = pair[0]
-                                        val g1 = playlistGroupMap[p1.id] ?: DEFAULT_PLAYLIST_GROUP
+                            } else if (item.showFav) {
+                                FavoritePlaylistItemCard(
+                                    title = favTitle,
+                                    songCount = favoriteKeyCount,
+                                    coverKey = favFirstCover,
+                                    onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
+                                    onPlayAll = {
+                                        val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
+                                        if (pl != null) onPlayLocalPlaylist(pl)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else if (item.showDisliked) {
+                                DislikedPlaylistItemCard(
+                                    title = disTitle,
+                                    songCount = dislikedKeys.size,
+                                    coverKey = disFirstCover,
+                                    onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
+                                    onPlayAll = {
+                                        val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
+                                        if (pl != null) onPlayLocalPlaylist(pl)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        is PlaylistVirtualItem.LocalPlaylistRow -> {
+                            if (useTabletLayout) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    val p1 = item.playlists[0]
+                                    val g1 = playlistGroupMap[p1.id] ?: DEFAULT_PLAYLIST_GROUP
+                                    LocalPlaylistItemCard(
+                                        playlist = p1,
+                                        groupName = g1,
+                                        songCoverMap = songCoverMap,
+                                        onClick = { onPlaylistClick(p1.id, p1.name) },
+                                        onPlay = { onPlayLocalPlaylist(p1) },
+                                        onRename = { renameTarget = p1 },
+                                        onDelete = { deleteTarget = p1 },
+                                        onExport = { exportTargetPlaylist = p1 },
+                                        onSetGroup = { groupChrome.moveToGroupTarget = p1 },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (item.playlists.size > 1) {
+                                        val p2 = item.playlists[1]
+                                        val g2 = playlistGroupMap[p2.id] ?: DEFAULT_PLAYLIST_GROUP
                                         LocalPlaylistItemCard(
-                                            playlist = p1,
-                                            groupName = g1,
+                                            playlist = p2,
+                                            groupName = g2,
                                             songCoverMap = songCoverMap,
-                                            onClick = { onPlaylistClick(p1.id, p1.name) },
-                                            onPlay = { onPlayLocalPlaylist(p1) },
-                                            onRename = { renameTarget = p1 },
-                                            onDelete = { deleteTarget = p1 },
-                                            onExport = { exportTargetPlaylist = p1 },
-                                            onSetGroup = { groupChrome.moveToGroupTarget = p1 },
+                                            onClick = { onPlaylistClick(p2.id, p2.name) },
+                                            onPlay = { onPlayLocalPlaylist(p2) },
+                                            onRename = { renameTarget = p2 },
+                                            onDelete = { deleteTarget = p2 },
+                                            onExport = { exportTargetPlaylist = p2 },
+                                            onSetGroup = { groupChrome.moveToGroupTarget = p2 },
                                             modifier = Modifier.weight(1f)
                                         )
-                                        if (pair.size > 1) {
-                                            val p2 = pair[1]
-                                            val g2 = playlistGroupMap[p2.id] ?: DEFAULT_PLAYLIST_GROUP
-                                            LocalPlaylistItemCard(
-                                                playlist = p2,
-                                                groupName = g2,
-                                                songCoverMap = songCoverMap,
-                                                onClick = { onPlaylistClick(p2.id, p2.name) },
-                                                onPlay = { onPlayLocalPlaylist(p2) },
-                                                onRename = { renameTarget = p2 },
-                                                onDelete = { deleteTarget = p2 },
-                                                onExport = { exportTargetPlaylist = p2 },
-                                                onSetGroup = { groupChrome.moveToGroupTarget = p2 },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                        } else {
-                                            Spacer(Modifier.weight(1f))
-                                        }
+                                    } else {
+                                        Spacer(Modifier.weight(1f))
                                     }
                                 }
                             } else {
-                                // 手机模式：单列纵向排列
-                                if (showFavInCurrent) {
-                                    item(key = "local_fav") {
-                                        FavoritePlaylistItemCard(
-                                            title = favTitle,
-                                            songCount = favoriteKeyCount,
-                                            coverKey = favFirstCover,
-                                            onClick = { onPlaylistClick(ATTITUDE_FAVORITES_PLAYLIST_ID, favTitle) },
-                                            onPlayAll = {
-                                                val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_FAVORITES_PLAYLIST_ID, dislikedKeys)
-                                                if (pl != null) onPlayLocalPlaylist(pl)
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-                                if (showDislikedInCurrent) {
-                                    item(key = "local_dis") {
-                                        DislikedPlaylistItemCard(
-                                            title = disTitle,
-                                            songCount = dislikedKeys.size,
-                                            coverKey = disFirstCover,
-                                            onClick = { onPlaylistClick(ATTITUDE_DISLIKED_PLAYLIST_ID, disTitle) },
-                                            onPlayAll = {
-                                                val pl = attitudePlaylistView(context, playlistStore, allLibrarySongs, ATTITUDE_DISLIKED_PLAYLIST_ID, dislikedKeys)
-                                                if (pl != null) onPlayLocalPlaylist(pl)
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-                                items(currentLocalList, key = { "local_${it.id}" }) { playlist ->
-                                    val group = playlistGroupMap[playlist.id] ?: DEFAULT_PLAYLIST_GROUP
-                                    LocalPlaylistItemCard(
-                                        playlist = playlist,
-                                        groupName = group,
-                                        songCoverMap = songCoverMap,
-                                        onClick = { onPlaylistClick(playlist.id, playlist.name) },
-                                        onPlay = { onPlayLocalPlaylist(playlist) },
-                                        onRename = { renameTarget = playlist },
-                                        onDelete = { deleteTarget = playlist },
-                                        onExport = { exportTargetPlaylist = playlist },
-                                        onSetGroup = { groupChrome.moveToGroupTarget = playlist },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // ==========================================
-                    // 2. 各平台在线收藏歌单列表 (ONLINE PLATFORMS)
-                    // ==========================================
-                    val platformsWithFavorites = listOf(
-                        Triple(OnlinePlatform.NETEASE, currentNeteaseList, Color(0xFFE60026)),
-                        Triple(OnlinePlatform.QQ, currentQqList, Color(0xFF1ECF96)),
-                        Triple(OnlinePlatform.KUGOU, currentKugouList, Color(0xFF0088FF)),
-                        Triple(OnlinePlatform.KUWO, currentKuwoList, Color(0xFFFF9500)),
-                        Triple(OnlinePlatform.MIGU, currentMiguList, Color(0xFFE91E63))
-                    )
-
-                    platformsWithFavorites.forEach { (platform, favList, brandColor) ->
-                        val groupKey = platform.name.uppercase()
-                        val shouldRenderPlatform = (selectedPlaylistGroup == "ALL" && favList.isNotEmpty()) ||
-                                (selectedPlaylistGroup == groupKey) ||
-                                (selectedPlaylistGroup.startsWith("GRP:") && favList.isNotEmpty())
-
-                        if (shouldRenderPlatform && favList.isNotEmpty()) {
-                            val isPlatformCollapsed = collapsedGroups.contains(groupKey)
-                            val platformDisplayName = when (platform) {
-                                OnlinePlatform.NETEASE -> "网易云音乐"
-                                OnlinePlatform.QQ -> "QQ 音乐"
-                                OnlinePlatform.KUGOU -> "酷狗音乐"
-                                OnlinePlatform.KUWO -> "酷我音乐"
-                                OnlinePlatform.MIGU -> "咪咕音乐"
-                            }
-
-                            item(key = "header_online_${platform.name}") {
-                                PlaylistSectionHeader(
-                                    title = "$platformDisplayName 收藏歌单",
-                                    count = favList.size,
-                                    accentColor = brandColor,
-                                    isCollapsed = isPlatformCollapsed,
-                                    onToggleCollapse = {
-                                        collapsedGroups = if (isPlatformCollapsed) collapsedGroups - groupKey else collapsedGroups + groupKey
-                                    },
-                                    actionContent = {
-                                        TextButton(
-                                            onClick = { onNavigateToOnlineSquare(platform) },
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                            modifier = Modifier.height(28.dp)
-                                        ) {
-                                            Text("去广场", fontSize = 11.5.sp, color = brandColor, fontWeight = FontWeight.Medium, fontFamily = appFontFamily())
-                                        }
-                                    }
+                                val pl = item.playlists[0]
+                                val g = playlistGroupMap[pl.id] ?: DEFAULT_PLAYLIST_GROUP
+                                LocalPlaylistItemCard(
+                                    playlist = pl,
+                                    groupName = g,
+                                    songCoverMap = songCoverMap,
+                                    onClick = { onPlaylistClick(pl.id, pl.name) },
+                                    onPlay = { onPlayLocalPlaylist(pl) },
+                                    onRename = { renameTarget = pl },
+                                    onDelete = { deleteTarget = pl },
+                                    onExport = { exportTargetPlaylist = pl },
+                                    onSetGroup = { groupChrome.moveToGroupTarget = pl },
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
-
-                            if (!isPlatformCollapsed) {
-                                if (useTabletLayout) {
-                                    val chunks = favList.chunked(2)
-                                    items(chunks, key = { chunk -> "online_chunk_${platform.name}_${chunk.joinToString("_") { it.remoteId }}" }) { pair ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            val op1 = pair[0]
-                                            OnlinePlaylistItemCard(
-                                                entity = op1,
-                                                brandColor = brandColor,
-                                                onClick = { onOnlinePlaylistClick(platform, op1.remoteId) },
-                                                onPlay = { onPlayOnlinePlaylist(op1) },
-                                                onShowDetail = { onOnlinePlaylistClick(platform, op1.remoteId) },
-                                                onRemoveFavorite = {
-                                                    scope.launch {
-                                                        OnlinePlaylistFavoriteStore.remove(context, op1.playlistKey)
-                                                        AppNoticeBus.post("已取消收藏「${op1.title}」", AppNoticeIcon.PLAYLIST)
-                                                    }
-                                                },
-                                                onImportToLocal = { handleImportOnlineToLocal(op1) },
-                                                onSetGroup = { groupChrome.moveOnlineToGroupTarget = op1 },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (pair.size > 1) {
-                                                val op2 = pair[1]
-                                                OnlinePlaylistItemCard(
-                                                    entity = op2,
-                                                    brandColor = brandColor,
-                                                    onClick = { onOnlinePlaylistClick(platform, op2.remoteId) },
-                                                    onPlay = { onPlayOnlinePlaylist(op2) },
-                                                    onShowDetail = { onOnlinePlaylistClick(platform, op2.remoteId) },
-                                                    onRemoveFavorite = {
-                                                        scope.launch {
-                                                            OnlinePlaylistFavoriteStore.remove(context, op2.playlistKey)
-                                                            AppNoticeBus.post("已取消收藏「${op2.title}」", AppNoticeIcon.PLAYLIST)
-                                                        }
-                                                    },
-                                                    onImportToLocal = { handleImportOnlineToLocal(op2) },
-                                                    onSetGroup = { groupChrome.moveOnlineToGroupTarget = op2 },
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                            } else {
-                                                Spacer(Modifier.weight(1f))
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    items(favList, key = { "online_${it.playlistKey}" }) { entity ->
-                                        OnlinePlaylistItemCard(
-                                            entity = entity,
-                                            brandColor = brandColor,
-                                            onClick = { onOnlinePlaylistClick(platform, entity.remoteId) },
-                                            onPlay = { onPlayOnlinePlaylist(entity) },
-                                            onShowDetail = { onOnlinePlaylistClick(platform, entity.remoteId) },
-                                            onRemoveFavorite = {
-                                                scope.launch {
-                                                    OnlinePlaylistFavoriteStore.remove(context, entity.playlistKey)
-                                                    AppNoticeBus.post("已取消收藏「${entity.title}」", AppNoticeIcon.PLAYLIST)
-                                                }
-                                            },
-                                            onImportToLocal = { handleImportOnlineToLocal(entity) },
-                                            onSetGroup = { groupChrome.moveOnlineToGroupTarget = entity },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
+                        }
+                        is PlaylistVirtualItem.OnlineSectionHeader -> {
+                            PlaylistSectionHeader(
+                                title = "${item.displayName} 收藏歌单",
+                                count = item.count,
+                                accentColor = item.brandColor,
+                                isCollapsed = item.isCollapsed,
+                                onToggleCollapse = {
+                                    val key = item.platform.name.uppercase()
+                                    collapsedGroups = if (item.isCollapsed) collapsedGroups - key else collapsedGroups + key
+                                },
+                                actionContent = {
+                                    TextButton(
+                                        onClick = { onNavigateToOnlineSquare(item.platform) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text("去广场", fontSize = 11.5.sp, color = item.brandColor, fontWeight = FontWeight.Medium, fontFamily = appFontFamily())
                                     }
                                 }
+                            )
+                        }
+                        is PlaylistVirtualItem.OnlinePlaylistRow -> {
+                            if (useTabletLayout) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    val op1 = item.entities[0]
+                                    OnlinePlaylistItemCard(
+                                        entity = op1,
+                                        brandColor = item.brandColor,
+                                        onClick = { onOnlinePlaylistClick(item.platform, op1.remoteId) },
+                                        onPlay = { onPlayOnlinePlaylist(op1) },
+                                        onShowDetail = { onOnlinePlaylistClick(item.platform, op1.remoteId) },
+                                        onRemoveFavorite = {
+                                            scope.launch {
+                                                OnlinePlaylistFavoriteStore.remove(context, op1.playlistKey)
+                                                AppNoticeBus.post("已取消收藏「${op1.title}」", AppNoticeIcon.PLAYLIST)
+                                            }
+                                        },
+                                        onImportToLocal = { handleImportOnlineToLocal(op1) },
+                                        onSetGroup = { groupChrome.moveOnlineToGroupTarget = op1 },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (item.entities.size > 1) {
+                                        val op2 = item.entities[1]
+                                        OnlinePlaylistItemCard(
+                                            entity = op2,
+                                            brandColor = item.brandColor,
+                                            onClick = { onOnlinePlaylistClick(item.platform, op2.remoteId) },
+                                            onPlay = { onPlayOnlinePlaylist(op2) },
+                                            onShowDetail = { onOnlinePlaylistClick(item.platform, op2.remoteId) },
+                                            onRemoveFavorite = {
+                                                scope.launch {
+                                                    OnlinePlaylistFavoriteStore.remove(context, op2.playlistKey)
+                                                    AppNoticeBus.post("已取消收藏「${op2.title}」", AppNoticeIcon.PLAYLIST)
+                                                }
+                                            },
+                                            onImportToLocal = { handleImportOnlineToLocal(op2) },
+                                            onSetGroup = { groupChrome.moveOnlineToGroupTarget = op2 },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    } else {
+                                        Spacer(Modifier.weight(1f))
+                                    }
+                                }
+                            } else {
+                                val op = item.entities[0]
+                                OnlinePlaylistItemCard(
+                                    entity = op,
+                                    brandColor = item.brandColor,
+                                    onClick = { onOnlinePlaylistClick(item.platform, op.remoteId) },
+                                    onPlay = { onPlayOnlinePlaylist(op) },
+                                    onShowDetail = { onOnlinePlaylistClick(item.platform, op.remoteId) },
+                                    onRemoveFavorite = {
+                                        scope.launch {
+                                            OnlinePlaylistFavoriteStore.remove(context, op.playlistKey)
+                                            AppNoticeBus.post("已取消收藏「${op.title}」", AppNoticeIcon.PLAYLIST)
+                                        }
+                                    },
+                                    onImportToLocal = { handleImportOnlineToLocal(op) },
+                                    onSetGroup = { groupChrome.moveOnlineToGroupTarget = op },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         }
-                    }
-
-                    item {
-                        Spacer(Modifier.height(110.dp))
                     }
                 }
             }
+        )
+    }
+
+    LibraryListScaffold(
+        title = stringResource(com.rawsmusic.core.ui.R.string.library_title_playlists),
+        sceneId = NavScene.PLAYLISTS.name,
+        statisticsText = stringResource(com.rawsmusic.core.ui.R.string.library_statistics_playlists, totalPlaylistsCount, totalSongsCount),
+        onBack = onBack,
+        onCreatePlaylist = { createDialog = true },
+        onImportPlaylist = { importDialog = true },
+        headerTrailingContent = headerTrailingAction,
+        virtualListState = listState,
+        contentOverlap = 0.dp
+    ) { topPadding, backdropSource ->
+        val chipsBarHeight = 44.dp
+
+        // 1. 虚拟列表主体：全屏挂载并应用 backdropSource，其顶部内边距为顶栏高度加上二级分类条高度
+        CompositionLocalProvider(LocalVirtualListCustomProvider provides playlistCustomProvider) {
+            ComposeVirtualList(
+                songs = playlistVirtualSongs,
+                state = listState,
+                pinchEnabled = false,
+                contentTopPadding = topPadding + chipsBarHeight + 12.dp,
+                contentBottomPadding = 150.dp,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(backdropSource),
+            )
+        }
+
+        // 预加载发布阶段直接返回，避免执行后续非列表普通 UI 树的渲染
+        if (LocalReferenceLibraryProviderPublicationOnly.current) return@LibraryListScaffold
+
+        // 2. 空状态展示
+        if (currentTotalVisible == 0) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = topPadding + chipsBarHeight + 12.dp)
+            ) {
+                PlaylistEmptyView(
+                    selectedGroup = selectedPlaylistGroup,
+                    customGroupName = targetCustomGroupName,
+                    onCreatePlaylist = { createDialog = true },
+                    onImportPlaylist = { importDialog = true },
+                    onNavigateToSquare = { onNavigateToOnlineSquare(OnlinePlatform.NETEASE) },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        // 3. 二级分类过滤导航条 (Chip 轨道)：吸顶定位在顶栏正下方
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(top = topPadding)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            colors.background.copy(alpha = 0.95f),
+                            colors.background.copy(alpha = 0.85f),
+                            colors.background.copy(alpha = 0.0f)
+                        )
+                    )
+                )
+                .padding(bottom = 6.dp)
+                .zIndex(20f)
+        ) {
+            PlaylistCategoryChipsBar(
+                categories = filterCategories,
+                selectedCategory = selectedPlaylistGroup,
+                onSelectCategory = { selectedPlaylistGroup = it },
+                onCreateGroup = { groupChrome.createGroupDialog = true },
+                onManageGroups = { groupChrome.groupMenuTarget = allGroupNames.firstOrNull() ?: DEFAULT_PLAYLIST_GROUP },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
     }
 
@@ -2186,3 +2274,37 @@ private fun PlaylistConfirmDialog(
         }
     )
 }
+
+private const val PLAYLIST_VIRTUAL_ITEM_PREFIX = "raws_playlist_virtual:"
+
+private sealed interface PlaylistVirtualItem {
+    data class LocalSectionHeader(
+        val count: Int,
+        val isCollapsed: Boolean,
+    ) : PlaylistVirtualItem
+
+    data class AttitudeRow(
+        val showFav: Boolean,
+        val showDisliked: Boolean,
+        val isDualTablet: Boolean,
+    ) : PlaylistVirtualItem
+
+    data class LocalPlaylistRow(
+        val playlists: List<UserPlaylist>,
+    ) : PlaylistVirtualItem
+
+    data class OnlineSectionHeader(
+        val platform: OnlinePlatform,
+        val displayName: String,
+        val count: Int,
+        val brandColor: Color,
+        val isCollapsed: Boolean,
+    ) : PlaylistVirtualItem
+
+    data class OnlinePlaylistRow(
+        val platform: OnlinePlatform,
+        val brandColor: Color,
+        val entities: List<OnlinePlaylistFavoriteEntity>,
+    ) : PlaylistVirtualItem
+}
+
