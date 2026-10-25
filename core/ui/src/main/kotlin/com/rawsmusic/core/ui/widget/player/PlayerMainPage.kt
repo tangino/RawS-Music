@@ -2693,6 +2693,14 @@ private fun resolvePlayerArtworkSong(
     if (key.isBlank()) return fallback
     fallback?.takeIf { it.resolvePlaybackArtworkKey(null) == key }?.let { return it }
 
+    if (fallback != null && (com.rawsmusic.core.common.model.isOnlineSongKey(fallback.path) ||
+            fallback.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER)
+    ) {
+        if (key == fallback.albumArtPath || key == fallback.path) {
+            return fallback
+        }
+    }
+
     // Keep three physical pager holders around the committed cursor. Normal
     // previous/current/next binding therefore never searches the complete provider. Mirror that
     // hot path before retaining the full scan as a correctness fallback for queue replacement,
@@ -2710,7 +2718,8 @@ private fun resolvePlayerArtworkSong(
         candidate(centerIndex - 1)?.let { return it }
         candidate(centerIndex + 1)?.let { return it }
     }
-    return queueSongs.firstOrNull { it.resolvePlaybackArtworkKey(null) == key }
+    val matched = queueSongs.firstOrNull { it.resolvePlaybackArtworkKey(null) == key }
+    return matched ?: fallback
 }
 
 @Composable

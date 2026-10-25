@@ -1,14 +1,32 @@
 package com.rawsmusic.ui.playlist
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -17,10 +35,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
@@ -54,6 +78,7 @@ private val DIALOG_ITEM_GAP = 8.dp
  */
 @Stable
 internal class PlaylistGroupChromeState {
+    var manageGroupsDialog by mutableStateOf(false)
     var groupMenuTarget by mutableStateOf<String?>(null)
     var createGroupDialog by mutableStateOf(false)
     var renameGroupTarget by mutableStateOf<String?>(null)
@@ -81,11 +106,50 @@ internal fun PlaylistGroupDialogHost(
     state: PlaylistGroupChromeState,
     groupNames: List<String>,
     playlistGroupMap: Map<String, String>,
+    groupSongCounts: Map<String, Int> = emptyMap(),
+    onGroupCreated: ((String) -> Unit)? = null,
     onRenamePlaylist: (UserPlaylist) -> Unit,
     onDeletePlaylist: (UserPlaylist) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    if (state.manageGroupsDialog) {
+        PlaylistGroupsManagementDialog(
+            groupNames = groupNames,
+            groupSongCounts = groupSongCounts,
+            onDismiss = { state.manageGroupsDialog = false },
+            onCreateGroup = {
+                state.createGroupDialog = true
+            },
+            onRenameGroup = { groupName ->
+                state.renameGroupTarget = groupName
+            },
+            onDeleteGroup = { groupName ->
+                state.deleteGroupTarget = groupName
+            },
+            onMoveUp = { groupIndex ->
+                if (groupIndex > 1) {
+                    val reordered = groupNames.toMutableList()
+                        .apply { add(groupIndex - 1, removeAt(groupIndex)) }
+                    scope.launchPlaylistGroupOp(context, context.getString(R.string.playlist_group_reordered)) {
+                        PlaylistGroupStore.reorder(context, reordered)
+                        null
+                    }
+                }
+            },
+            onMoveDown = { groupIndex ->
+                if (groupIndex >= 1 && groupIndex < groupNames.lastIndex) {
+                    val reordered = groupNames.toMutableList()
+                        .apply { add(groupIndex + 1, removeAt(groupIndex)) }
+                    scope.launchPlaylistGroupOp(context, context.getString(R.string.playlist_group_reordered)) {
+                        PlaylistGroupStore.reorder(context, reordered)
+                        null
+                    }
+                }
+            },
+        )
+    }
 
     state.groupMenuTarget?.let { groupName ->
         val groupIndex = groupNames.indexOf(groupName)
@@ -139,7 +203,11 @@ internal fun PlaylistGroupDialogHost(
             onConfirm = { name ->
                 state.createGroupDialog = false
                 scope.launchPlaylistGroupOp(context, context.getString(R.string.playlist_group_created, name)) {
-                    PlaylistGroupStore.create(context, name)
+                    val result = PlaylistGroupStore.create(context, name)
+                    if (result == com.rawsmusic.module.data.prefs.PlaylistGroupOpResult.Success) {
+                        onGroupCreated?.invoke(name)
+                    }
+                    result
                 }
             },
         )
@@ -566,6 +634,276 @@ internal fun PlaylistActionsDialog(
                 onClick = onDelete,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+/**
+ * 全局歌单分组管理面板：展示所有分组卡片、歌单数、快捷新建、上移下移排序、重命名与删除。
+ */
+@Composable
+internal fun PlaylistGroupsManagementDialog(
+    groupNames: List<String>,
+    groupSongCounts: Map<String, Int>,
+    onDismiss: () -> Unit,
+    onCreateGroup: () -> Unit,
+    onRenameGroup: (String) -> Unit,
+    onDeleteGroup: (String) -> Unit,
+    onMoveUp: (Int) -> Unit,
+    onMoveDown: (Int) -> Unit,
+) {
+    val colors = themeColors()
+    RawMiuixOverlayDialog(
+        show = true,
+        title = stringResource(R.string.playlist_group_manage_title),
+        summary = stringResource(R.string.playlist_group_manage_summary),
+        backgroundColor = colors.surface,
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // 顶部：“新建分组”强调操作栏
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.primary.copy(alpha = 0.12f),
+                border = BorderStroke(0.5.dp, colors.primary.copy(alpha = 0.28f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onCreateGroup() }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.playlist_group_action_create),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.primary,
+                        fontFamily = appFontFamily()
+                    )
+                }
+            }
+
+            // 分组列表滚动容器
+            val customGroups = groupNames.filter { it != DEFAULT_PLAYLIST_GROUP }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 系统默认保留分组
+                val defaultCount = groupSongCounts[DEFAULT_PLAYLIST_GROUP] ?: 0
+                GroupManagementItemCard(
+                    displayName = stringResource(R.string.playlist_group_default_name),
+                    count = defaultCount,
+                    isReserved = true,
+                    canMoveUp = false,
+                    canMoveDown = false,
+                    onMoveUp = {},
+                    onMoveDown = {},
+                    onRename = {},
+                    onDelete = {},
+                )
+
+                // 用户自建分组列表
+                if (customGroups.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 18.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(R.string.playlist_group_empty_hint),
+                            fontSize = 12.sp,
+                            color = colors.onSurface.copy(alpha = 0.5f),
+                            fontFamily = appFontFamily()
+                        )
+                    }
+                } else {
+                    groupNames.forEachIndexed { index, name ->
+                        if (name == DEFAULT_PLAYLIST_GROUP) return@forEachIndexed
+                        val count = groupSongCounts[name] ?: 0
+                        GroupManagementItemCard(
+                            displayName = name,
+                            count = count,
+                            isReserved = false,
+                            canMoveUp = index > 1,
+                            canMoveDown = index < groupNames.lastIndex,
+                            onMoveUp = { onMoveUp(index) },
+                            onMoveDown = { onMoveDown(index) },
+                            onRename = { onRenameGroup(name) },
+                            onDelete = { onDeleteGroup(name) },
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = stringResource(R.string.playlist_confirm_action),
+                    fontFamily = appFontFamily()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupManagementItemCard(
+    displayName: String,
+    count: Int,
+    isReserved: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = themeColors()
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = colors.surface.copy(alpha = 0.65f),
+        border = BorderStroke(0.5.dp, colors.outline.copy(alpha = 0.12f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 左侧图标
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(
+                        if (isReserved) colors.primary.copy(alpha = 0.10f) else colors.onSurface.copy(alpha = 0.06f),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(if (isReserved) R.drawable.ic_settings else R.drawable.ic_folder_2_fill),
+                    contentDescription = null,
+                    tint = if (isReserved) colors.primary else colors.onSurface.copy(alpha = 0.75f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(Modifier.width(10.dp))
+
+            // 中间名称与数量
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = displayName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.onSurface,
+                        fontFamily = appFontFamily()
+                    )
+                    if (isReserved) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .background(colors.primary.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.playlist_group_system_reserved),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.primary,
+                                fontFamily = appFontFamily()
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.playlist_group_count_format, count),
+                    fontSize = 11.sp,
+                    color = colors.onSurface.copy(alpha = 0.55f),
+                    fontFamily = appFontFamily()
+                )
+            }
+
+            // 右侧操作按钮
+            if (!isReserved) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    IconButton(
+                        onClick = onMoveUp,
+                        enabled = canMoveUp,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowUp,
+                            contentDescription = stringResource(R.string.playlist_group_action_move_up),
+                            tint = if (canMoveUp) colors.onSurface.copy(alpha = 0.8f) else colors.onSurface.copy(alpha = 0.25f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onMoveDown,
+                        enabled = canMoveDown,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.playlist_group_action_move_down),
+                            tint = if (canMoveDown) colors.onSurface.copy(alpha = 0.8f) else colors.onSurface.copy(alpha = 0.25f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onRename,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = stringResource(R.string.playlist_group_action_rename),
+                            tint = colors.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = stringResource(R.string.playlist_group_action_delete),
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }

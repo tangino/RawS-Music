@@ -19,17 +19,40 @@ fun resolvePlaybackQueueBindingIndex(
     queueSongs: List<AudioFile>,
     reportedIndex: Int,
 ): Int {
-    if (currentSong != null) {
+    if (currentSong != null && queueSongs.isNotEmpty()) {
         val reported = queueSongs.getOrNull(reportedIndex)
-        if (reported != null && reported.path == currentSong.path &&
-            reported.cueOffsetMs == currentSong.cueOffsetMs &&
-            reported.cueTrackIndex == currentSong.cueTrackIndex) return reportedIndex
+        if (reported != null && isSameQueueTrack(reported, currentSong)) {
+            return reportedIndex
+        }
         val exactIndex = queueSongs.indexOfFirst { candidate ->
-            candidate.path == currentSong.path &&
-                candidate.cueOffsetMs == currentSong.cueOffsetMs &&
-                candidate.cueTrackIndex == currentSong.cueTrackIndex
+            isSameQueueTrack(candidate, currentSong)
         }
         if (exactIndex >= 0) return exactIndex
     }
     return reportedIndex.takeIf { it in queueSongs.indices } ?: -1
+}
+
+private fun isSameQueueTrack(a: AudioFile, b: AudioFile): Boolean {
+    if (a.path == b.path && a.cueOffsetMs == b.cueOffsetMs && a.cueTrackIndex == b.cueTrackIndex) {
+        return true
+    }
+    if (a.id != 0L && a.id == b.id) {
+        return true
+    }
+    val aOnline = com.rawsmusic.core.common.model.isOnlineSongKey(a.path)
+    val bOnline = com.rawsmusic.core.common.model.isOnlineSongKey(b.path)
+    if (aOnline || bOnline) {
+        if (a.title.isNotBlank() && a.title.equals(b.title, ignoreCase = true)) {
+            val aArtist = a.artist.trim()
+            val bArtist = b.artist.trim()
+            if (aArtist.isEmpty() || bArtist.isEmpty() ||
+                aArtist.equals(bArtist, ignoreCase = true) ||
+                aArtist.contains(bArtist, ignoreCase = true) ||
+                bArtist.contains(aArtist, ignoreCase = true)
+            ) {
+                return true
+            }
+        }
+    }
+    return false
 }

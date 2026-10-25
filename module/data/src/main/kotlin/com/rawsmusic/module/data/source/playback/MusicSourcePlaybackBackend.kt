@@ -88,6 +88,13 @@ object MusicSourceResolvedStreamRegistry {
 
     fun lookup(path: String): Entry? = entries[path]
 
+    fun matches(semanticKey: String, actualPath: String): Boolean {
+        if (semanticKey == actualPath) return true
+        val entry = entries[actualPath] ?: return false
+        val entryKey = com.rawsmusic.core.common.model.onlineSongKey(entry.item.sourceId, entry.item.remoteId)
+        return entryKey == semanticKey || entry.item.stableIdentity == semanticKey
+    }
+
     fun remove(path: String, generation: Long? = null) {
         if (generation == null) {
             val removed = entries.remove(path)

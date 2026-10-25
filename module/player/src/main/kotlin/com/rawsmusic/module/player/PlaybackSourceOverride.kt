@@ -27,6 +27,9 @@ data class PlaybackSourceOverride(
             cueOffsetMs == song.cueOffsetMs &&
             cueTrackIndex == song.cueTrackIndex
 
+    fun matchesPath(path: String): Boolean =
+        semanticPath == path || playbackPath == path
+
     fun rendererSong(song: AudioFile): AudioFile {
         if (!matches(song)) return song
         return song.copy(

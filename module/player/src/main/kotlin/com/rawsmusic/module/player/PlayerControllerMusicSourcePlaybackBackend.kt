@@ -95,7 +95,7 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
                 "ua=${!request.source.userAgent.isNullOrBlank()} autoPlay=${request.autoPlay} " +
                 "startMs=${request.startPositionMs} queueSize=${allSongs.size} url=${OnlinePlaybackDiagnostics.safeUrl(request.source.url)}"
         )
-        controller.play(song, allSongs, targetIndex)
+        controller.playResolvedOnlineSource(song, request.source.url, allSongs, targetIndex)
     }
 
     override fun pause() {
@@ -330,7 +330,11 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
 
     private fun ownsCurrentSong(): Boolean {
         val request = activeRequest ?: return false
-        return controller.currentSong.value?.path == request.source.url
+        val current = controller.currentSong.value ?: return false
+        val expectedKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+        return current.path == expectedKey ||
+            current.path == request.source.url ||
+            current.id == stableLong(request.item.stableIdentity)
     }
 
     private fun MusicSourcePlaybackRequest.toAudioFile(): AudioFile {
@@ -341,12 +345,12 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
             .take(12)
         return AudioFile(
             id = stableLong(item.stableIdentity),
-            path = source.url,
+            path = com.rawsmusic.core.common.model.onlineSongKey(item.sourceId, item.remoteId),
             title = item.title,
             artist = item.artists.joinToString(", "),
             album = item.album,
             duration = item.durationMs.coerceAtLeast(0L),
-            format = inferredFormat,
+            format = inferredFormat.ifBlank { "ONLINE" },
             albumArtPath = item.artworkUrl,
             encodingFormat = MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
         )

@@ -6,9 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,8 +60,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
+import com.rawsmusic.core.ui.scene.LocalSceneChromeAlpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -224,23 +228,26 @@ fun PlaylistScreen(
 
     // 二级分类导航 Chips 构造
     var selectedPlaylistGroup by remember { mutableStateOf("ALL") }
-    val attitudeCardCount = 1 + (if (dislikedKeys.isNotEmpty()) 1 else 0)
-    val localTotalCount = filteredLocalPlaylists.size + attitudeCardCount
+    val localTotalCount = filteredLocalPlaylists.size
     val totalPlaylistsCount = localTotalCount + onlineFavorites.size
     val totalSongsCount = playlists.sumOf { it.songs.size } + onlineFavorites.sumOf { it.trackCount }
 
-    val filterCategories = remember(playlistGroups, filteredLocalPlaylists, onlineFavorites, localTotalCount, playlistGroupMap, neteaseFavorites.size, qqFavorites.size, kugouFavorites.size, kuwoFavorites.size, miguFavorites.size) {
+    val allGroupSongCounts = remember(filteredLocalPlaylists, onlineFavorites, playlistGroupMap, playlistGroups) {
+        val localGroupCounts = filteredLocalPlaylists.groupingBy { playlistGroupMap[it.id] ?: DEFAULT_PLAYLIST_GROUP }.eachCount()
+        val onlineGroupCounts = onlineFavorites.groupingBy { it.groupName }.eachCount()
+        playlistGroups.associate { grp ->
+            grp.name to ((localGroupCounts[grp.name] ?: 0) + (onlineGroupCounts[grp.name] ?: 0))
+        }
+    }
+
+    val filterCategories = remember(playlistGroups, allGroupSongCounts, localTotalCount, totalPlaylistsCount, neteaseFavorites.size, qqFavorites.size, kugouFavorites.size, kuwoFavorites.size, miguFavorites.size) {
         buildList {
             add(Triple("ALL", "全部", totalPlaylistsCount))
-            // 用户自定义分组：一次性分组聚合统计，避免 O(G * (N + M)) 嵌套遍历
-            if (playlistGroups.isNotEmpty() && (filteredLocalPlaylists.isNotEmpty() || onlineFavorites.isNotEmpty())) {
-                val localGroupCounts = filteredLocalPlaylists.groupingBy { playlistGroupMap[it.id] ?: DEFAULT_PLAYLIST_GROUP }.eachCount()
-                val onlineGroupCounts = onlineFavorites.groupingBy { it.groupName }.eachCount()
-                playlistGroups.forEach { grp ->
-                    val count = (localGroupCounts[grp.name] ?: 0) + (onlineGroupCounts[grp.name] ?: 0)
-                    if (count > 0) {
-                        add(Triple("GRP:${grp.name}", grp.name, count))
-                    }
+            // 用户自定义分组：所有自建分组全部展示（绝对排除系统默认占位分组，即使歌单数为0也展示，新建立即可见）
+            playlistGroups.forEach { grp ->
+                if (grp.name != DEFAULT_PLAYLIST_GROUP) {
+                    val count = allGroupSongCounts[grp.name] ?: 0
+                    add(Triple("GRP:${grp.name}", grp.name, count))
                 }
             }
             if (localTotalCount > 0) {
@@ -276,8 +283,8 @@ fun PlaylistScreen(
             else -> emptyList()
         }
     }
-    val showFavInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP)
-    val showDislikedInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL") || targetCustomGroupName == DEFAULT_PLAYLIST_GROUP) && dislikedKeys.isNotEmpty()
+    val showFavInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL"))
+    val showDislikedInCurrent = (selectedPlaylistGroup in listOf("ALL", "LOCAL")) && dislikedKeys.isNotEmpty()
     val activeLocalCount = currentLocalList.size + (if (showFavInCurrent) 1 else 0) + (if (showDislikedInCurrent) 1 else 0)
 
     val currentNeteaseList = remember(neteaseFavorites, selectedPlaylistGroup, targetCustomGroupName) {
@@ -800,34 +807,42 @@ fun PlaylistScreen(
             }
         }
 
-        // 3. 二级分类过滤导航条 (Chip 轨道)：吸顶定位在顶栏正下方
+        // 3. 二级分类过滤导航条 (Chip 轨道)：吸顶定位在顶栏正下方，完全透明背景，并联动页面转场退出时钟
+        val sceneChrome = LocalSceneChromeAlpha.current
+        val isExitingScene = sceneChrome.topMenuExitSceneId == NavScene.PLAYLISTS.name
+
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .padding(top = topPadding)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            colors.background.copy(alpha = 0.95f),
-                            colors.background.copy(alpha = 0.85f),
-                            colors.background.copy(alpha = 0.0f)
-                        )
-                    )
-                )
                 .padding(bottom = 6.dp)
                 .zIndex(20f)
+                .graphicsLayer {
+                    val progress = sceneChrome.topMenuExitProgressProvider?.invoke()
+                    val sceneAlpha = if (isExitingScene && progress != null) {
+                        (1f - progress).coerceIn(0f, 1f)
+                    } else {
+                        sceneChrome.topMenuProvider?.invoke() ?: sceneChrome.topMenu
+                    }
+                    alpha = sceneAlpha
+                    clip = false
+                }
         ) {
-            PlaylistCategoryChipsBar(
-                categories = filterCategories,
-                selectedCategory = selectedPlaylistGroup,
-                onSelectCategory = { selectedPlaylistGroup = it },
-                onCreateGroup = { groupChrome.createGroupDialog = true },
-                onManageGroups = { groupChrome.groupMenuTarget = allGroupNames.firstOrNull() ?: DEFAULT_PLAYLIST_GROUP },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-            )
+            val exitProgress = sceneChrome.topMenuExitProgressProvider?.invoke() ?: 0f
+            if (!isExitingScene || exitProgress < 0.95f) {
+                PlaylistCategoryChipsBar(
+                    categories = filterCategories,
+                    selectedCategory = selectedPlaylistGroup,
+                    onSelectCategory = { selectedPlaylistGroup = it },
+                    onGroupLongClick = { grpName -> groupChrome.groupMenuTarget = grpName },
+                    onCreateGroup = { groupChrome.createGroupDialog = true },
+                    onManageGroups = { groupChrome.manageGroupsDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 
@@ -836,6 +851,8 @@ fun PlaylistScreen(
         state = groupChrome,
         groupNames = allGroupNames,
         playlistGroupMap = playlistGroupMap,
+        groupSongCounts = allGroupSongCounts,
+        onGroupCreated = { newName -> selectedPlaylistGroup = "GRP:$newName" },
         onRenamePlaylist = { renameTarget = it },
         onDeletePlaylist = { deleteTarget = it },
     )
@@ -959,32 +976,29 @@ fun PlaylistScreen(
 /**
  * 优雅二级分类过滤导航条 (Chip 轨道)
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistCategoryChipsBar(
     categories: List<Triple<String, String, Int>>,
     selectedCategory: String,
     onSelectCategory: (String) -> Unit,
+    onGroupLongClick: (String) -> Unit,
     onCreateGroup: () -> Unit,
     onManageGroups: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = themeColors()
 
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = colors.surface.copy(alpha = 0.30f),
+    Row(
         modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 6.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
             categories.forEach { (groupId, groupName, count) ->
                 val isSelected = selectedCategory == groupId
+                val isCustomGroup = groupId.startsWith("GRP:")
 
                 val badgeColor = when (groupId) {
                     "QQ" -> Color(0xFF1ECF96)
@@ -997,18 +1011,33 @@ private fun PlaylistCategoryChipsBar(
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected) colors.primary.copy(alpha = 0.18f) else Color.Transparent,
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (isSelected) colors.primary.copy(alpha = 0.16f) else Color.Transparent,
+                    border = if (isSelected) BorderStroke(0.8.dp, colors.primary.copy(alpha = 0.35f)) else null,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onSelectCategory(groupId) }
+                        .clip(RoundedCornerShape(999.dp))
+                        .combinedClickable(
+                            onClick = { onSelectCategory(groupId) },
+                            onLongClick = {
+                                if (isCustomGroup) {
+                                    onGroupLongClick(groupName)
+                                }
+                            }
+                        )
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        if (badgeColor != null) {
+                        if (isCustomGroup) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_folder_2_fill),
+                                contentDescription = null,
+                                tint = if (isSelected) colors.primary else colors.onSurface.copy(alpha = 0.55f),
+                                modifier = Modifier.size(12.dp)
+                            )
+                        } else if (badgeColor != null) {
                             Box(
                                 modifier = Modifier
                                     .size(6.dp)
@@ -1019,17 +1048,17 @@ private fun PlaylistCategoryChipsBar(
                             text = groupName,
                             fontSize = 12.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isSelected) colors.primary else colors.onSurface.copy(alpha = 0.7f),
+                            color = if (isSelected) colors.primary else colors.onSurface.copy(alpha = 0.72f),
                             fontFamily = appFontFamily()
                         )
                         if (count > 0) {
                             Box(
                                 modifier = Modifier
                                     .background(
-                                        if (isSelected) colors.primary.copy(alpha = 0.22f) else colors.onSurface.copy(alpha = 0.10f),
-                                        RoundedCornerShape(4.dp)
+                                        if (isSelected) colors.primary.copy(alpha = 0.25f) else colors.onSurface.copy(alpha = 0.08f),
+                                        RoundedCornerShape(999.dp)
                                     )
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
                             ) {
                                 Text(
                                     text = "$count",
@@ -1047,21 +1076,22 @@ private fun PlaylistCategoryChipsBar(
             // 垂直细分割线
             Box(
                 modifier = Modifier
-                    .height(14.dp)
+                    .height(16.dp)
                     .width(1.dp)
-                    .background(colors.onSurface.copy(alpha = 0.15f))
+                    .background(colors.outline.copy(alpha = 0.20f))
             )
 
             // 新建分组微按钮
             Surface(
-                shape = RoundedCornerShape(7.dp),
-                color = colors.surface.copy(alpha = 0.40f),
+                shape = RoundedCornerShape(999.dp),
+                color = colors.primary.copy(alpha = 0.12f),
+                border = BorderStroke(0.5.dp, colors.primary.copy(alpha = 0.25f)),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
+                    .clip(RoundedCornerShape(999.dp))
                     .clickable { onCreateGroup() }
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -1069,10 +1099,10 @@ private fun PlaylistCategoryChipsBar(
                         imageVector = Icons.Default.Add,
                         contentDescription = null,
                         tint = colors.primary,
-                        modifier = Modifier.size(12.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = "新建分组",
+                        text = stringResource(R.string.playlist_group_action_create),
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.primary,
@@ -1083,35 +1113,35 @@ private fun PlaylistCategoryChipsBar(
 
             // 分组管理微按钮
             Surface(
-                shape = RoundedCornerShape(7.dp),
-                color = colors.surface.copy(alpha = 0.40f),
+                shape = RoundedCornerShape(999.dp),
+                color = colors.surface.copy(alpha = 0.55f),
+                border = BorderStroke(0.5.dp, colors.outline.copy(alpha = 0.15f)),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
+                    .clip(RoundedCornerShape(999.dp))
                     .clickable { onManageGroups() }
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_settings),
                         contentDescription = null,
-                        tint = colors.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.size(12.dp)
+                        tint = colors.onSurface.copy(alpha = 0.75f),
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = "管理",
+                        text = stringResource(R.string.playlist_group_action_manage),
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
-                        color = colors.onSurface.copy(alpha = 0.7f),
+                        color = colors.onSurface.copy(alpha = 0.75f),
                         fontFamily = appFontFamily()
                     )
                 }
             }
         }
     }
-}
 
 /**
  * 分组 Header 条（带平台品牌色竖条、标题、数量 Badge、操作按钮与折叠动画箭头）

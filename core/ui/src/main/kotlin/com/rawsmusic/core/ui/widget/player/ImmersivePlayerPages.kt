@@ -499,7 +499,12 @@ fun ImmersivePlayerHorizontalStack(
         )
         @Composable
         fun TrackPage(song: AudioFile?, artworkKey: String?, incoming: Boolean, layer: Modifier) {
-        val liveIdentity = !incoming && song?.coverKey == currentSong?.coverKey
+        val liveIdentity = !incoming && (
+            (song?.coverKey?.isNotBlank() == true && song.coverKey == currentSong?.coverKey) ||
+            (song != null && currentSong != null && song.id == currentSong.id && song.id != 0L) ||
+            (song != null && currentSong != null && song.path == currentSong.path) ||
+            (song != null && currentSong != null && song.title == currentSong.title && song.artist == currentSong.artist)
+        )
         ImmersivePlayerMainPage(
             currentSong = song,
             coverPath = artworkKey,

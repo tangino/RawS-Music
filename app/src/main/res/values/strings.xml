@@ -1077,6 +1077,12 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="playlist_group_moved">Moved to “%1$s”</string>
     <string name="playlist_group_move_current"> (current)</string>
     <string name="playlist_group_playlist_actions">Playlist actions</string>
+    <string name="playlist_group_manage_title">Playlist Group Management</string>
+    <string name="playlist_group_manage_summary">Reorder, rename, or delete custom groups</string>
+    <string name="playlist_group_count_format">%1$d playlists</string>
+    <string name="playlist_group_system_reserved">Built-in</string>
+    <string name="playlist_group_empty_hint">No custom groups. Tap above to create one.</string>
+    <string name="playlist_group_action_manage">Manage</string>
     <string name="metadata_editor_title">Edit metadata</string>
     <string name="metadata_field_title">Title</string>
     <string name="metadata_field_artist">Artist</string>

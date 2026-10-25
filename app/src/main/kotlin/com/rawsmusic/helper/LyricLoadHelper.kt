@@ -68,9 +68,19 @@ class LyricLoadHelper(
             // with an immediate PLAYER <-> LYRIC shared transition.
             var styledLyricData = LyricReader.readLyrics(song).withAnimationFlags()
             if (styledLyricData.isEmpty && (song.title.isNotBlank() || song.artist.isNotBlank())) {
+                val (platform, songId) = if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
+                    val rest = song.path.removePrefix("online://")
+                    val p = rest.substringBefore('/', "")
+                    val id = rest.substringAfter('/', "")
+                    Pair(p.takeIf { it.isNotBlank() }, id.takeIf { it.isNotBlank() })
+                } else {
+                    Pair(null, null)
+                }
                 val onlineLrc = com.rawsmusic.module.online.lyric.OnlineLyricFetcher.fetchLyric(
                     title = song.title,
                     artist = song.artist,
+                    platform = platform,
+                    songId = songId,
                 )
                 if (!onlineLrc.isNullOrBlank()) {
                     styledLyricData = com.rawsmusic.module.scanner.parser.RawSLyricsParser.parse(onlineLrc).withAnimationFlags()
@@ -79,7 +89,14 @@ class LyricLoadHelper(
             launch(Dispatchers.Main) {
                 if (loadGeneration.get() != generation) return@launch
                 val current = getCurrentSong()
-                if (current == null || current.lyricRequestKey() != requestKey) return@launch
+                val isMatchingTrack = current != null && (
+                    current.lyricRequestKey() == requestKey ||
+                    (current.id == song.id && current.id != 0L) ||
+                    (current.path == song.path) ||
+                    (current.title.equals(song.title, ignoreCase = true) &&
+                        current.artist.equals(song.artist, ignoreCase = true))
+                )
+                if (!isMatchingTrack) return@launch
 
                 setComposeLyricData(song, styledLyricData)
                 setMiniLyricData(styledLyricData)

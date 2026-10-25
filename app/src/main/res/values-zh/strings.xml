@@ -1056,6 +1056,12 @@
     <string name="playlist_group_moved">已移动到「%1$s」</string>
     <string name="playlist_group_move_current">（当前）</string>
     <string name="playlist_group_playlist_actions">歌单操作</string>
+    <string name="playlist_group_manage_title">歌单分组管理</string>
+    <string name="playlist_group_manage_summary">调整排序、重命名或删除自定义分组</string>
+    <string name="playlist_group_count_format">%1$d 个歌单</string>
+    <string name="playlist_group_system_reserved">系统内置</string>
+    <string name="playlist_group_empty_hint">暂无自定义分组，点击上方即可新建</string>
+    <string name="playlist_group_action_manage">管理</string>
     <string name="metadata_editor_title">编辑元数据</string>
     <string name="metadata_field_title">标题</string>
     <string name="metadata_field_artist">艺术家</string>

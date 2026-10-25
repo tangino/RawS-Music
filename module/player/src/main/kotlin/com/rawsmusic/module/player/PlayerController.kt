@@ -24,6 +24,7 @@ import com.rawsmusic.module.data.prefs.PlaybackStatsStore
 import com.rawsmusic.module.data.prefs.UsbBitPerfectMode
 import com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.MusicSourceResolvedStreamRegistry
 import com.rawsmusic.module.data.prefs.TransitionPreferences
 import com.rawsmusic.module.player.dsp.NativeDSPEngine
 import com.rawsmusic.module.player.dsp.ParametricEQController
@@ -5582,6 +5583,24 @@ class PlayerController private constructor(context: Context) {
     fun play(song: AudioFile, queue: List<AudioFile> = emptyList(), index: Int = 0) =
         transportControlCoordinator.play(song, queue, index)
 
+    fun playResolvedOnlineSource(
+        song: AudioFile,
+        resolvedUrl: String,
+        queue: List<AudioFile> = emptyList(),
+        index: Int = 0,
+    ) {
+        val override = PlaybackSourceOverride(
+            semanticPath = song.path,
+            cueOffsetMs = 0L,
+            cueTrackIndex = 0,
+            playbackPath = resolvedUrl,
+            sourceTag = "online_stream",
+            generation = playbackSourceOverrideGeneration.incrementAndGet(),
+        )
+        _playbackSourceOverride.value = override
+        play(song, queue, index)
+    }
+
     /**
      * Refresh the semantic auto-transition recipe when lyrics arrive asynchronously.
      * Lyrics are tied to the current renderer identity, so a new/gapless committed track clears
@@ -5602,8 +5621,19 @@ class PlayerController private constructor(context: Context) {
     private fun samePlaybackItem(a: AudioFile, b: AudioFile): Boolean =
         playRequestResolver.sameItem(a, b)
 
-    private fun rendererSourceMatches(requestedPath: String, rendererPath: String): Boolean =
-        normalizeRendererSource(requestedPath) == normalizeRendererSource(rendererPath)
+    private fun rendererSourceMatches(requestedPath: String, rendererPath: String): Boolean {
+        if (normalizeRendererSource(requestedPath) == normalizeRendererSource(rendererPath)) return true
+        val override = _playbackSourceOverride.value
+        if (override != null && override.matchesPath(requestedPath) &&
+            normalizeRendererSource(override.playbackPath) == normalizeRendererSource(rendererPath)
+        ) {
+            return true
+        }
+        if (MusicSourceResolvedStreamRegistry.matches(requestedPath, rendererPath)) {
+            return true
+        }
+        return false
+    }
 
     private fun normalizeRendererSource(path: String): String {
         val trimmed = path.trim()
@@ -5698,100 +5728,104 @@ class PlayerController private constructor(context: Context) {
             return
         }
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
-            // 本地曲库优先秒开探活：
-            // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时
-            val localMatch = try {
-                val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
-                com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
-            } catch (_: Throwable) {
-                null
-            }
-            if (localMatch != null && java.io.File(localMatch.path).exists()) {
-                AppLogger.i(TAG, "playInternal: online song '${song.title}' matched local file '${localMatch.path}', redirecting to local 0ms instant playback")
-                val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
-                val redirectedQueue = effectiveQueue.map { q ->
-                    if (q.path == song.path) localMatch else q
+            val activeOverride = _playbackSourceOverride.value
+            val isResolved = activeOverride != null && activeOverride.matches(song) && activeOverride.sourceExists()
+            if (!isResolved) {
+                // 本地曲库优先秒开探活：
+                // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时
+                val localMatch = try {
+                    val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
+                    com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
+                } catch (_: Throwable) {
+                    null
                 }
-                playInternal(
-                    song = localMatch,
-                    queue = redirectedQueue,
-                    index = index,
-                    deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                if (localMatch != null && java.io.File(localMatch.path).exists()) {
+                    AppLogger.i(TAG, "playInternal: online song '${song.title}' matched local file '${localMatch.path}', redirecting to local 0ms instant playback")
+                    val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                    val redirectedQueue = effectiveQueue.map { q ->
+                        if (q.path == song.path) localMatch else q
+                    }
+                    playInternal(
+                        song = localMatch,
+                        queue = redirectedQueue,
+                        index = index,
+                        deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                    )
+                    return
+                }
+
+                // 即将进入网络寻源。如果当前底层正在播放/准备，平滑淡出并停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
+                val isRendererBusy = _playState.value == PlayState.PLAYING ||
+                    _playState.value == PlayState.PREPARING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING
+                if (isRendererBusy) {
+                    if (ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING) {
+                        // 极速 25ms 微淡出：平滑将上一首声波衰减到零轴，彻底消除切歌瞬间因硬截断引发的爆音尾音
+                        runCatching {
+                            ffmpegPlayer.pauseWithFadeBlocking(25, "online_switch_prep")
+                        }
+                    }
+                    ffmpegPlayer.stop()
+                    backendStateControlCoordinator.resetFailures()
+                    lastPlayerError = null
+                }
+                val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                val finalQueue = if (effectiveQueue.isNotEmpty()) effectiveQueue else listOf(song)
+                val resolvedIndex = if (index in finalQueue.indices && finalQueue[index].path == song.path) {
+                    index
+                } else {
+                    finalQueue.indexOfFirst {
+                        it.path == song.path ||
+                            (it.title.equals(song.title, ignoreCase = true) &&
+                                it.artist.equals(song.artist, ignoreCase = true))
+                    }.takeIf { it >= 0 } ?: 0
+                }
+                val existingSnapshotQueue = MusicSourcePlaybackController.snapshot.value.queue
+                val mediaItems = finalQueue.map { qSong ->
+                    if (com.rawsmusic.core.common.model.isOnlineSongKey(qSong.path)) {
+                        val rest = qSong.path.removePrefix("online://")
+                        val platformId = rest.substringBefore('/', "netease")
+                        val songId = rest.substringAfter('/', qSong.id.toString())
+                        com.rawsmusic.core.common.source.RawSourceMediaItem(
+                            sourceId = platformId,
+                            remoteId = songId,
+                            mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                            title = qSong.title,
+                            artists = listOf(qSong.artist),
+                            album = qSong.album,
+                            durationMs = qSong.duration,
+                            artworkUrl = qSong.albumArtPath,
+                        )
+                    } else {
+                        val matchedItem = existingSnapshotQueue.firstOrNull {
+                            it.title.equals(qSong.title, ignoreCase = true) &&
+                                it.artists.contains(qSong.artist)
+                        }
+                        matchedItem ?: com.rawsmusic.core.common.source.RawSourceMediaItem(
+                            sourceId = "netease",
+                            remoteId = qSong.id.toString(),
+                            mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                            title = qSong.title,
+                            artists = listOf(qSong.artist),
+                            album = qSong.album,
+                            durationMs = qSong.duration,
+                            artworkUrl = qSong.albumArtPath,
+                        )
+                    }
+                }
+                primeSongSelectionForUi(song)
+                _currentSong.value = song
+                _playState.value = PlayState.PREPARING
+                _position.value = 0L
+                _duration.value = song.duration.coerceAtLeast(0L)
+                _queue.value = PlayQueue(
+                    songs = finalQueue,
+                    currentIndex = resolvedIndex,
                 )
+                MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
                 return
             }
-
-            // 即将进入网络寻源。如果当前底层正在播放/准备，平滑淡出并停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
-            val isRendererBusy = _playState.value == PlayState.PLAYING ||
-                _playState.value == PlayState.PREPARING ||
-                ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
-                ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING
-            if (isRendererBusy) {
-                if (ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING) {
-                    // 极速 25ms 微淡出：平滑将上一首声波衰减到零轴，彻底消除切歌瞬间因硬截断引发的爆音尾音
-                    runCatching {
-                        ffmpegPlayer.pauseWithFadeBlocking(25, "online_switch_prep")
-                    }
-                }
-                ffmpegPlayer.stop()
-                backendStateControlCoordinator.resetFailures()
-                lastPlayerError = null
-            }
-            val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
-            val finalQueue = if (effectiveQueue.isNotEmpty()) effectiveQueue else listOf(song)
-            val resolvedIndex = if (index in finalQueue.indices && finalQueue[index].path == song.path) {
-                index
-            } else {
-                finalQueue.indexOfFirst {
-                    it.path == song.path ||
-                        (it.title.equals(song.title, ignoreCase = true) &&
-                            it.artist.equals(song.artist, ignoreCase = true))
-                }.takeIf { it >= 0 } ?: 0
-            }
-            val existingSnapshotQueue = MusicSourcePlaybackController.snapshot.value.queue
-            val mediaItems = finalQueue.map { qSong ->
-                if (com.rawsmusic.core.common.model.isOnlineSongKey(qSong.path)) {
-                    val rest = qSong.path.removePrefix("online://")
-                    val platformId = rest.substringBefore('/', "netease")
-                    val songId = rest.substringAfter('/', qSong.id.toString())
-                    com.rawsmusic.core.common.source.RawSourceMediaItem(
-                        sourceId = platformId,
-                        remoteId = songId,
-                        mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
-                        title = qSong.title,
-                        artists = listOf(qSong.artist),
-                        album = qSong.album,
-                        durationMs = qSong.duration,
-                        artworkUrl = qSong.albumArtPath,
-                    )
-                } else {
-                    val matchedItem = existingSnapshotQueue.firstOrNull {
-                        it.title.equals(qSong.title, ignoreCase = true) &&
-                            it.artists.contains(qSong.artist)
-                    }
-                    matchedItem ?: com.rawsmusic.core.common.source.RawSourceMediaItem(
-                        sourceId = "netease",
-                        remoteId = qSong.id.toString(),
-                        mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
-                        title = qSong.title,
-                        artists = listOf(qSong.artist),
-                        album = qSong.album,
-                        durationMs = qSong.duration,
-                        artworkUrl = qSong.albumArtPath,
-                    )
-                }
-            }
-            primeSongSelectionForUi(song)
-            _currentSong.value = song
-            _playState.value = PlayState.PREPARING
-            _position.value = 0L
-            _duration.value = song.duration.coerceAtLeast(0L)
-            _queue.value = PlayQueue(
-                songs = finalQueue,
-                currentIndex = resolvedIndex,
-            )
-            MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
-            return
         }
         _playbackSourceOverride.value?.let { activeOverride ->
             if (!activeOverride.matches(song)) {
@@ -5873,8 +5907,10 @@ class PlayerController private constructor(context: Context) {
 
         androidPlaybackServiceController.ensurePlaybackWakeLock("play_request")
 
-        val playbackIsRemoteUrl = playbackPath.startsWith("http://") || playbackPath.startsWith("https://")
-        val semanticIsRemoteUrl = song.path.startsWith("http://") || song.path.startsWith("https://")
+        val isOnlineTrack = com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
+            song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+        val playbackIsRemoteUrl = playbackPath.startsWith("http://") || playbackPath.startsWith("https://") || isOnlineTrack
+        val semanticIsRemoteUrl = song.path.startsWith("http://") || song.path.startsWith("https://") || isOnlineTrack
         if (playbackPath.isBlank() || (!playbackIsRemoteUrl && !java.io.File(playbackPath).exists())) {
             // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频或跨设备迁移）：
             // 具备混合歌单特征：不直接静默跳过导致旧歌曲卡住播放，立即停止旧播放并平滑降级为在线全网寻源试听
