@@ -56,4 +56,6 @@
     <string name="nav_scene_current_playlist">当前播放歌单</string>
     <string name="nav_scene_previous_playlist">上次播放歌单</string>
     <string name="no_played_playlist_notice">暂无播放歌单记录</string>
+    <string name="nav_scene_play_history">历史播放</string>
+    <string name="play_history_empty">暂无历史播放记录</string>
 </resources>

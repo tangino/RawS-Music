@@ -50,6 +50,20 @@ object RemoteArtworkDownloader {
     private val inFlightDownloads = ConcurrentHashMap<String, CompletableFuture<Boolean>>()
 
     /**
+     * 判断是否为各大在线平台的无意义默认占位图（如网易云黑色举麦剪影、默认空白头像等）。
+     * 此类占位图绝不能作为有效封面展示或覆盖本地已有封面。
+     */
+    fun isPlaceholderUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return true
+        val u = url.lowercase()
+        return u.contains("default_avatar") ||
+            u.contains("5639395138885805") ||
+            u.contains("6y-uleoritedbvrolvq8a==") ||
+            u.contains("109951163250233892") ||
+            u.contains("default_album_art")
+    }
+
+    /**
      * 判断是否是网络远程图片 URL。
      */
     fun isRemoteUrl(url: String?): Boolean {
@@ -77,7 +91,7 @@ object RemoteArtworkDownloader {
      * 确保在主解码线程轮到该图片时，文件已经落盘到磁盘缓存中，瞬间完成解码。
      */
     fun prefetch(url: String, targetFile: File) {
-        if (!isRemoteUrl(url) || (targetFile.isFile && targetFile.length() > 0L)) {
+        if (!isRemoteUrl(url) || isPlaceholderUrl(url) || (targetFile.isFile && targetFile.length() > 0L)) {
             return
         }
         prefetchExecutor.execute {
@@ -91,11 +105,16 @@ object RemoteArtworkDownloader {
      * @return true 表示目标文件已就绪且内容有效；false 表示下载失败。
      */
     fun downloadToFile(url: String, targetFile: File): Boolean {
+        val normalized = normalizeUrl(url)
+        if (!isRemoteUrl(normalized) || isPlaceholderUrl(normalized)) {
+            if (targetFile.exists()) {
+                try { targetFile.delete() } catch (_: Exception) {}
+            }
+            return false
+        }
         if (targetFile.isFile && targetFile.length() > 0L) {
             return true
         }
-        val normalized = normalizeUrl(url)
-        if (!isRemoteUrl(normalized)) return false
 
         val future = inFlightDownloads.compute(normalized) { _, existingFuture ->
             if (existingFuture != null && !existingFuture.isDone) {

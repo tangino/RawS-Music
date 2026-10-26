@@ -89,6 +89,7 @@ import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
+import com.rawsmusic.core.common.prefs.PlayHistoryManager
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.core.ui.theme.FontScaleLayoutReporter
 import com.rawsmusic.module.data.prefs.AppPreferences
@@ -1029,6 +1030,8 @@ private fun LibraryTile(
         else -> null
     }
     val isPlayedScene = scene == NavScene.CURRENT_PLAYLIST || scene == NavScene.PREVIOUS_PLAYLIST
+    val isHistoryScene = scene == NavScene.PLAY_HISTORY
+    val historyList by if (isHistoryScene) PlayHistoryManager.history.collectAsState() else remember { mutableStateOf(emptyList()) }
     val dragging = dragPreview.activeScene == scene
     val previewDisplacement = dragPreview.displacementFor(scene)
     val committedReleaseEpoch = dragPreview.committedReleaseEpoch
@@ -1118,9 +1121,13 @@ private fun LibraryTile(
                 .clip(RoundedCornerShape(13.dp))
                 .background(pastelColorFor(scene.tag)),
         ) {
-            val candidateCover = playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
-                ?: if (isPlayedScene) currentPlayingSong?.coverKey?.takeIf { it.isNotBlank() } else null
-                ?: song?.coverKey?.takeIf { it.isNotBlank() }
+            val candidateCover = if (isHistoryScene) {
+                historyList.firstOrNull()?.coverKey?.takeIf { it.isNotBlank() }
+            } else if (isPlayedScene) {
+                playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
+            } else {
+                song?.coverKey?.takeIf { it.isNotBlank() }
+            }
 
             if (candidateCover != null) {
                 BitmapImage(
@@ -1223,12 +1230,20 @@ private fun LibraryTile(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        val statistics = if (isPlayedScene) {
-            playedInfo?.let {
-                if (it.trackCount > 0) "${it.name} · ${it.trackCount}" else it.name
-            } ?: stringResource(R.string.no_played_playlist_notice)
-        } else {
-            homeCardStatisticsText(scene, contentCount)
+        val statistics = when {
+            isPlayedScene -> {
+                playedInfo?.let {
+                    if (it.trackCount > 0) "${it.name} · ${it.trackCount}" else it.name
+                } ?: stringResource(R.string.no_played_playlist_notice)
+            }
+            isHistoryScene -> {
+                if (historyList.isNotEmpty()) {
+                    stringResource(R.string.library_statistics_songs, historyList.size)
+                } else {
+                    stringResource(R.string.play_history_empty)
+                }
+            }
+            else -> homeCardStatisticsText(scene, contentCount)
         }
         if (statistics.isNotBlank()) {
             Text(
@@ -1254,6 +1269,7 @@ private fun LibraryTile(
 private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
+    NavScene.PLAY_HISTORY -> R.drawable.ic_nav_custom_recent
     else -> null
 }
 

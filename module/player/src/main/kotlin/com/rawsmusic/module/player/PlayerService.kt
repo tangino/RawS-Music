@@ -2173,9 +2173,19 @@ class PlayerService : LifecycleService() {
         return withoutModified.substringBeforeLast("|", withoutModified)
     }
 
+    private fun isPlaceholderArtworkUrl(url: String): Boolean {
+        if (url.isBlank()) return true
+        val u = url.lowercase()
+        return u.contains("default_avatar") ||
+            u.contains("5639395138885805") ||
+            u.contains("6y-uleoritedbvrolvq8a==") ||
+            u.contains("109951163250233892") ||
+            u.contains("default_album_art")
+    }
+
     private fun resolveServiceArtworkPath(albumArtPath: String, audioPath: String): String {
         val explicitArtwork = albumArtPath.trim()
-        if (explicitArtwork.isNotBlank()) {
+        if (explicitArtwork.isNotBlank() && !isPlaceholderArtworkUrl(explicitArtwork)) {
             val remoteAudio = audioPath.startsWith("http://", ignoreCase = true) ||
                 audioPath.startsWith("https://", ignoreCase = true)
             if (!remoteAudio || explicitArtwork != audioPath.trim()) {

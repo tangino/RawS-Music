@@ -320,7 +320,10 @@ internal fun OnlinePlazaTab(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(leaderboards, key = { "${it.platform.id}_${it.id}" }) { board ->
-                            OnlineLeaderboardRow(board)
+                            OnlineLeaderboardRow(
+                                board = board,
+                                onClick = { onOpenPlaylist(board.platform, board.id) },
+                            )
                         }
                     }
                     else -> LazyColumn(
@@ -651,13 +654,17 @@ private fun OnlinePlaylistCard(
 }
 
 @Composable
-private fun OnlineLeaderboardRow(board: OnlineLeaderboard) {
+private fun OnlineLeaderboardRow(
+    board: OnlineLeaderboard,
+    onClick: () -> Unit,
+) {
     val colors = themeColors()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(colors.surface)
+            .clickable(onClick = onClick)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

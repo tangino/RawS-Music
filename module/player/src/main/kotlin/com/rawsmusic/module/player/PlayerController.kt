@@ -5722,6 +5722,9 @@ class PlayerController private constructor(context: Context) {
         pausedSelectionPendingStart = false
         lastTrackSwitchAtMs = SystemClock.elapsedRealtime()
         if (!deferPublicCommitToRenderer) pendingRendererUiCommit = null
+        try {
+            com.rawsmusic.core.common.prefs.PlayHistoryManager.recordSong(song)
+        } catch (_: Throwable) {}
         Log.d(TAG, "play() called: title=${song.title}, path=${song.path}, isReleased=$isReleased")
         if (isReleased) {
             Log.w(TAG, "play() skip: isReleased")

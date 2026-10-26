@@ -1927,6 +1927,10 @@ class MainActivity : ComponentActivity() {
             onArtistClick = { artist -> mainNavState.navigateTo(com.rawsmusic.core.ui.scene.NavScene.ARTISTS) },
             onPlayQueue = { songs, idx ->
                 primePlayerUi(songs[idx])
+                if (mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.PLAYLIST_DETAIL_PAGE &&
+                    mainNavState.currentScene != com.rawsmusic.core.ui.scene.NavScene.ONLINE_PLAYLIST_DETAIL) {
+                    com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
+                }
                 playbackQueueHelper.playQueue(songs, idx)
             },
             onPlaylistClick = {},

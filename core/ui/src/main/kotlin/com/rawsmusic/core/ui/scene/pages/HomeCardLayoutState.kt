@@ -31,6 +31,7 @@ val HomeLibraryCardScenes: List<NavScene> = listOf(
     NavScene.PLAYLISTS,
     NavScene.CURRENT_PLAYLIST,
     NavScene.PREVIOUS_PLAYLIST,
+    NavScene.PLAY_HISTORY,
     NavScene.QUEUE,
     NavScene.RECENTLY_ADDED,
     NavScene.GENRE,

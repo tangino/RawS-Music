@@ -98,6 +98,16 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         }
     }
 
+    private fun isPlaceholderUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return true
+        val u = url.lowercase()
+        return u.contains("default_avatar") ||
+            u.contains("5639395138885805") ||
+            u.contains("6y-uleoritedbvrolvq8a==") ||
+            u.contains("109951163250233892") ||
+            u.contains("default_album_art")
+    }
+
     /**
      * 智能多平台级联搜索获取歌曲高清封面。
      */
@@ -114,7 +124,10 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         try {
             val neteaseResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.NETEASE)
             val cover = neteaseResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+                item.coverUrl?.takeIf {
+                    (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
+                    !isPlaceholderUrl(it)
+                }
             }
             if (!cover.isNullOrBlank()) return cover
         } catch (t: Throwable) {
@@ -125,7 +138,10 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         try {
             val qqResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.QQ)
             val cover = qqResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+                item.coverUrl?.takeIf {
+                    (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
+                    !isPlaceholderUrl(it)
+                }
             }
             if (!cover.isNullOrBlank()) return cover
         } catch (t: Throwable) {
@@ -136,7 +152,10 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         try {
             val kuwoResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.KUWO)
             val cover = kuwoResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+                item.coverUrl?.takeIf {
+                    (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
+                    !isPlaceholderUrl(it)
+                }
             }
             if (!cover.isNullOrBlank()) return cover
         } catch (t: Throwable) {

@@ -50,7 +50,9 @@ class CoverUriResolver(
      */
     fun resolveCoverUri(song: AudioFile): String {
         val albumArt = song.albumArtPath.trim()
-        if (albumArt.startsWith("http://", ignoreCase = true) || albumArt.startsWith("https://", ignoreCase = true)) {
+        if ((albumArt.startsWith("http://", ignoreCase = true) || albumArt.startsWith("https://", ignoreCase = true)) &&
+            !com.rawsmusic.core.ui.widget.bitmaps.RemoteArtworkDownloader.isPlaceholderUrl(albumArt)
+        ) {
             val httpsUrl = if (albumArt.startsWith("http://", ignoreCase = true)) {
                 "https://" + albumArt.substring(7)
             } else {

@@ -64,4 +64,5 @@ fun NavScene.labelRes(): Int = when (this) {
     NavScene.ONLINE_ARTIST_DETAIL -> R.string.nav_scene_online_artist_detail
     NavScene.CURRENT_PLAYLIST -> R.string.nav_scene_current_playlist
     NavScene.PREVIOUS_PLAYLIST -> R.string.nav_scene_previous_playlist
+    NavScene.PLAY_HISTORY -> R.string.nav_scene_play_history
 }

@@ -233,26 +233,8 @@ internal fun OnlineArtistDetailPage(
     var resolvingSongKey by remember { mutableStateOf<String?>(null) }
 
     fun playSong(item: OnlineSongItem, index: Int, queue: List<OnlineSongItem>) {
-        val album = selectedAlbum
-        if (album != null) {
-            PlayedPlaylistManager.recordPlayedPlaylist(
-                id = album.id,
-                name = album.title,
-                isOnline = true,
-                platformId = platform.id,
-                coverUrl = album.coverUrl,
-                trackCount = queue.size.coerceAtLeast(album.songCount),
-            )
-        } else {
-            PlayedPlaylistManager.recordPlayedPlaylist(
-                id = "artist_${artist.id}",
-                name = "${artist.name} 热门歌曲",
-                isOnline = true,
-                platformId = platform.id,
-                coverUrl = artist.avatarUrl,
-                trackCount = queue.size,
-            )
-        }
+        // 歌手热门曲目与专辑属于非歌单内容，原当前播放歌单沉淀为上次播放，不再误入歌单卡片
+        PlayedPlaylistManager.recordNonPlaylistPlayed()
         val songKey = "${item.platform.id}_${item.id}"
         resolvingSongKey = songKey
         scope.launch {

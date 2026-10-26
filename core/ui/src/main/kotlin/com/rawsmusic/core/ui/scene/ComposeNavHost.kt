@@ -56,6 +56,7 @@ import com.rawsmusic.core.ui.scene.pages.resolveCollectionHeroWindowGeometry
 import com.rawsmusic.core.ui.scene.pages.LibrarySongSelectionActions
 import com.rawsmusic.core.ui.scene.pages.QueuePage
 import com.rawsmusic.core.ui.scene.pages.RecentlyAddedPage
+import com.rawsmusic.core.ui.scene.pages.PlayHistoryPage
 import com.rawsmusic.core.ui.scene.pages.SongStatsPage
 import com.rawsmusic.core.ui.scene.pages.LibraryAnalysisPageState
 import com.rawsmusic.core.ui.scene.pages.SongsPage
@@ -640,6 +641,12 @@ fun ComposeNavHost(
                 selectionActions = songSelectionActions,
                 onShuffle = callbacks.onShuffleAll,
                 virtualListState = recentlyAddedVirtualListState,
+            )
+            NavScene.PLAY_HISTORY -> PlayHistoryPage(
+                onBack = onBack,
+                onSongClick = callbacks.onSongClick,
+                onPlayQueue = callbacks.onPlayQueue,
+                modifier = Modifier.fillMaxSize(),
             )
             // WEBDAV 由外部渲染器处理（依赖 AppPreferences）
             NavScene.ABOUT -> AboutPage(onBack = onBack)

@@ -261,12 +261,39 @@ class NeteaseMusicSource(
     }
 
     /**
+     * 判断是否为网易云默认占位头像/封面（黑色举麦剪影或默认空白图）
+     */
+    private fun isDefaultPlaceholder(url: String): Boolean {
+        if (url.isEmpty()) return true
+        return url.contains("default_avatar") ||
+                url.contains("5639395138885805") ||
+                url.contains("6y-UleORITEDbvrOLV0Q8A==") ||
+                url.contains("109951163250233892")
+    }
+
+    /**
      * 根据歌曲 ID 列表分批获取所有歌曲详情
      */
     private suspend fun fetchSongDetailsByIds(trackIds: List<String>): List<OnlineSongItem> = withContext(Dispatchers.IO) {
         val songMap = mutableMapOf<String, OnlineSongItem>()
-        val chunks = trackIds.chunked(500)
+        val chunks = trackIds.chunked(200)
         for (chunk in chunks) {
+            // 1. 优先使用稳定轻量的 song/detail 接口（直接携带真实专辑封面 picUrl）
+            try {
+                val url = "https://music.163.com/api/song/detail?ids=[${chunk.joinToString(",")}]"
+                val root = getApi(url)
+                val songsArr = root.optJSONArray("songs")
+                if (songsArr != null && songsArr.length() > 0) {
+                    for (i in 0 until songsArr.length()) {
+                        val trackObj = songsArr.optJSONObject(i) ?: continue
+                        val songItem = parseSongItem(trackObj) ?: continue
+                        songMap[songItem.id] = songItem
+                    }
+                    continue
+                }
+            } catch (_: Exception) {}
+
+            // 2. 备用 v3 接口
             try {
                 val cArray = JSONArray()
                 for (id in chunk) {
@@ -313,7 +340,7 @@ class NeteaseMusicSource(
                 if (!aName.isNullOrEmpty()) artists.add(aName)
                 if (artistPicUrl.isEmpty() && aObj != null) {
                     val aPic = aObj.optString("img1v1Url").ifEmpty { aObj.optString("picUrl") }
-                    if (aPic.isNotEmpty() && !aPic.contains("default_avatar")) {
+                    if (aPic.isNotEmpty() && !isDefaultPlaceholder(aPic)) {
                         artistPicUrl = aPic
                     }
                 }
@@ -325,10 +352,12 @@ class NeteaseMusicSource(
         val alObj = trackObj.optJSONObject("al") ?: trackObj.optJSONObject("album")
         val albumName = alObj?.optString("name") ?: "未知专辑"
         val albId = alObj?.optLong("id")?.takeIf { it > 0 }?.toString()
-        var picUrl = alObj?.optString("picUrl")?.ifEmpty { null }
+        val rawPicUrl = alObj?.optString("picUrl")?.ifEmpty { null }
             ?: alObj?.optString("pic_str")?.let { if (it.isNotEmpty() && it.startsWith("http")) it else null }
             ?: trackObj.optString("picUrl").ifEmpty { null }
             ?: artistPicUrl.ifEmpty { null }
+
+        var picUrl = if (!rawPicUrl.isNullOrEmpty() && !isDefaultPlaceholder(rawPicUrl)) rawPicUrl else null
 
         if (!picUrl.isNullOrEmpty() && !picUrl.contains("?param=")) {
             picUrl = "$picUrl?param=300y300"
@@ -421,12 +450,12 @@ class NeteaseMusicSource(
 
         val list = mutableListOf<OnlineSongItem>()
 
-        // 1. 优先使用稳定网页搜索接口
+        // 1. 优先使用 cloudsearch 搜索接口（直接返回带有真实高清封面 al.picUrl 的完整歌曲数据）
         try {
-            val root = postApi("https://music.163.com/api/search/get/web?csrf_token=", formBody)
+            val root = postApi("https://music.163.com/api/cloudsearch/pc", formBody)
             val resultObj = root.optJSONObject("result")
             val songsArr = resultObj?.optJSONArray("songs")
-            if (songsArr != null) {
+            if (songsArr != null && songsArr.length() > 0) {
                 for (i in 0 until songsArr.length()) {
                     val item = songsArr.optJSONObject(i) ?: continue
                     parseSongItem(item)?.let { list.add(it) }
@@ -434,13 +463,13 @@ class NeteaseMusicSource(
             }
         } catch (_: Exception) {}
 
-        // 2. 备用 cloudsearch 降级
+        // 2. 备用 search/get/web 降级
         if (list.isEmpty()) {
             try {
-                val root = postApi("https://music.163.com/api/cloudsearch/pc", formBody)
+                val root = postApi("https://music.163.com/api/search/get/web?csrf_token=", formBody)
                 val resultObj = root.optJSONObject("result")
                 val songsArr = resultObj?.optJSONArray("songs")
-                if (songsArr != null && songsArr.length() > 0) {
+                if (songsArr != null) {
                     for (i in 0 until songsArr.length()) {
                         val item = songsArr.optJSONObject(i) ?: continue
                         parseSongItem(item)?.let { list.add(it) }
@@ -449,7 +478,7 @@ class NeteaseMusicSource(
             } catch (_: Exception) {}
         }
 
-        // 3. 若有缺失封面的歌曲，批量补充详情（获取高清大图 al.picUrl）
+        // 3. 若有缺失封面的歌曲，批量补充详情（获取真实专辑大图 picUrl）
         val missingCoverIds = list.filter { it.coverUrl.isNullOrEmpty() }.map { it.id }
         if (missingCoverIds.isNotEmpty()) {
             try {

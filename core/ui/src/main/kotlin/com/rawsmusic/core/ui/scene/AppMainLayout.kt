@@ -832,6 +832,7 @@ private fun NavScene.supportsRawFlowBackground(): Boolean {
         NavScene.PLAYLIST_DETAIL,
         NavScene.QUEUE,
         NavScene.RECENTLY_ADDED,
+        NavScene.PLAY_HISTORY,
         NavScene.DAILY_20,
         NavScene.GENRE,
         NavScene.YEAR,

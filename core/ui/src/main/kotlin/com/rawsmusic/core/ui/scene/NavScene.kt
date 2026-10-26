@@ -64,7 +64,8 @@ enum class NavScene(
     ONLINE_PLAYLIST_DETAIL(55, "online_playlist_detail", "在线歌单详情", "queue_music"),
     ONLINE_ARTIST_DETAIL(56, "online_artist_detail", "在线歌手详情", "person"),
     CURRENT_PLAYLIST(57, "current_playlist", "当前播放歌单", "queue_music"),
-    PREVIOUS_PLAYLIST(58, "previous_playlist", "上次播放歌单", "history");
+    PREVIOUS_PLAYLIST(58, "previous_playlist", "上次播放歌单", "history"),
+    PLAY_HISTORY(59, "play_history", "历史播放", "history");
 
     companion object {
         private val idMap = entries.associateBy { it.id }

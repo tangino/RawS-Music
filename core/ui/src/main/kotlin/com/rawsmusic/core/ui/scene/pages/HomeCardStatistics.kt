@@ -1,6 +1,7 @@
 package com.rawsmusic.core.ui.scene.pages
 
 import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.common.prefs.PlayHistoryManager
 import com.rawsmusic.core.ui.scene.NavScene
 import java.util.Locale
 
@@ -25,6 +26,7 @@ internal data class HomeCardStatisticsSnapshot(
         NavScene.YEAR -> yearCount
         NavScene.COMPOSER -> composerCount
         NavScene.ANALYTICS, NavScene.SONG_STATS -> songCount
+        NavScene.PLAY_HISTORY -> PlayHistoryManager.history.value.size
         else -> null
     }
 }

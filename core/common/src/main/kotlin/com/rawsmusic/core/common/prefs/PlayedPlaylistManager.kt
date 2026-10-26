@@ -46,6 +46,11 @@ object PlayedPlaylistManager {
         lastPlayedSongArtist: String? = null,
     ) {
         if (id.isBlank() || name.isBlank()) return
+        // 严格歌单校验：非歌单内容（歌手、专辑、单曲等）绝不进入播放歌单卡片
+        if (id.startsWith("artist_") || id.startsWith("album_") || name.contains("热门歌曲") || name.contains("单曲搜索")) {
+            recordNonPlaylistPlayed()
+            return
+        }
         val current = _currentPlaylist.value
         val effectiveCover = coverUrl?.takeIf { it.isNotBlank() }
             ?: current?.takeIf { it.id == id && it.isOnline == isOnline }?.coverUrl
@@ -111,7 +116,10 @@ object PlayedPlaylistManager {
             val json = JSONObject(jsonStr)
             val id = json.optString("id")
             val name = json.optString("name")
-            if (id.isBlank() || name.isBlank()) return null
+            if (id.isBlank() || name.isBlank() || id.startsWith("artist_") || id.startsWith("album_") || name.contains("热门歌曲")) {
+                kv.remove(key)
+                return null
+            }
             PlayedPlaylistEntry(
                 id = id,
                 name = name,

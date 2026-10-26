@@ -576,10 +576,10 @@ fun ComposeMiniPlayer(
             } else {
                 target
             }
-            val targetSlot = if (completedDirection > 0) {
-                nextHolderSlot()
-            } else {
-                previousHolderSlot()
+            val targetSlot = when {
+                completedDirection > 0 -> nextHolderSlot()
+                completedDirection < 0 -> previousHolderSlot()
+                else -> centerHolderSlot
             }
             // Promote the physical target holder itself. Immediately before this commit it is
             // already at x=0; after the center index rotates it remains at x=0 with the same node.
@@ -608,36 +608,42 @@ fun ComposeMiniPlayer(
         transitionJob?.cancel()
         transitionJob = scope.launch {
             transitionRunning = true
-            val frozenCenter = gestureTransaction.frozenCenter ?: latestRenderedSnapshot
-            transitionDirection = direction
-            pendingIdentity = target.identity
-            if (
-                gestureTransaction.preparedDirection != direction ||
-                gestureTransaction.preparedTargetIdentity != target.identity
-            ) {
-                preparePersistentHolderTarget(direction, target, frozenCenter)
-            }
+            try {
+                val frozenCenter = gestureTransaction.frozenCenter ?: latestRenderedSnapshot
+                transitionDirection = direction
+                pendingIdentity = target.identity
+                if (
+                    gestureTransaction.preparedDirection != direction ||
+                    gestureTransaction.preparedTargetIdentity != target.identity
+                ) {
+                    preparePersistentHolderTarget(direction, target, frozenCenter)
+                }
 
-            if (dispatchTransport) {
-                if (direction > 0) latestSkipNext() else latestSkipPrevious()
-            }
+                if (dispatchTransport) {
+                    if (direction > 0) latestSkipNext() else latestSkipPrevious()
+                }
 
-            val animation = Animatable(startOffset)
-            animation.animateTo(
-                targetValue = -direction * contentWidthPx.coerceAtLeast(1f),
-                animationSpec = tween(
-                    durationMillis = MINI_PLAYER_SWITCH_DURATION_MS,
-                    easing = MiniPlayerSwitchEasing
-                )
-            ) {
-                dragOffsetPx = value
-                latestSwitchProgress(
-                    -value / contentWidthPx.coerceAtLeast(1f),
-                    true
-                )
+                val animation = Animatable(startOffset)
+                animation.animateTo(
+                    targetValue = -direction * contentWidthPx.coerceAtLeast(1f),
+                    animationSpec = tween(
+                        durationMillis = MINI_PLAYER_SWITCH_DURATION_MS,
+                        easing = MiniPlayerSwitchEasing
+                    )
+                ) {
+                    dragOffsetPx = value
+                    latestSwitchProgress(
+                        -value / contentWidthPx.coerceAtLeast(1f),
+                        true
+                    )
+                }
+                clearTransition(target)
+            } finally {
+                if (transitionRunning) {
+                    clearTransition(target)
+                }
+                transitionJob = null
             }
-            clearTransition(target)
-            transitionJob = null
         }
     }
 
@@ -645,22 +651,28 @@ fun ComposeMiniPlayer(
         transitionJob?.cancel()
         transitionJob = scope.launch {
             transitionRunning = true
-            val animation = Animatable(dragOffsetPx)
-            animation.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(
-                    durationMillis = 210,
-                    easing = MiniPlayerSwitchEasing
-                )
-            ) {
-                dragOffsetPx = value
-                latestSwitchProgress(
-                    -value / contentWidthPx.coerceAtLeast(1f),
-                    true
-                )
+            try {
+                val animation = Animatable(dragOffsetPx)
+                animation.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(
+                        durationMillis = 210,
+                        easing = MiniPlayerSwitchEasing
+                    )
+                ) {
+                    dragOffsetPx = value
+                    latestSwitchProgress(
+                        -value / contentWidthPx.coerceAtLeast(1f),
+                        true
+                    )
+                }
+                clearTransition()
+            } finally {
+                if (transitionRunning) {
+                    clearTransition()
+                }
+                transitionJob = null
             }
-            clearTransition()
-            transitionJob = null
         }
     }
 
@@ -694,6 +706,9 @@ fun ComposeMiniPlayer(
             return@LaunchedEffect
         }
         if (contentWidthPx <= 1f) {
+            setHolderSnapshot(centerHolderSlot, authoritativeSnapshot)
+            setHolderSnapshot(previousHolderSlot(), previousSnapshot ?: authoritativeSnapshot)
+            setHolderSnapshot(nextHolderSlot(), nextSnapshot ?: authoritativeSnapshot)
             visibleSnapshot = authoritativeSnapshot
             settledQueueIndex = queueCurrentIndex
             return@LaunchedEffect
@@ -721,6 +736,8 @@ fun ComposeMiniPlayer(
             } else null
             automaticArtworkFade = fade
             setHolderSnapshot(centerHolderSlot, authoritativeSnapshot)
+            setHolderSnapshot(previousHolderSlot(), previousSnapshot ?: authoritativeSnapshot)
+            setHolderSnapshot(nextHolderSlot(), nextSnapshot ?: authoritativeSnapshot)
             visibleSnapshot = authoritativeSnapshot
             settledQueueIndex = queueCurrentIndex
             if (fade != null) {
@@ -738,6 +755,21 @@ fun ComposeMiniPlayer(
             return@LaunchedEffect
         }
         automaticArtworkFade = null
+
+        val isAdjacent = queueSize > 1 && settledQueueIndex in 0 until queueSize && queueCurrentIndex in 0 until queueSize && (
+            (settledQueueIndex + 1) % queueSize == queueCurrentIndex ||
+            (settledQueueIndex - 1 + queueSize) % queueSize == queueCurrentIndex
+        )
+        if (!isAdjacent && !horizontalGestureActive) {
+            // Non-adjacent jump (e.g. user tapped directly on a song in a playlist/list)
+            setHolderSnapshot(centerHolderSlot, authoritativeSnapshot)
+            setHolderSnapshot(previousHolderSlot(), previousSnapshot ?: authoritativeSnapshot)
+            setHolderSnapshot(nextHolderSlot(), nextSnapshot ?: authoritativeSnapshot)
+            visibleSnapshot = authoritativeSnapshot
+            settledQueueIndex = queueCurrentIndex
+            return@LaunchedEffect
+        }
+
         val direction = resolveMiniPlayerQueueDirection(
             oldIndex = settledQueueIndex,
             newIndex = queueCurrentIndex,
