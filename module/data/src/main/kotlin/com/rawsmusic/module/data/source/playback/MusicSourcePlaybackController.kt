@@ -70,7 +70,12 @@ data class MusicSourcePlaybackSnapshot(
         get() = queue.size > 1 || positionMs > 5_000L || currentIndex > 0
 
     val canGoNext: Boolean
-        get() = queue.isNotEmpty() && (queue.size > 1 || status == MusicSourcePlaybackStatus.Playing)
+        get() {
+            if (queue.isEmpty()) return false
+            val playMode = com.rawsmusic.module.data.prefs.AppPreferences.Player.playMode
+            val isLoopMode = playMode.repeatMode != com.rawsmusic.core.common.model.RepeatMode.OFF
+            return queue.size > 1 || isLoopMode || status == MusicSourcePlaybackStatus.Playing || status == MusicSourcePlaybackStatus.Completed
+        }
 
     val progressFraction: Float
         get() = if (durationMs > 0L) {

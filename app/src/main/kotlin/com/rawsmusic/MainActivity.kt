@@ -1759,7 +1759,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }.collect { (scene, transitioning, _) ->
                     when {
-                        scene == com.rawsmusic.core.ui.widget.PlayerScene.MAIN && !transitioning -> {
+                        scene == com.rawsmusic.core.ui.widget.PlayerScene.MAIN -> {
                             playerIdleCatchupJob?.cancel()
                             publishLatest()
                         }

@@ -2236,6 +2236,33 @@ class PlayerService : LifecycleService() {
             inPreferredConfig = mediaSessionArtworkConfig()
         }
 
+    /** 下载网络封面并进行安全采样解码，供通知栏与锁屏 MediaSession 使用 */
+    private fun downloadNetworkArtwork(url: String, targetSide: Int): Bitmap? {
+        return try {
+            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 5000
+            connection.readTimeout = 8000
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.connect()
+            if (connection.responseCode in 200..299) {
+                connection.inputStream.use { stream ->
+                    val bytes = stream.readBytes()
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                    val sample = maxOf(1, minOf(opts.outWidth / targetSide, opts.outHeight / targetSide))
+                    val decodeOpts = serviceArtworkDecodeOptions(sample)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+                }
+            } else {
+                null
+            }
+        } catch (e: Throwable) {
+            Log.w("StatusArtwork", "downloadNetworkArtwork failed: url=$url", e)
+            null
+        }
+    }
+
     /**
      * 异步加载封面Bitmap
      * 支持：content:// URI（含 albumart 高清提取）、文件路径
@@ -2259,12 +2286,23 @@ class PlayerService : LifecycleService() {
             var bitmap: Bitmap? = null
             var usedDefaultArtwork = false
             try {
-                val rawPath = try { URLDecoder.decode(albumArtPath, "UTF-8") } catch (_: Exception) { albumArtPath }
-                val path = normalizeServiceArtworkPath(rawPath)
+                val rawPath = if (albumArtPath.startsWith("http://", ignoreCase = true) || albumArtPath.startsWith("https://", ignoreCase = true)) {
+                    albumArtPath.trim()
+                } else {
+                    try { URLDecoder.decode(albumArtPath, "UTF-8") } catch (_: Exception) { albumArtPath }
+                }
+                val path = if (rawPath.startsWith("http://", ignoreCase = true) || rawPath.startsWith("https://", ignoreCase = true)) {
+                    rawPath
+                } else {
+                    normalizeServiceArtworkPath(rawPath)
+                }
                 Log.d("StatusArtwork", "load targetSide=$targetSide apiHigh=${AppPreferences.AlbumArt.sendHighResolutionArtwork} labs=${AppPreferences.AlbumArt.useHigherRes} path=${path.takeLast(96)}")
 
                 if (path.isBlank()) {
                     // Continue to the configured built-in fallback below.
+                } else if (path.startsWith("http://", ignoreCase = true) || path.startsWith("https://", ignoreCase = true)) {
+                    // 网络封面 URL
+                    bitmap = downloadNetworkArtwork(path, targetSide)
                 } else if (path.startsWith("file://")) {
                     val filePath = path.removePrefix("file://")
                     val file = File(filePath)

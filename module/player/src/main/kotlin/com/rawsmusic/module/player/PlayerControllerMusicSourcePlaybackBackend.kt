@@ -170,7 +170,9 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         val request = activeRequest ?: return
         val currentPath = controller.currentSong.value?.path
         val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
-        val ownsCurrent = currentPath == request.source.url || currentPath == targetKey
+        val ownsCurrent = ownsCurrentSong() ||
+            (currentPath != null && (currentPath == request.source.url || currentPath == targetKey)) ||
+            (controller.currentSong.value?.let { it.title.equals(request.item.title, ignoreCase = true) } == true)
         if (ownsCurrent) {
             hasOwnedRendererSession = true
         } else {

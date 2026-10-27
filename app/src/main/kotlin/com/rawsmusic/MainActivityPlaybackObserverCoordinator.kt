@@ -27,7 +27,7 @@ internal class MainActivityPlaybackObserverCoordinator(
 
     fun start(target: PlayerController? = controller()) {
         target ?: return
-        if (boundController === target && jobs.size == 5 && jobs.all { it.isActive }) return
+        if (boundController === target && jobs.size == 6 && jobs.all { it.isActive }) return
         jobs.forEach { it.cancel() }
         jobs.clear()
         boundController = target
@@ -40,6 +40,34 @@ internal class MainActivityPlaybackObserverCoordinator(
             target.currentSong.collect { song ->
                 if (song != null) {
                     onCurrentSong(song)
+                }
+            }
+        }
+        jobs += scope.launch(Dispatchers.Main) {
+            com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collect { onlineSnapshot ->
+                val onlineItem = onlineSnapshot.currentItem ?: return@collect
+                val cur = target.currentSong.value
+                val isOnlineCurrent = cur != null && (
+                    com.rawsmusic.core.common.model.isOnlineSongKey(cur.path) ||
+                    cur.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
+                    cur.path.startsWith("http://", ignoreCase = true) ||
+                    cur.path.startsWith("https://", ignoreCase = true)
+                )
+                if (isOnlineCurrent || onlineSnapshot.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing ||
+                    onlineSnapshot.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving
+                ) {
+                    val virtualSong = AudioFile(
+                        id = if (cur?.id != null && cur.id != 0L) cur.id else onlineItem.stableIdentity.hashCode().toLong(),
+                        path = com.rawsmusic.core.common.model.onlineSongKey(onlineItem.sourceId, onlineItem.remoteId),
+                        title = onlineItem.title,
+                        artist = onlineItem.artists.joinToString(", "),
+                        album = onlineItem.album,
+                        duration = onlineItem.durationMs.coerceAtLeast(0L),
+                        format = "ONLINE",
+                        albumArtPath = onlineItem.artworkUrl,
+                        encodingFormat = com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
+                    )
+                    onCurrentSong(virtualSong)
                 }
             }
         }

@@ -1652,7 +1652,12 @@ class PlayerController private constructor(context: Context) {
                         AppLogger.w(TAG, "Ignoring COMPLETED with null currentSong")
                         return@launch
                     }
-                    if (com.rawsmusic.core.common.model.isOnlineSongKey(cur.path)) {
+                    val isOnline = com.rawsmusic.core.common.model.isOnlineSongKey(cur.path) ||
+                        cur.encodingFormat == MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
+                        cur.path.startsWith("http://", ignoreCase = true) ||
+                        cur.path.startsWith("https://", ignoreCase = true)
+                    // 仅在在线歌曲处于寻源准备阶段（尚未真正起播）时忽略过早的 COMPLETED
+                    if (isOnline && _playState.value == PlayState.PREPARING) {
                         AppLogger.w(TAG, "Ignoring backend COMPLETED while online song is resolving/preparing: ${cur.title}")
                         return@launch
                     }
@@ -1670,10 +1675,16 @@ class PlayerController private constructor(context: Context) {
                     // 2. 切歌冷却与物理进度合理性检查：自然完成必然在曲目末尾，新歌刚切歌或刚起播绝不可能自然完成
                     val currentPos = _position.value
                     val totalDur = _duration.value.takeIf { it > 0 } ?: cur.duration
+                    val reachedTail = if (totalDur > 0L) {
+                        // 播放进度已达总时长的 90% 以上，或距离尾声不足 15 秒，均视为自然播放结束
+                        (currentPos >= totalDur * 0.90f) || (totalDur >= 5_000L && currentPos >= totalDur - 15_000L)
+                    } else false
                     val isPremature = _playState.value == PlayState.PREPARING ||
-                        elapsedSinceSwitch < 2_500L ||
-                        (totalDur >= 8_000L && currentPos < (totalDur - 5_000L)) ||
-                        (totalDur > 3_000L && currentPos <= 2_000L)
+                        elapsedSinceSwitch < 2_000L ||
+                        (!reachedTail && (
+                            (totalDur >= 8_000L && currentPos < (totalDur - 5_000L)) ||
+                            (totalDur > 3_000L && currentPos <= 2_000L)
+                        ))
                     if (isPremature) {
                         AppLogger.w(
                             TAG,
@@ -5622,15 +5633,36 @@ class PlayerController private constructor(context: Context) {
         playRequestResolver.sameItem(a, b)
 
     private fun rendererSourceMatches(requestedPath: String, rendererPath: String): Boolean {
-        if (normalizeRendererSource(requestedPath) == normalizeRendererSource(rendererPath)) return true
+        val normReq = normalizeRendererSource(requestedPath)
+        val normRen = normalizeRendererSource(rendererPath)
+        if (normReq == normRen) return true
         val override = _playbackSourceOverride.value
-        if (override != null && override.matchesPath(requestedPath) &&
-            normalizeRendererSource(override.playbackPath) == normalizeRendererSource(rendererPath)
+        if (override != null) {
+            val normOverride = normalizeRendererSource(override.playbackPath)
+            if ((override.matchesPath(requestedPath) && normOverride == normRen) ||
+                (override.matchesPath(rendererPath) && normOverride == normReq)
+            ) {
+                return true
+            }
+        }
+        if (MusicSourceResolvedStreamRegistry.matches(requestedPath, rendererPath) ||
+            MusicSourceResolvedStreamRegistry.matches(rendererPath, requestedPath)
         ) {
             return true
         }
-        if (MusicSourceResolvedStreamRegistry.matches(requestedPath, rendererPath)) {
-            return true
+        // 针对网络歌曲在在线快照中匹配当前曲目
+        val onlineSnapshot = MusicSourcePlaybackController.snapshot.value
+        val currentOnline = onlineSnapshot.currentItem
+        if (currentOnline != null) {
+            val onlineKey = com.rawsmusic.core.common.model.onlineSongKey(currentOnline.sourceId, currentOnline.remoteId)
+            val matchesReq = requestedPath == onlineKey || requestedPath == currentOnline.stableIdentity
+            val matchesRen = rendererPath == onlineKey || rendererPath == currentOnline.stableIdentity
+            if ((matchesReq && normRen.isNotBlank()) || (matchesRen && normReq.isNotBlank())) {
+                val resolvedUrl = onlineSnapshot.sourceTag
+                if (normRen.contains("cache", ignoreCase = true) || normRen.startsWith("http", ignoreCase = true)) {
+                    return true
+                }
+            }
         }
         return false
     }

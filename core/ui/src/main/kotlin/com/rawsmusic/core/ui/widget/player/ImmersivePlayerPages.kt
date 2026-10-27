@@ -398,6 +398,12 @@ fun ImmersivePlayerHorizontalStack(
         onDispose {
             verticalGate.enabled = false
             if (verticalMotion.presentation != null) artworkTransitionState.cancelGesture()
+            verticalMotion.presentation = null
+        }
+    }
+    LaunchedEffect(currentScene) {
+        if (currentScene != PlayerSceneController.Scene.PLAYER) {
+            verticalMotion.presentation = null
         }
     }
     LaunchedEffect(verticalMotion, artworkTransitionState) {
@@ -405,9 +411,14 @@ fun ImmersivePlayerHorizontalStack(
             val presentation = verticalMotion.presentation
             val idle = !artworkTransitionState.isGestureActive && !artworkTransitionState.isSettling
             presentation != null && idle && if (verticalMotion.committed) {
-                latestVerticalSong?.coverKey == presentation.target.coverKey ||
-                    (latestVerticalSong?.coverKey != presentation.source.coverKey &&
-                        latestVerticalSong?.coverKey != presentation.target.coverKey)
+                val current = latestVerticalSong
+                current != null && (
+                    (current.coverKey.isNotBlank() && current.coverKey == presentation.target.coverKey) ||
+                    current.path == presentation.target.path ||
+                    (current.id != 0L && current.id == presentation.target.id) ||
+                    (current.title.equals(presentation.target.title, ignoreCase = true) && current.artist.equals(presentation.target.artist, ignoreCase = true)) ||
+                    (current.coverKey != presentation.source.coverKey && current.coverKey != presentation.target.coverKey)
+                )
             } else artworkTransitionState.ratio <= 0.0001f
         }.collect { finished ->
             if (finished) verticalMotion.presentation = null
@@ -503,7 +514,7 @@ fun ImmersivePlayerHorizontalStack(
             (song?.coverKey?.isNotBlank() == true && song.coverKey == currentSong?.coverKey) ||
             (song != null && currentSong != null && song.id == currentSong.id && song.id != 0L) ||
             (song != null && currentSong != null && song.path == currentSong.path) ||
-            (song != null && currentSong != null && song.title == currentSong.title && song.artist == currentSong.artist)
+            (song != null && currentSong != null && song.title.equals(currentSong.title, ignoreCase = true) && song.artist.equals(currentSong.artist, ignoreCase = true))
         )
         ImmersivePlayerMainPage(
             currentSong = song,
@@ -576,7 +587,8 @@ fun ImmersivePlayerHorizontalStack(
             modifier = layer,
         )
         }
-        val verticalPresentation = verticalMotion.presentation
+        val gestureMotionActive = artworkTransitionState.isGestureActive || artworkTransitionState.isSettling
+        val verticalPresentation = if (gestureMotionActive) verticalMotion.presentation else null
         TrackPage(verticalPresentation?.source ?: currentSong,
             verticalPresentation?.sourceCover ?: coverPath, false,
             Modifier.pageLayer(1).graphicsLayer {
