@@ -19,6 +19,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -1898,6 +1900,7 @@ private fun StandardPlayerBody(
                 onPlayPause = onPlayPause,
                 onNext = onNext,
                 onPlayMode = onPlayMode,
+                onPlayModeLongPress = onPlayModeLongPress,
                 onQueuePlaceholder = onToggleQueue
             )
         }
@@ -2186,6 +2189,7 @@ private fun StandardTransportButtons(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onPlayMode: () -> Unit,
+    onPlayModeLongPress: () -> Unit = {},
     onQueuePlaceholder: () -> Unit,
     compactHeight: Boolean = false,
     currentSong: AudioFile? = null,
@@ -2198,7 +2202,14 @@ private fun StandardTransportButtons(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        PlayerTransportIcon(iconRes = playModeIconRes, size = 40.dp * controlScale, iconSize = 30.dp * controlScale, tint = tone.tertiary, onClick = onPlayMode)
+        PlayerTransportIcon(
+            iconRes = playModeIconRes,
+            size = 40.dp * controlScale,
+            iconSize = 30.dp * controlScale,
+            tint = tone.tertiary,
+            onClick = onPlayMode,
+            onLongClick = onPlayModeLongPress
+        )
         PlayerTransportIcon(iconRes = previousIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onPrevious)
         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
         val isOnlineBusy = isOnlinePlaybackBusy(currentSong, onlineSnapshot)
@@ -2252,19 +2263,30 @@ private fun PlayerQueuePlaceholder(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PlayerTransportIcon(
     @DrawableRes iconRes: Int,
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     tint: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick?.let { action ->
+                    {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        action()
+                    }
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (iconRes != 0) {
@@ -2515,12 +2537,18 @@ private fun ArtworkTitleInfoPager(
         // Keep the title on the same logical holder as the artwork during an automatic fade.
         // currentSong is promoted as soon as the pending track enters the renderer timeline, while
         // the artwork holder is promoted only at the handoff boundary. Reading currentSong here
-        // made the new title briefly render on the old cover, then recreated the holder at commit.
-        // Reference updates the ArtworkItemNode payload on the holder that owns the current artwork and
-        // promotes both payloads together, so resolve the current title from the artwork key.
-        val currentTitleSong = resolvedCurrent ?: currentSong
+        // Keep the title on the same logical holder as the artwork during gesture transitions.
+        // During natural auto advance or idle states, the real authoritative song is always currentSong;
+        // relying solely on resolvedCurrent (reverse-looked-up by artwork key) causes stale title
+        // display whenever tracks share the same album cover, have no cover, or during automatic crossfade.
+        val isGestureDragging = artworkTransitionState.isGestureActive || artworkTransitionState.isSettling
+        val currentTitleSong = if (isGestureDragging) (resolvedCurrent ?: currentSong) else (currentSong ?: resolvedCurrent)
+        val targetTitleSong = if (automaticArtworkFade) (currentSong ?: resolvedTarget) else resolvedTarget
         val currentTitleKey = currentKey.ifBlank {
             currentTitleSong?.path?.takeIf { it.isNotBlank() } ?: "player-title-empty"
+        }
+        val targetTitleKey = targetKey.ifBlank {
+            targetTitleSong?.path?.takeIf { it.isNotBlank() } ?: "player-title-target"
         }
         val currentToken = artworkTransitionState.foregroundCurrentToken()
         val targetToken = artworkTransitionState.foregroundTargetToken()
@@ -2561,8 +2589,8 @@ private fun ArtworkTitleInfoPager(
         )
         val targetHolder = TitleHolder(
             token = targetToken,
-            key = targetKey,
-            song = resolvedTarget,
+            key = targetTitleKey,
+            song = targetTitleSong,
             role = PlayerArtworkItemRole.Target,
         )
         val previousHolder = TitleHolder(
@@ -2587,12 +2615,12 @@ private fun ArtworkTitleInfoPager(
         val titleMotionActive = targetKey.isNotBlank() ||
             artworkTransitionState.isGestureActive || artworkTransitionState.isSettling
         val holders = if (automaticArtworkFade) {
-            activeHolders.filter { it.song != null && (it.token != 0 || it.key.isNotBlank()) }
-                .distinctBy { if (it.token != 0) "token:${it.token}" else "key:${it.key}" }
+            activeHolders.filter { it.song != null }
+                .distinctBy { if (it.token != 0) "token:${it.token}" else "${it.key}|${it.song?.path}" }
         } else {
             (listOf(previousHolder, nextHolder) + activeHolders)
                 .filter { it.song != null && (it.token != 0 || it.key.isNotBlank()) }
-                .distinctBy { if (it.token != 0) "token:${it.token}" else "key:${it.key}" }
+                .distinctBy { if (it.token != 0) "token:${it.token}" else "${it.key}|${it.song?.path}" }
         }
 
         // Reference has three complete ArtworkItemNodes, not three images plus a two-page text pager.
@@ -2600,14 +2628,11 @@ private fun ArtworkTitleInfoPager(
         // a swipe/button transition only changes layer properties; no title composition is inserted
         // on the first motion frame and no outgoing text tree is destroyed at commit.
         holders.forEach { holder ->
-            val physicalIdentity: Any = holder.token.takeIf { it != 0 } ?: holder.key
+            val physicalIdentity: Any = if (holder.token != 0) "token:${holder.token}|${holder.song?.path}" else "${holder.key}|${holder.song?.path}"
             key(physicalIdentity) {
                 TitleItem(
-                    // The physical holder is keyed by token/key so it still survives motion, but
-                    // its metadata must not be cached by that key. Two tracks can share one
-                    // artwork holder; Reference updates ArtworkItemNode's text payload in the same bind
-                    // that keeps/replaces ArtworkImageNode's wrapper. Reading the current payload here
-                    // fixes stale-title/flicker after a same-cover track switch.
+                    // The physical holder is keyed by token/key and song path so it survives motion,
+                    // but accurately refreshes metadata when tracks change.
                     song = holder.song,
                     role = holder.role,
                     parkedDirection = holder.parkedDirection,
@@ -2718,8 +2743,8 @@ private fun resolvePlayerArtworkSong(
         candidate(centerIndex - 1)?.let { return it }
         candidate(centerIndex + 1)?.let { return it }
     }
-    val matched = queueSongs.firstOrNull { it.resolvePlaybackArtworkKey(null) == key }
-    return matched ?: fallback
+    val matched = if (fallback != null) null else queueSongs.firstOrNull { it.resolvePlaybackArtworkKey(null) == key }
+    return fallback ?: matched
 }
 
 @Composable

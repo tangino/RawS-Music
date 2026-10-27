@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import com.rawsmusic.module.data.prefs.BottomBarMaterial
@@ -98,8 +100,14 @@ internal val ReferenceLibraryScenes: Set<NavScene> = setOf(
     NavScene.COMPOSER,
     NavScene.COMPOSER_DETAIL,
     NavScene.PLAYLISTS,
+    NavScene.PLAYLIST_LIST,
+    NavScene.PLAYLIST_DETAIL,
+    NavScene.PLAYLIST_DETAIL_PAGE,
     NavScene.QUEUE,
     NavScene.RECENTLY_ADDED,
+    NavScene.ONLINE_MUSIC,
+    NavScene.ONLINE_PLAYLIST_DETAIL,
+    NavScene.ONLINE_ARTIST_DETAIL,
 )
 
 internal fun isReferenceLibraryScene(scene: NavScene): Boolean = scene in ReferenceLibraryScenes
@@ -130,6 +138,7 @@ private val PersistentLibraryRailScenes = listOf(
     NavScene.GENRE,
     NavScene.RECENTLY_ADDED,
     NavScene.QUEUE,
+    NavScene.ONLINE_MUSIC,
 )
 
 private fun NavScene.persistentLibraryRailRoot(): NavScene = when (this) {
@@ -143,6 +152,8 @@ private fun NavScene.persistentLibraryRailRoot(): NavScene = when (this) {
     NavScene.PLAYLIST_DETAIL,
     NavScene.PLAYLIST_DETAIL_PAGE,
     NavScene.PLAYLIST_LIST -> NavScene.PLAYLISTS
+    NavScene.ONLINE_PLAYLIST_DETAIL,
+    NavScene.ONLINE_ARTIST_DETAIL -> NavScene.ONLINE_MUSIC
     else -> this
 }
 
@@ -162,6 +173,7 @@ private fun PersistentLibraryRail(
         modifier = modifier
             .sidebarGlassModifier(shape = railShape)
             .fillMaxHeight()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 10.dp, vertical = 14.dp),
     ) {
         PersistentLibraryRailScenes.forEach { scene ->
@@ -219,9 +231,9 @@ internal fun resolveReferenceLibraryStandbyScene(
     frame: ReferenceLibraryLayoutFrame,
     currentScene: NavScene,
 ): NavScene? = frame.preparingScene
-    ?.takeIf { it != currentScene && isReferenceLibraryScene(it) }
+    ?.takeIf { it != currentScene && isReferenceLibraryScene(it) && !isOnlineMusicScene(it) }
     ?: frame.retainedScene?.takeIf {
-        frame.active && it != currentScene && isReferenceLibraryScene(it)
+        frame.active && it != currentScene && isReferenceLibraryScene(it) && !isOnlineMusicScene(it)
     }
 
 internal data class ReferenceLibraryHostFrameResolution(
@@ -576,7 +588,9 @@ internal fun ReferenceLibraryVirtualListHost(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(20f)
-                .graphicsLayer { alpha = if (controllerVisible) 1f else 0f },
+                .graphicsLayer {
+                    alpha = if (controllerVisible) 1f else 0f
+                },
         ) {
             CompositionLocalProvider(
                 LocalReferenceLibraryProviderScene provides scene,

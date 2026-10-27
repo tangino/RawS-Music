@@ -118,3 +118,12 @@ enum class NavScene(
         ONLINE_ARTIST_DETAIL,
     )
 }
+
+fun isOnlineMusicScene(scene: NavScene?): Boolean =
+    scene == NavScene.ONLINE_MUSIC ||
+        scene == NavScene.ONLINE_PLAYLIST_DETAIL ||
+        scene == NavScene.ONLINE_ARTIST_DETAIL
+
+fun isOnlineMusicDetailTransition(from: NavScene?, to: NavScene?): Boolean =
+    from != null && to != null && from != to && isOnlineMusicScene(from) && isOnlineMusicScene(to)
+

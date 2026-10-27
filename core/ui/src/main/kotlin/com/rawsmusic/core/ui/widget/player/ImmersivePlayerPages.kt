@@ -30,6 +30,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -242,6 +245,7 @@ fun ImmersivePlayerHorizontalStack(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onPlayMode: () -> Unit,
+    onPlayModeLongPress: () -> Unit = {},
     onAudioQuality: () -> Unit = {},
     onAudioQualityLongPress: () -> Unit = onAudioQuality,
     onOpenMetadata: () -> Unit = {},
@@ -561,6 +565,7 @@ fun ImmersivePlayerHorizontalStack(
             onPlayPause = onPlayPause,
             onNext = onNext,
             onPlayMode = onPlayMode,
+            onPlayModeLongPress = onPlayModeLongPress,
             onAudioQuality = onAudioQuality,
             onAudioQualityLongPress = onAudioQualityLongPress,
             progressStyle = immersiveProgressStyle,
@@ -747,6 +752,7 @@ internal fun ImmersivePlayerMainPage(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onPlayMode: () -> Unit,
+    onPlayModeLongPress: () -> Unit = {},
     onAudioQuality: () -> Unit = {},
     onAudioQualityLongPress: () -> Unit = onAudioQuality,
     progressStyle: ImmersiveProgressStyle,
@@ -857,7 +863,7 @@ internal fun ImmersivePlayerMainPage(
                     Spacer(Modifier.weight(1f).fillMaxWidth().observeArtworkLongPress(onArtworkLongPress))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically) {
-                        IconCircle(iconRes = playModeIconRes, size = 34.dp, tint = tone.iconSoft, onClick = onPlayMode)
+                        IconCircle(iconRes = playModeIconRes, size = 34.dp, tint = tone.iconSoft, onClick = onPlayMode, onLongClick = onPlayModeLongPress)
                         IconCircle(iconRes = previousIconRes, size = 42.dp, tint = tone.icon, onClick = onPrevious)
                         val onlineSnapshot by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
                         val isOnlineBusy = isOnlinePlaybackBusy(currentSong, onlineSnapshot)
@@ -1223,7 +1229,7 @@ internal fun ImmersivePlayerMainPage(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconCircle(iconRes = playModeIconRes, size = 38.dp, tint = tone.iconSoft, onClick = onPlayMode)
+                IconCircle(iconRes = playModeIconRes, size = 38.dp, tint = tone.iconSoft, onClick = onPlayMode, onLongClick = onPlayModeLongPress)
                 IconCircle(iconRes = previousIconRes, size = 50.dp, tint = tone.icon, onClick = onPrevious)
                 IconCircle(
                     iconRes = if (isPlaying) pauseIconRes else playIconRes,
@@ -2136,19 +2142,30 @@ internal fun MusicSpineTimelineProgress(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun IconCircle(
     @DrawableRes iconRes: Int,
     size: androidx.compose.ui.unit.Dp,
     tint: Color,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     Box(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick?.let { action ->
+                    {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        action()
+                    }
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (iconRes != 0) {

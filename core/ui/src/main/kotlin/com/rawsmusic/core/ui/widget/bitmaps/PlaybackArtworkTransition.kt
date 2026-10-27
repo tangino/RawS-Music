@@ -1665,10 +1665,24 @@ class PlaybackArtworkTransitionState internal constructor(
             retainedGestureBindingDeadlineMs = 0L
         }
         queueSize = newQueueSize.coerceAtLeast(0)
-        if (closed || key.isBlank()) return
+        if (closed) return
         val oldIndex = lastQueueIndex
         lastQueueIndex = queueIndex
         boundSongKey = key
+        if (key.isBlank()) {
+            if (currentKey.isNotBlank()) {
+                discardTarget()
+                clearLoad(currentKey)
+                currentToken.takeIf { it != 0 }?.let { visuals.remove(it)?.release() }
+                currentKey = ""
+                currentToken = 0
+                currentQuality = 0
+                notifyPresentationObservers(topologyChanged = true)
+            } else if (oldIndex != queueIndex) {
+                notifyPresentationObservers(topologyChanged = false)
+            }
+            return
+        }
         // While the retained artwork pager is attached, its physical holder is the provider owner.
         // Keep the state-side warm path only as the off-screen/no-holder fallback.
         if (!artworkImageProviderOwnerActive) BitmapProvider.warmPlaybackArt(key)
@@ -1696,7 +1710,12 @@ class PlaybackArtworkTransitionState internal constructor(
             }
             return
         }
-        if (key == currentKey) return
+        if (key == currentKey) {
+            if (oldIndex != queueIndex) {
+                notifyPresentationObservers(topologyChanged = false)
+            }
+            return
+        }
         if (key == targetKey) {
             targetAutoSettle = true
             if (pendingCommit && ratio >= 0.9995f) {

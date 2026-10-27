@@ -251,7 +251,12 @@ internal class PlayerQueueControlCoordinator(
         if (callbacks.isReleased()) return null
         val queue = manualNavigationQueue()
         if (queue.songs.isEmpty()) return null
-        val targetIndex = nextIndex(queue)
+        var targetIndex = nextIndex(queue)
+        if (targetIndex !in queue.songs.indices && queue.isShuffle) {
+            mode.rebuildShuffleForCurrentQueue()
+            val reloadedQueue = manualNavigationQueue()
+            targetIndex = nextIndex(reloadedQueue)
+        }
         val target = queue.songs.getOrNull(targetIndex) ?: return null
         rememberManualTarget(target, targetIndex)
 
@@ -271,7 +276,12 @@ internal class PlayerQueueControlCoordinator(
         if (callbacks.isReleased()) return null
         val queue = manualNavigationQueue()
         if (queue.songs.isEmpty()) return null
-        val nextIndex = nextIndex(queue)
+        var nextIndex = nextIndex(queue)
+        if (nextIndex !in queue.songs.indices && queue.isShuffle) {
+            mode.rebuildShuffleForCurrentQueue()
+            val reloadedQueue = manualNavigationQueue()
+            nextIndex = nextIndex(reloadedQueue)
+        }
         if (nextIndex !in queue.songs.indices) return null
 
         val nextSong = queue.songs[nextIndex]
@@ -444,8 +454,10 @@ internal class PlayerQueueControlCoordinator(
             mode.currentPlayMode() == PlayMode.SEQUENTIAL || mode.currentPlayMode() == PlayMode.REPEAT_ONE ->
                 (queue.currentIndex + offset).floorMod(queue.songs.size)
             mode.currentPlayMode() == PlayMode.SHUFFLE_ALL ||
-                mode.currentPlayMode() == PlayMode.SHUFFLE_ONCE ->
-                mode.peekRelativeShuffleIndex(queue, offset)
+                mode.currentPlayMode() == PlayMode.SHUFFLE_ONCE -> {
+                val rel = mode.peekRelativeShuffleIndex(queue, offset)
+                if (rel in queue.songs.indices) rel else (queue.currentIndex + offset).floorMod(queue.songs.size)
+            }
             else -> queue.currentIndex
         }
         return queue.songs.getOrNull(index)

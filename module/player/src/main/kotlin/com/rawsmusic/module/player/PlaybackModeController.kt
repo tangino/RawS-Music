@@ -54,7 +54,10 @@ internal class PlaybackModeController(
         _repeatMode.value = mode
         _playMode.value = when {
             mode == RepeatMode.ONE -> PlayMode.REPEAT_ONE
-            nextShuffle && mode == RepeatMode.OFF -> PlayMode.SHUFFLE_ONCE
+            nextShuffle && mode == RepeatMode.OFF -> {
+                // 如果当前模式已经是明确选定的 SHUFFLE_ONCE，保留；否则默认使用 SHUFFLE_ALL 循环随机
+                if (_playMode.value == PlayMode.SHUFFLE_ONCE) PlayMode.SHUFFLE_ONCE else PlayMode.SHUFFLE_ALL
+            }
             nextShuffle -> PlayMode.SHUFFLE_ALL
             else -> PlayMode.SEQUENTIAL
         }
@@ -78,20 +81,20 @@ internal class PlaybackModeController(
     fun toggleShuffle() {
         val newShuffle = !_isShuffle.value
         _isShuffle.value = newShuffle
-        if (newShuffle && _repeatMode.value == RepeatMode.ONE) {
-            // No extra shuffle+repeat-one mode is exposed in this product. Match the existing
-            // four-state picker by entering shuffle-all when shuffle is explicitly enabled.
-            _repeatMode.value = RepeatMode.ALL
-            AppPreferences.Player.repeatMode = RepeatMode.ALL
-        }
-        AppPreferences.Player.isShuffle = newShuffle
-        _playMode.value = if (newShuffle) {
-            if (_repeatMode.value == RepeatMode.OFF) PlayMode.SHUFFLE_ONCE else PlayMode.SHUFFLE_ALL
+        if (newShuffle) {
+            // 界面上开启随机播放时，若当前不是单曲循环，则应保持在全部循环（RepeatMode.ALL），
+            // 并明确将播放模式设为 SHUFFLE_ALL（循环随机），避免因 repeatMode 为 OFF 而静默落入 SHUFFLE_ONCE
+            if (_repeatMode.value != RepeatMode.ONE) {
+                _repeatMode.value = RepeatMode.ALL
+                AppPreferences.Player.repeatMode = RepeatMode.ALL
+            }
+            _playMode.value = PlayMode.SHUFFLE_ALL
         } else if (_repeatMode.value == RepeatMode.ONE) {
             PlayMode.REPEAT_ONE
         } else {
             PlayMode.SEQUENTIAL
         }
+        AppPreferences.Player.isShuffle = newShuffle
         AppPreferences.Player.playMode = _playMode.value
         if (newShuffle) enableShuffle() else disableShuffle()
     }

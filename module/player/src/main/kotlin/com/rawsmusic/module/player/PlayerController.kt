@@ -1673,8 +1673,8 @@ class PlayerController private constructor(context: Context) {
                         return@launch
                     }
                     // 2. 切歌冷却与物理进度合理性检查：自然完成必然在曲目末尾，新歌刚切歌或刚起播绝不可能自然完成
-                    val currentPos = _position.value
-                    val totalDur = _duration.value.takeIf { it > 0 } ?: cur.duration
+                    val currentPos = maxOf(_position.value, ffmpegPlayer.positionMs)
+                    val totalDur = _duration.value.takeIf { it > 0 } ?: cur.duration.takeIf { it > 0 } ?: ffmpegPlayer.durationMs
                     val reachedTail = if (totalDur > 0L) {
                         // 播放进度已达总时长的 90% 以上，或距离尾声不足 15 秒，均视为自然播放结束
                         (currentPos >= totalDur * 0.90f) || (totalDur >= 5_000L && currentPos >= totalDur - 15_000L)

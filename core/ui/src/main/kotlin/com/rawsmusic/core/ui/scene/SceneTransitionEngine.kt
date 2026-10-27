@@ -9,9 +9,14 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -287,6 +292,7 @@ private val homeCategoryTransitionScenes = setOf(
     NavScene.GENRE,
     NavScene.YEAR,
     NavScene.COMPOSER,
+    NavScene.ONLINE_MUSIC,
 )
 
 private fun shouldAnimate(from: NavScene, to: NavScene): Boolean {
@@ -360,6 +366,7 @@ private val alphabetIndexedScenes = setOf(
 )
 
 private fun usesAlphabetIndexer(scene: NavScene): Boolean = scene in alphabetIndexedScenes
+
 
 /**
  * Artist detail -> biography is a provider-to-provider navigation inside the same physical
@@ -902,9 +909,6 @@ internal fun SceneTransitionHost(
         // physical View has been migrated, so a captured/live source is not itself ownership.
         sharedCoverActorEligible = false
         pageMotion = when {
-            // HeaderToItem remains the transition family when the concrete AA/header holder is
-            // offscreen. retained-view implementation simply omits the promoted shared View and keeps the same retained
-            // scene geometry/AccelerateDecelerate timeline.
             sharedReturnRoute -> PageMotion.FolderSharedBack
             usesHomeCategoryMotion(state.currentScene, targetScene) -> PageMotion.HomeCategoryBack
             usesArtistBiographyMotion(state.currentScene, targetScene) -> PageMotion.HomeCategoryBack
@@ -1987,6 +1991,12 @@ internal fun SceneTransitionHost(
             // displayedScene/fromScene have not yet formed the retained pivot. Dropping the owner in
             // that window destroys the physical holder/runtime and recreates it in the first motion
             // frame, which exposes a blank/fallback frame after entry.
+            val isLibraryInternalGenericTransition = inTransition &&
+                fromScene != displayedScene &&
+                !retainedVirtualListPivot &&
+                isPersistentHomeCategoryScene(fromScene) &&
+                isPersistentHomeCategoryScene(displayedScene)
+
             val persistentHomeCategoryOwner = retainedVirtualListPivot ||
                 preparingRetainedVirtualListMotion ||
                 // Animation flags and endpoint roles can settle in adjacent compositions. With
@@ -2011,14 +2021,18 @@ internal fun SceneTransitionHost(
             }
             val persistentLibraryScene = when {
                 persistentHomeCategoryOwner -> displayedScene
+                isLibraryInternalGenericTransition -> displayedScene
                 mixedPersistentLibraryTransition -> mixedPersistentLibraryScene
                 else -> parkedLibraryScene
             }
             val persistentLibraryPresentationVisible =
-                persistentHomeCategoryOwner || mixedPersistentLibraryTransition
+                persistentHomeCategoryOwner ||
+                    isLibraryInternalGenericTransition ||
+                    mixedPersistentLibraryTransition
             // Settings covers the library; it must not detach its page/viewport and
             // recreate HOME's measured header and scroll geometry during return.
-            val persistentLibraryControllerVisible = persistentLibraryScene != null
+            val persistentLibraryControllerVisible = persistentLibraryScene != null &&
+                !isLibraryInternalGenericTransition
 
             fun transitionProviderIdentity(scene: NavScene?): String {
                 if (scene == null || !scene.isDetail()) return ""
@@ -2082,12 +2096,10 @@ internal fun SceneTransitionHost(
                     }
                 } else if (mixedPersistentLibraryTransition) {
                     mixedPersistentLibraryScene
+                } else if (retainedVirtualListPivot && !isBackTransition) {
+                    fromScene
                 } else {
-                    if (retainedVirtualListPivot && !isBackTransition) {
-                        fromScene
-                    } else {
-                        displayedScene
-                    }
+                    displayedScene
                 },
                 presentationProviderIdentity = transitionProviderIdentity(
                     if (!persistentLibraryPresentationVisible) {
@@ -2102,8 +2114,10 @@ internal fun SceneTransitionHost(
                         }
                     } else if (mixedPersistentLibraryTransition) {
                         mixedPersistentLibraryScene
+                    } else if (retainedVirtualListPivot && !isBackTransition) {
+                        fromScene
                     } else {
-                        if (retainedVirtualListPivot && !isBackTransition) fromScene else displayedScene
+                        displayedScene
                     }
                 ),
                 preparingScene = if (!retainedVirtualListPivot && !mixedPersistentLibraryTransition) {
@@ -2242,95 +2256,130 @@ internal fun SceneTransitionHost(
                     SceneContent(nonLibraryScene)
                 }
             } else if (inTransition && fromScene != displayedScene) {
+                val windowLayoutProfile = LocalRawWindowLayoutProfile.current
+                val isLargeScreenWithRail = isLibraryInternalGenericTransition &&
+                    windowLayoutProfile.supportsPersistentLibraryRail
+                val libraryRailContentModifier = if (isLargeScreenWithRail) {
+                    Modifier
+                        .fillMaxHeight()
+                        .padding(
+                            start = 12.dp + windowLayoutProfile.libraryRailWidth + windowLayoutProfile.libraryRailGap,
+                        )
+                        .fillMaxWidth()
+                } else {
+                    Modifier.fillMaxSize()
+                }
+                val contentBoxAlignment = if (isLargeScreenWithRail) {
+                    Alignment.Center
+                } else {
+                    Alignment.TopStart
+                }
+                val contentInnerModifier = if (isLargeScreenWithRail) {
+                    Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = windowLayoutProfile.libraryContentMaxWidth)
+                        .fillMaxHeight()
+                } else {
+                    Modifier.fillMaxSize()
+                }
+
                 // 来源页面（下层）
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val frameProgress = sceneFrameProgressProvider()
-                            // Shared-holder preparation is a separate owner from the Item/Header
-                            // scene motion. If the hero is offscreen there is intentionally no pair,
-                            // but the retained scene transition must still animate normally.
-                            val motion = pageMotion
-                            val preparationTransform = if (
-                                sharedCoverActorEligible && preparedSharedPair == null
-                            ) {
-                                sharedPreparationTransform(motion)
-                            } else {
-                                null
-                            }
-                            val transform = preparationTransform ?: pageTransforms(
-                                motion = motion,
-                                progress = frameProgress,
-                                directionalBack = usesDirectionalBackPivot,
-                                backDirection = state.dragBackDirection,
-                                viewportWidth = screenWidthPx,
-                                viewportHeight = screenHeightPx,
-                                hostPositionInWindow = hostPositionInWindow,
-                                sharedPair = preparedSharedPair,
-                            )
-                            translationX = transform.fromTranslationX
-                            translationY = transform.fromTranslationY
-                            scaleX = transform.fromScale
-                            scaleY = transform.fromScale
-                            alpha = transform.fromAlpha
-                            compositingStrategy = CompositingStrategy.Auto
-                            transformOrigin = transform.fromTransformOrigin
-                        }
+                    modifier = libraryRailContentModifier,
+                    contentAlignment = contentBoxAlignment,
                 ) {
-                    CompositionLocalProvider(
-                        // Keep expensive Haze/background recorders quiet during the short retained
-                        // pivot. Holder artwork/marquee clocks stay live; holder geometry is driven
-                        // independently through LocalRetainedSceneItemTransform.
-                        LocalSceneBackgroundFrozen provides freezeRetainedVirtualListDynamics,
-                        LocalRetainedSceneMotionActive provides retainedVirtualListPivot,
-                        LocalRetainedSceneItemTransform provides fromSceneItemTransform,
+                    Box(
+                        modifier = contentInnerModifier
+                            .graphicsLayer {
+                                val frameProgress = sceneFrameProgressProvider()
+                                // Shared-holder preparation is a separate owner from the Item/Header
+                                // scene motion. If the hero is offscreen there is intentionally no pair,
+                                // but the retained scene transition must still animate normally.
+                                val motion = pageMotion
+                                val preparationTransform = if (
+                                    sharedCoverActorEligible && preparedSharedPair == null
+                                ) {
+                                    sharedPreparationTransform(motion)
+                                } else {
+                                    null
+                                }
+                                val transform = preparationTransform ?: pageTransforms(
+                                    motion = motion,
+                                    progress = frameProgress,
+                                    directionalBack = usesDirectionalBackPivot,
+                                    backDirection = state.dragBackDirection,
+                                    viewportWidth = screenWidthPx,
+                                    viewportHeight = screenHeightPx,
+                                    hostPositionInWindow = hostPositionInWindow,
+                                    sharedPair = preparedSharedPair,
+                                )
+                                translationX = transform.fromTranslationX
+                                translationY = transform.fromTranslationY
+                                scaleX = transform.fromScale
+                                scaleY = transform.fromScale
+                                alpha = transform.fromAlpha
+                                compositingStrategy = CompositingStrategy.Auto
+                                transformOrigin = transform.fromTransformOrigin
+                            }
                     ) {
-                        SceneContent(fromScene)
+                        CompositionLocalProvider(
+                            // Keep expensive Haze/background recorders quiet during the short retained
+                            // pivot. Holder artwork/marquee clocks stay live; holder geometry is driven
+                            // independently through LocalRetainedSceneItemTransform.
+                            LocalSceneBackgroundFrozen provides freezeRetainedVirtualListDynamics,
+                            LocalRetainedSceneMotionActive provides retainedVirtualListPivot,
+                            LocalRetainedSceneItemTransform provides fromSceneItemTransform,
+                        ) {
+                            SceneContent(fromScene)
+                        }
                     }
                 }
 
                 // 当前页面（上层）
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val frameProgress = sceneFrameProgressProvider()
-                            // See the source role above: no shared holder means no preparation mask,
-                            // not a different scene transition family.
-                            val motion = pageMotion
-                            val preparationTransform = if (
-                                sharedCoverActorEligible && preparedSharedPair == null
-                            ) {
-                                sharedPreparationTransform(motion)
-                            } else {
-                                null
-                            }
-                            val transform = preparationTransform ?: pageTransforms(
-                                motion = motion,
-                                progress = frameProgress,
-                                directionalBack = usesDirectionalBackPivot,
-                                backDirection = state.dragBackDirection,
-                                viewportWidth = screenWidthPx,
-                                viewportHeight = screenHeightPx,
-                                hostPositionInWindow = hostPositionInWindow,
-                                sharedPair = preparedSharedPair,
-                            )
-                            translationX = transform.currentTranslationX
-                            translationY = transform.currentTranslationY
-                            scaleX = transform.currentScale
-                            scaleY = transform.currentScale
-                            alpha = transform.currentAlpha
-                            compositingStrategy = CompositingStrategy.Auto
-                            transformOrigin = transform.currentTransformOrigin
-                        }
+                    modifier = libraryRailContentModifier,
+                    contentAlignment = contentBoxAlignment,
                 ) {
-                    CompositionLocalProvider(
-                        LocalSceneBackgroundFrozen provides freezeRetainedVirtualListDynamics,
-                        LocalRetainedSceneMotionActive provides retainedVirtualListPivot,
-                        LocalRetainedSceneItemTransform provides currentSceneItemTransform,
+                    Box(
+                        modifier = contentInnerModifier
+                            .graphicsLayer {
+                                val frameProgress = sceneFrameProgressProvider()
+                                // See the source role above: no shared holder means no preparation mask,
+                                // not a different scene transition family.
+                                val motion = pageMotion
+                                val preparationTransform = if (
+                                    sharedCoverActorEligible && preparedSharedPair == null
+                                ) {
+                                    sharedPreparationTransform(motion)
+                                } else {
+                                    null
+                                }
+                                val transform = preparationTransform ?: pageTransforms(
+                                    motion = motion,
+                                    progress = frameProgress,
+                                    directionalBack = usesDirectionalBackPivot,
+                                    backDirection = state.dragBackDirection,
+                                    viewportWidth = screenWidthPx,
+                                    viewportHeight = screenHeightPx,
+                                    hostPositionInWindow = hostPositionInWindow,
+                                    sharedPair = preparedSharedPair,
+                                )
+                                translationX = transform.currentTranslationX
+                                translationY = transform.currentTranslationY
+                                scaleX = transform.currentScale
+                                scaleY = transform.currentScale
+                                alpha = transform.currentAlpha
+                                compositingStrategy = CompositingStrategy.Auto
+                                transformOrigin = transform.currentTransformOrigin
+                            }
                     ) {
-                        SceneContent(displayedScene)
+                        CompositionLocalProvider(
+                            LocalSceneBackgroundFrozen provides freezeRetainedVirtualListDynamics,
+                            LocalRetainedSceneMotionActive provides retainedVirtualListPivot,
+                            LocalRetainedSceneItemTransform provides currentSceneItemTransform,
+                        ) {
+                            SceneContent(displayedScene)
+                        }
                     }
                 }
 
