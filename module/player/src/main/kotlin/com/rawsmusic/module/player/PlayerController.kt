@@ -6162,9 +6162,20 @@ class PlayerController private constructor(context: Context) {
                     ?.let { pendingRendererUiCommit = null }
             }
             Log.e(TAG, "play() failed", e)
-            if (queue.size > 1) {
-                val nextIndex = (index + 1) % queue.size
-                play(queue[nextIndex], queue, nextIndex)
+            lastPlayerError = e.message ?: e.javaClass.simpleName
+            // 单次启动异常绝不能直接切到下一首：用户点「下一首」后，如果当前曲目
+            // 在这种边角异常上抛错，旧逻辑会立刻 play(index + 1)，表现为「目标曲
+            // 一闪而过、直接播下下首」。渲染器已经进入 PREPARING/PLAYING/PAUSED
+            // 时，异步解码失败由 backendStateControlCoordinator 的失败熔断处理；
+            // 尚未进入渲染状态才把这次同步异常交给同一熔断策略，连续失败才前进。
+            val rendererStarted =
+                ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PAUSED
+            if (!rendererStarted) {
+                backendStateControlCoordinator.onStateChanged(
+                    PlayerBackendStateControlCoordinator.BackendState.ERROR
+                )
             }
         }
     }

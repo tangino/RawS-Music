@@ -29,8 +29,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
@@ -57,6 +60,7 @@ import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
 import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -109,10 +113,12 @@ internal fun OnlinePlaylistDetailPage(
     }
 
     var detail by remember { mutableStateOf<Pair<OnlinePlaylist, List<OnlineSongItem>>?>(null) }
+    var loadedArgument by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var reloadToken by remember { mutableIntStateOf(0) }
     var addToPlaylistSong by remember { mutableStateOf<OnlineSongItem?>(null) }
+    val latestSceneMotionFrozen by rememberUpdatedState(LocalSceneBackgroundFrozen.current)
 
     val favorites by OnlinePlaylistFavoriteStore.favorites.collectAsState()
     val loadFailedMessage = stringResource(R.string.online_detail_load_failed)
@@ -134,10 +140,25 @@ internal fun OnlinePlaylistDetailPage(
             loading = false
             return@LaunchedEffect
         }
+        // 保活复用：当再次进入同一个歌单且已有缓存数据时，跳过重复拉取，实现零延迟顺滑转场。
+        if (loadedArgument == effectiveArgument && detail != null && reloadToken == 0) {
+            loading = false
+            return@LaunchedEffect
+        }
+        if (loadedArgument != effectiveArgument) {
+            detail = null
+        }
         loading = true
         errorText = null
-        repository.getPlaylistDetail(playlistId = playlistId, platform = platform)
-            .onSuccess { detail = it }
+        val result = repository.getPlaylistDetail(playlistId = playlistId, platform = platform)
+        if (latestSceneMotionFrozen) {
+            snapshotFlow { latestSceneMotionFrozen }.first { !it }
+        }
+        result
+            .onSuccess {
+                detail = it
+                loadedArgument = effectiveArgument
+            }
             .onFailure {
                 if (detail == null) {
                     errorText = loadFailedMessage

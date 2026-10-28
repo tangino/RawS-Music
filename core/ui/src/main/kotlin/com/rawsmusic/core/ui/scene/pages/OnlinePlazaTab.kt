@@ -45,7 +45,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,6 +64,7 @@ import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.model.OnlinePlaylistTag
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -79,6 +82,32 @@ internal enum class OnlinePlazaSection(@StringRes val labelRes: Int) {
 
 private const val PAGE_SIZE = 30
 private const val GRID_COLUMNS = 2
+
+/** 某个「平台 + 分段 + 分类」组合已加载的歌单分页快照。 */
+private data class OnlinePlazaPageCache(
+    val playlists: List<OnlinePlaylist>,
+    val page: Int,
+    val endReached: Boolean,
+)
+
+/**
+ * 歌单广场的进程级内存缓存。
+ *
+ * 「在线音乐」页离开组合后 `remember` 状态会全部丢失，再次进入时只能重新请求，
+ * 转场动画期间就会出现「加载圈 → 整屏网格」的突变重组。缓存上次结果后，再次进入的
+ * 隐藏预热帧里即可直接组合出完整网格。仅在主线程读写。
+ */
+private object OnlinePlazaMemoryCache {
+    val pages = HashMap<String, OnlinePlazaPageCache>()
+    val leaderboards = HashMap<String, List<OnlineLeaderboard>>()
+    val tags = HashMap<String, List<OnlinePlaylistTag>>()
+}
+
+/** 推荐段固定查「全部」，与 [OnlinePlazaTab] 的请求参数保持一致。 */
+private fun plazaQueryKey(platform: OnlinePlatform, section: OnlinePlazaSection, tagId: String): String {
+    val effectiveTagId = if (section == OnlinePlazaSection.Recommend) "全部" else tagId
+    return "${platform.id}:${section.name}:$effectiveTagId"
+}
 
 /**
  * 歌单广场。
@@ -100,17 +129,21 @@ internal fun OnlinePlazaTab(
     val gridColumns = resolveOnlineGridColumns()
 
     var section by remember { mutableStateOf(OnlinePlazaSection.Recommend) }
-    var tags by remember(platform) { mutableStateOf<List<OnlinePlaylistTag>>(emptyList()) }
+    var tags by remember(platform) { mutableStateOf(OnlinePlazaMemoryCache.tags[platform.id].orEmpty()) }
     var selectedTagId by remember(platform) { mutableStateOf("全部") }
-    var playlists by remember(platform) { mutableStateOf<List<OnlinePlaylist>>(emptyList()) }
-    var leaderboards by remember(platform) { mutableStateOf<List<OnlineLeaderboard>>(emptyList()) }
-    var page by remember(platform) { mutableIntStateOf(1) }
-    var loading by remember { mutableStateOf(false) }
+    // 首帧直接从进程级缓存取上次的结果：再次进入「在线音乐」时，隐藏预热帧里就已是完整网格，转场期间不再出现「加载圈 → 整屏网格」的突变重组。
+    val initialPage = remember(platform) { OnlinePlazaMemoryCache.pages[plazaQueryKey(platform, OnlinePlazaSection.Recommend, "全部")] }
+    var playlists by remember(platform) { mutableStateOf(initialPage?.playlists.orEmpty()) }
+    var leaderboards by remember(platform) { mutableStateOf(OnlinePlazaMemoryCache.leaderboards[platform.id].orEmpty()) }
+    var page by remember(platform) { mutableIntStateOf(initialPage?.page ?: 1) }
+    // 无缓存时首帧即为加载态，避免先闪一帧「暂无内容」。
+    var loading by remember { mutableStateOf(initialPage == null) }
     var loadingMore by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
-    var endReached by remember(platform) { mutableStateOf(false) }
+    var endReached by remember(platform) { mutableStateOf(initialPage?.endReached ?: false) }
     // 重试令牌：自增即触发下面的 LaunchedEffect 重新拉取（不引入 ViewModel，AGENTS §4.4）。
     var reloadToken by remember { mutableIntStateOf(0) }
+    // 已加载缓存见 OnlinePlazaMemoryCache
 
     // 歌单搜索状态
     var isSearchMode by remember { mutableStateOf(false) }
@@ -126,6 +159,7 @@ internal fun OnlinePlazaTab(
     val loadFailedMessage = stringResource(R.string.online_plaza_load_failed)
 
     val sceneMotionFrozen = LocalSceneBackgroundFrozen.current
+    val latestSceneMotionFrozen by rememberUpdatedState(sceneMotionFrozen)
     BackHandler(enabled = isSearchMode && !sceneMotionFrozen) {
         isSearchMode = false
     }
@@ -180,11 +214,40 @@ internal fun OnlinePlazaTab(
 
     // 平台、分类段或重试令牌变化都要重新拉第一页，避免把上一个平台的数据留在列表里。
     LaunchedEffect(platform, selectedTagId, section, reloadToken) {
+        val queryKey = plazaQueryKey(platform, section, selectedTagId)
+        // 命中进程级缓存直接复用：不发请求、不切加载态（重试只会在无缓存的错误态下触发）。
+        if (section == OnlinePlazaSection.Leaderboards) {
+            val cached = OnlinePlazaMemoryCache.leaderboards[platform.id]
+            if (!cached.isNullOrEmpty()) {
+                if (leaderboards !== cached) leaderboards = cached
+                errorText = null
+                loading = false
+                return@LaunchedEffect
+            }
+        } else {
+            val cached = OnlinePlazaMemoryCache.pages[queryKey]
+            if (cached != null && cached.playlists.isNotEmpty()) {
+                if (playlists !== cached.playlists) playlists = cached.playlists
+                page = cached.page
+                endReached = cached.endReached
+                errorText = null
+                loading = false
+                return@LaunchedEffect
+            }
+        }
         if (section == OnlinePlazaSection.Leaderboards) {
             loading = true
             errorText = null
-            repository.getLeaderboards(platform)
-                .onSuccess { leaderboards = it; errorText = null }
+            val res = repository.getLeaderboards(platform)
+            if (latestSceneMotionFrozen) {
+                snapshotFlow { latestSceneMotionFrozen }.first { !it }
+            }
+            res
+                .onSuccess {
+                    leaderboards = it
+                    OnlinePlazaMemoryCache.leaderboards[platform.id] = it
+                    errorText = null
+                }
                 .onFailure {
                     errorText = loadFailedMessage
                     AppNoticeBus.error(loadFailedMessage)
@@ -199,15 +262,24 @@ internal fun OnlinePlazaTab(
         endReached = false
 
         if (section == OnlinePlazaSection.Categories && tags.isEmpty()) {
-            repository.getTags(platform).onSuccess { tags = it }
+            repository.getTags(platform).onSuccess {
+                tags = it
+                OnlinePlazaMemoryCache.tags[platform.id] = it
+            }
         }
 
         val queryTagId = if (section == OnlinePlazaSection.Recommend) "全部" else selectedTagId
-        repository.getPlaylists(tagId = queryTagId, page = 1, pageSize = PAGE_SIZE, platform = platform)
+        val res = repository.getPlaylists(tagId = queryTagId, page = 1, pageSize = PAGE_SIZE, platform = platform)
+        if (latestSceneMotionFrozen) {
+            snapshotFlow { latestSceneMotionFrozen }.first { !it }
+        }
+        res
             .onSuccess {
                 playlists = it
                 endReached = it.size < PAGE_SIZE
                 errorText = null
+                OnlinePlazaMemoryCache.pages[queryKey] =
+                    OnlinePlazaPageCache(playlists = it, page = 1, endReached = endReached)
             }
             .onFailure {
                 playlists = emptyList()
@@ -220,14 +292,20 @@ internal fun OnlinePlazaTab(
     fun loadNextPage() {
         if (loading || loadingMore || endReached) return
         loadingMore = true
+        // 固定发起请求时的查询条件，防止回包时用户已切换分段/分类而写错缓存。
+        val requestPlatform = platform
+        val requestSection = section
+        val requestTagId = selectedTagId
         scope.launch {
             val next = page + 1
-            val queryTagId = if (section == OnlinePlazaSection.Recommend) "全部" else selectedTagId
-            repository.getPlaylists(tagId = queryTagId, page = next, pageSize = PAGE_SIZE, platform = platform)
+            val queryTagId = if (requestSection == OnlinePlazaSection.Recommend) "全部" else requestTagId
+            repository.getPlaylists(tagId = queryTagId, page = next, pageSize = PAGE_SIZE, platform = requestPlatform)
                 .onSuccess {
                     playlists = playlists + it
                     page = next
                     endReached = it.size < PAGE_SIZE
+                    OnlinePlazaMemoryCache.pages[plazaQueryKey(requestPlatform, requestSection, requestTagId)] =
+                        OnlinePlazaPageCache(playlists = playlists, page = page, endReached = endReached)
                 }
                 .onFailure { AppNoticeBus.error(loadFailedMessage) }
             loadingMore = false

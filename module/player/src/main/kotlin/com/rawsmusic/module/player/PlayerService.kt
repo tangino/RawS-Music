@@ -1557,7 +1557,12 @@ class PlayerService : LifecycleService() {
     }
 
     /**
-     * 通过广播通知MainActivity执行播放控制
+     * 通知 MainActivity 当前媒体动作已发生。
+     *
+     * 传输控制（play/pause/next/previous/stop）已经在本 Service / PlayerController 内执行，
+     * 这里只发布事件给 Activity 的通知性/展示性逻辑（目前只有 SEEK 用于歌词重锚）。
+     * 消费方绝不能再调用一次 next()/previous()，否则通知栏、耳机或车机按键会被执行两次：
+     * 目标曲目一闪而过、直接播下下首。
      */
     private fun notifyActivity(action: String) {
         PlayerEventBus.emit(action)

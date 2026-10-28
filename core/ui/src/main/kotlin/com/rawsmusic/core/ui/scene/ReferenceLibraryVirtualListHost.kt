@@ -102,15 +102,22 @@ internal val ReferenceLibraryScenes: Set<NavScene> = setOf(
     NavScene.PLAYLISTS,
     NavScene.PLAYLIST_LIST,
     NavScene.PLAYLIST_DETAIL,
-    NavScene.PLAYLIST_DETAIL_PAGE,
     NavScene.QUEUE,
     NavScene.RECENTLY_ADDED,
-    NavScene.ONLINE_MUSIC,
-    NavScene.ONLINE_PLAYLIST_DETAIL,
-    NavScene.ONLINE_ARTIST_DETAIL,
 )
 
 internal fun isReferenceLibraryScene(scene: NavScene): Boolean = scene in ReferenceLibraryScenes
+
+internal val PersistentLibraryRailSupportedScenes: Set<NavScene> = ReferenceLibraryScenes + setOf(
+    NavScene.PLAYLIST_DETAIL_PAGE,
+    NavScene.ONLINE_MUSIC,
+    NavScene.ONLINE_PLAYLIST_DETAIL,
+    NavScene.ONLINE_ARTIST_DETAIL,
+    NavScene.PLAY_HISTORY,
+)
+
+internal fun supportsPersistentLibraryRailScene(scene: NavScene): Boolean =
+    scene in PersistentLibraryRailSupportedScenes
 
 private val ReferenceLibraryTopChromeScenes = setOf(
     NavScene.SONG_STATS,
@@ -158,7 +165,7 @@ private fun NavScene.persistentLibraryRailRoot(): NavScene = when (this) {
 }
 
 @Composable
-private fun PersistentLibraryRail(
+internal fun PersistentLibraryRail(
     selectedScene: NavScene,
     onNavigate: (NavScene) -> Unit,
     modifier: Modifier = Modifier,
@@ -199,7 +206,7 @@ private fun PersistentLibraryRail(
                         color = if (selected) selectedBgColor else Color.Transparent,
                         shape = itemShape,
                     )
-                    .clickable(enabled = !selected) { onNavigate(scene) }
+                    .clickable(enabled = selectedScene != scene) { onNavigate(scene) }
                     .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -323,6 +330,12 @@ internal fun ReferenceLibraryVirtualListHost(
     val effectiveFrame = resolvedFrame.frame
     val presentationScene = resolvedFrame.presentationScene
     val currentScene = effectiveFrame.currentScene ?: presentationScene
+    // The engine can request a freeze without a retained dual-LayoutRes pivot (mixed
+    // library/non-library transitions such as HOME -> ONLINE_MUSIC). Combine that external
+    // request with the frame's own motion flag so HOME's live carousel/lyric/snapshot clocks
+    // stop while its page is being scaled as the transition source.
+    val externallySceneFrozen = LocalSceneBackgroundFrozen.current
+    val sceneContentFrozen = effectiveFrame.active || externallySceneFrozen
     fun roleProviderIdentity(scene: NavScene): String {
         if (!scene.isDetail()) return ""
         return when (scene) {
@@ -601,7 +614,7 @@ internal fun ReferenceLibraryVirtualListHost(
                 LocalReferenceRetainedVirtualListProvider provides null,
                 LocalVirtualListPersistentRuntime provides physicalRuntime,
                 LocalVirtualListPresentationHostExternal provides true,
-                LocalSceneBackgroundFrozen provides effectiveFrame.active,
+                LocalSceneBackgroundFrozen provides sceneContentFrozen,
                 LocalUiFrameAnimationActive provides pageFrameAnimationActive,
                 LocalReferenceRetainedLibraryPopulation provides false,
                 LocalRetainedSceneMotionActive provides effectiveFrame.active,
@@ -766,7 +779,7 @@ internal fun ReferenceLibraryVirtualListHost(
         LocalReferenceRetainedVirtualListProvider provides null,
         LocalVirtualListPersistentRuntime provides physicalRuntime,
         LocalVirtualListPresentationHostExternal provides true,
-        LocalSceneBackgroundFrozen provides effectiveFrame.active,
+        LocalSceneBackgroundFrozen provides sceneContentFrozen,
         LocalReferenceRetainedLibraryPopulation provides false,
         LocalRetainedSceneMotionActive provides effectiveFrame.active,
         // GenericPivot is owned exactly once by the persistent VirtualList holder/LayoutRes layer.
@@ -788,21 +801,11 @@ internal fun ReferenceLibraryVirtualListHost(
             }
             Row(modifier = rowModifier) {
                 if (supportsRail) {
-                    val bottomChromeEnvironment = LocalBottomChromeEnvironment.current
-                    val railBottomPadding = bottomChromeEnvironment.geometry.navigationBottomInset.coerceAtLeast(12.dp)
-                    PersistentLibraryRail(
-                        selectedScene = presentationScene,
-                        onNavigate = onNavigate,
-                        modifier = Modifier
-                            .padding(start = 12.dp)
-                            .width(windowLayoutProfile.libraryRailWidth)
-                            .fillMaxHeight()
-                            .padding(
-                                top = libraryRailTopInset + 16.dp,
-                                bottom = railBottomPadding,
-                            ),
+                    Spacer(
+                        Modifier.width(
+                            12.dp + windowLayoutProfile.libraryRailWidth + windowLayoutProfile.libraryRailGap
+                        )
                     )
-                    Spacer(Modifier.width(windowLayoutProfile.libraryRailGap))
                 }
 
             Box(

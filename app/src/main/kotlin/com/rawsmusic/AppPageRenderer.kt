@@ -234,11 +234,18 @@ class AppPageRendererImpl(
                 // 读一次「不喜欢」集合，伪歌单详情的曲目才会随态度变化重组。
                 val dislikedKeys by com.rawsmusic.module.data.repository.SongAttitudeRepository.dislikedKeys.collectAsState()
                 val scope = rememberCoroutineScope()
-                // 伪歌单（喜欢 / 不喜欢）不落盘，按需即时构造；真实歌单照旧按 id 查。
-                val playlist = if (isAttitudePlaylistId(argument)) {
-                    attitudePlaylistView(context, playlistStore, librarySongs, argument, dislikedKeys)
-                } else {
-                    playlists.find { it.id == argument }
+                var rememberedArgument by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(argument) }
+                if (argument.isNotBlank() && argument != rememberedArgument) {
+                    rememberedArgument = argument
+                }
+                val effectiveArgument = argument.takeIf { it.isNotBlank() } ?: rememberedArgument
+                // 伪歌单（喜欢 / 不喜欢）不落盘，按需即时构造并记忆，防止转场每一帧重复构造大列表；真实歌单照旧按 id 查。
+                val playlist = androidx.compose.runtime.remember(effectiveArgument, playlists, librarySongs, dislikedKeys) {
+                    if (isAttitudePlaylistId(effectiveArgument)) {
+                        attitudePlaylistView(context, playlistStore, librarySongs, effectiveArgument, dislikedKeys)
+                    } else {
+                        playlists.find { it.id == effectiveArgument }
+                    }
                 }
                 PlaylistDetailScreen(
                     playlistStore = playlistStore,
@@ -266,7 +273,7 @@ class AppPageRendererImpl(
                         }
                     },
                     onRemoveSong = { song ->
-                        val targetId = argument
+                        val targetId = effectiveArgument
                         val targetName = playlist?.name ?: return@PlaylistDetailScreen
                         // ⚠️ 在线条目的 song_key 就是那个 `online://` 串**本身**；而 playlistIdentityKey()
                         // 会给它加上 `path|` 前缀（见 core 的 UserPlaylist.kt）→ 直接拿来删会匹配不上、

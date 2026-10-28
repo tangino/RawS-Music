@@ -32,8 +32,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
@@ -59,6 +62,7 @@ import com.rawsmusic.module.online.model.OnlineSongItem
 import com.rawsmusic.module.online.playback.OnlinePlayResult
 import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -141,6 +145,7 @@ internal fun OnlineArtistDetailPage(
 
     var hotSongs by remember { mutableStateOf<List<OnlineSongItem>>(emptyList()) }
     var albums by remember { mutableStateOf<List<OnlineAlbum>>(emptyList()) }
+    var loadedArtistKey by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var songPage by remember { mutableIntStateOf(1) }
@@ -149,6 +154,7 @@ internal fun OnlineArtistDetailPage(
     var hasMoreAlbums by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
     var addToPlaylistSong by remember { mutableStateOf<OnlineSongItem?>(null) }
+    val latestSceneMotionFrozen by rememberUpdatedState(LocalSceneBackgroundFrozen.current)
 
     val loadFailedMessage = stringResource(R.string.online_artist_load_failed)
     val noSourceMessage = stringResource(R.string.online_detail_no_source)
@@ -163,6 +169,15 @@ internal fun OnlineArtistDetailPage(
 
     // 加载歌手详情与初始歌曲/专辑
     LaunchedEffect(artist.id, platform) {
+        val targetArtistKey = "${platform.id}:${artist.id}"
+        if (loadedArtistKey == targetArtistKey && (hotSongs.isNotEmpty() || albums.isNotEmpty())) {
+            loading = false
+            return@LaunchedEffect
+        }
+        if (loadedArtistKey != targetArtistKey) {
+            hotSongs = emptyList()
+            albums = emptyList()
+        }
         loading = true
         errorText = null
         songPage = 1
@@ -170,13 +185,14 @@ internal fun OnlineArtistDetailPage(
         hasMoreSongs = true
         hasMoreAlbums = true
 
+        var resolvedArtist = artist
         var detailHotSongs = emptyList<OnlineSongItem>()
         var detailAlbums = emptyList<OnlineAlbum>()
 
         val detailRes = repository.getArtistDetail(artist.id, platform)
         detailRes.onSuccess { detail ->
             if (detail.artist.name.isNotBlank() && !detail.artist.name.startsWith("歌手")) {
-                currentArtist = detail.artist
+                resolvedArtist = detail.artist
             }
             detailHotSongs = detail.hotSongs
             detailAlbums = detail.albums
@@ -191,7 +207,7 @@ internal fun OnlineArtistDetailPage(
         }
 
         // 兜底二：若依然为空且歌手名称明确，通过全网歌手名搜歌检索热门曲目
-        val targetName = currentArtist.name.ifBlank { artist.name }
+        val targetName = resolvedArtist.name.ifBlank { artist.name }
         if (detailHotSongs.isEmpty() && targetName.isNotBlank() && !targetName.startsWith("歌手")) {
             repository.searchSongs(targetName, page = 1, pageSize = 30, platform = platform)
                 .onSuccess { list ->
@@ -207,8 +223,13 @@ internal fun OnlineArtistDetailPage(
                 }
         }
 
+        if (latestSceneMotionFrozen) {
+            snapshotFlow { latestSceneMotionFrozen }.first { !it }
+        }
+        currentArtist = resolvedArtist
         hotSongs = detailHotSongs
         albums = detailAlbums
+        loadedArtistKey = targetArtistKey
         hasMoreSongs = detailHotSongs.isNotEmpty()
         hasMoreAlbums = detailAlbums.isNotEmpty()
         loading = false

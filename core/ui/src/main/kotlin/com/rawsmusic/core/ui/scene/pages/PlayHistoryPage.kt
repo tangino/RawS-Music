@@ -61,6 +61,7 @@ import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.core.ui.widget.flow.usesReferenceStaticForeground
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -90,11 +91,35 @@ fun PlayHistoryPage(
         historyItems.map { it.toAudioFile() }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
-    ) {
+    // 页面本身不再铺不透明背景：全局背景由 AppMainLayout 的
+    // PersistentSceneBackgroundLayers 统一负责（FLOW / ALBUM_COLOR / STATIC / SIMPLE）。
+    // 以前这里铺 MiuixTheme.colorScheme.background，浅色主题下会把全局背景盖成纯白。
+    val staticForeground = usesReferenceStaticForeground()
+    val foreground = if (staticForeground) Color.White else MiuixTheme.colorScheme.onBackground
+    val contentForeground = if (staticForeground) Color.White else MiuixTheme.colorScheme.onSurface
+    val secondaryForeground = if (staticForeground) {
+        Color.White.copy(alpha = 0.72f)
+    } else {
+        MiuixTheme.colorScheme.onSurfaceVariantSummary
+    }
+    val accentForeground = if (staticForeground) Color.White else MiuixTheme.colorScheme.primary
+    val playAllSurface = if (staticForeground) {
+        Color.Black.copy(alpha = 0.28f)
+    } else {
+        MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
+    }
+    val capsuleSurface = if (staticForeground) {
+        Color.Black.copy(alpha = 0.28f)
+    } else {
+        MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.65f)
+    }
+    val coverSurface = if (staticForeground) {
+        Color.Black.copy(alpha = 0.28f)
+    } else {
+        MiuixTheme.colorScheme.surfaceContainer
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -111,7 +136,7 @@ fun PlayHistoryPage(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = stringResource(R.string.library_action_back),
-                        tint = MiuixTheme.colorScheme.onBackground
+                        tint = foreground
                     )
                 }
                 Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
@@ -119,12 +144,12 @@ fun PlayHistoryPage(
                         text = "历史播放",
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MiuixTheme.colorScheme.onBackground
+                        color = foreground
                     )
                     Text(
                         text = "已记录 ${historyItems.size} 首 · 上限 $maxCount 首",
                         fontSize = 11.5.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f)
+                        color = secondaryForeground.copy(alpha = 0.75f)
                     )
                 }
 
@@ -133,7 +158,7 @@ fun PlayHistoryPage(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "设置记录上限",
-                        tint = MiuixTheme.colorScheme.onBackground
+                        tint = foreground
                     )
                 }
 
@@ -143,7 +168,7 @@ fun PlayHistoryPage(
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "清空历史",
-                            tint = MiuixTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                            tint = foreground.copy(alpha = 0.8f)
                         )
                     }
                 }
@@ -163,7 +188,7 @@ fun PlayHistoryPage(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .background(playAllSurface)
                             .clickable {
                                 if (audioFiles.isNotEmpty()) {
                                     onPlayQueue(audioFiles, 0)
@@ -176,13 +201,13 @@ fun PlayHistoryPage(
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
                             contentDescription = null,
-                            tint = MiuixTheme.colorScheme.primary,
+                            tint = accentForeground,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "播放全部",
-                            color = MiuixTheme.colorScheme.primary,
+                            color = accentForeground,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -193,7 +218,7 @@ fun PlayHistoryPage(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.65f))
+                            .background(capsuleSurface)
                             .clickable {
                                 if (audioFiles.isNotEmpty()) {
                                     val shuffled = audioFiles.shuffled()
@@ -207,13 +232,13 @@ fun PlayHistoryPage(
                         Icon(
                             painter = painterResource(R.drawable.ic_shuffle_custom),
                             contentDescription = null,
-                            tint = MiuixTheme.colorScheme.onSurface,
+                            tint = contentForeground,
                             modifier = Modifier.size(17.dp)
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "随机播放",
-                            color = MiuixTheme.colorScheme.onSurface,
+                            color = contentForeground,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -234,13 +259,13 @@ fun PlayHistoryPage(
                             modifier = Modifier
                                 .size(72.dp)
                                 .clip(CircleShape)
-                                .background(MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f)),
+                                .background(coverSurface.copy(alpha = 0.7f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_nav_custom_recent),
                                 contentDescription = null,
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.4f),
+                                tint = secondaryForeground.copy(alpha = 0.4f),
                                 modifier = Modifier.size(34.dp)
                             )
                         }
@@ -249,13 +274,13 @@ fun PlayHistoryPage(
                             text = "暂无历史播放记录",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onSurface
+                            color = contentForeground
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = "播放任何单曲后将自动记录到此处",
                             fontSize = 12.5.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f)
+                            color = secondaryForeground.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -346,6 +371,18 @@ private fun HistorySongRow(
     onRemove: () -> Unit,
 ) {
     val cover = item.coverKey.ifBlank { item.albumArtPath }
+    val staticForeground = usesReferenceStaticForeground()
+    val contentForeground = if (staticForeground) Color.White else MiuixTheme.colorScheme.onSurface
+    val secondaryForeground = if (staticForeground) {
+        Color.White.copy(alpha = 0.72f)
+    } else {
+        MiuixTheme.colorScheme.onSurfaceVariantSummary
+    }
+    val coverSurface = if (staticForeground) {
+        Color.Black.copy(alpha = 0.28f)
+    } else {
+        MiuixTheme.colorScheme.surfaceContainer
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -358,7 +395,7 @@ private fun HistorySongRow(
             modifier = Modifier
                 .size(46.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(MiuixTheme.colorScheme.surfaceContainer),
+                .background(coverSurface),
             contentAlignment = Alignment.Center
         ) {
             if (cover.isNotBlank()) {
@@ -376,7 +413,7 @@ private fun HistorySongRow(
                     text = index.toString(),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    color = secondaryForeground
                 )
             }
         }
@@ -389,7 +426,7 @@ private fun HistorySongRow(
                 text = item.title.ifBlank { "未知歌曲" },
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Normal,
-                color = MiuixTheme.colorScheme.onSurface,
+                color = contentForeground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -398,7 +435,7 @@ private fun HistorySongRow(
                 Text(
                     text = if (item.artist.isNotBlank()) "${item.artist} · ${item.album.ifBlank { "单曲" }}" else item.album.ifBlank { "未知艺术家" },
                     fontSize = 11.5.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
+                    color = secondaryForeground.copy(alpha = 0.75f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
@@ -407,7 +444,7 @@ private fun HistorySongRow(
                     Text(
                         text = " · " + formatPlayedRelativeTime(item.playedAt),
                         fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.55f),
+                        color = secondaryForeground.copy(alpha = 0.55f),
                         maxLines = 1
                     )
                 }
@@ -422,7 +459,7 @@ private fun HistorySongRow(
             Icon(
                 imageVector = Icons.Default.Close,
                 contentDescription = "移除此条记录",
-                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.45f),
+                tint = secondaryForeground.copy(alpha = 0.45f),
                 modifier = Modifier.size(17.dp)
             )
         }

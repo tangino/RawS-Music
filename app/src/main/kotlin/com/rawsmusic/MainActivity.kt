@@ -1138,7 +1138,6 @@ class MainActivity : ComponentActivity() {
     private val playerActionObserverHelper by lazy {
         PlayerActionObserverHelper(
             lifecycleScope,
-            { playerController },
             { lyricsNeedSeekTo = true }
         )
     }
