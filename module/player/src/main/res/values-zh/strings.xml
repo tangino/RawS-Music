@@ -7,4 +7,7 @@
     <string name="usb_volume_transition">USB 正在切换，请稍后再尝试硬件音量</string>
     <string name="usb_volume_exclusive_only">硬件音量仅在 USB 独占模式下可用</string>
     <string name="usb_volume_disabled">硬件音量已禁用</string>
+    <string name="player_notice_online_retrying">在线播放失败，正在重试：%1$s</string>
+    <string name="player_notice_online_skipped">已跳过无法播放的曲目：%1$s</string>
+    <string name="player_notice_online_failed_stopped">连续多首在线曲目无法播放，已停止</string>
 </resources>

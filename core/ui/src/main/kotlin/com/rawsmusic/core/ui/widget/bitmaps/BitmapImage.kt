@@ -73,13 +73,28 @@ fun BitmapImage(
         )
     }
     val freezeUpdates by rememberUpdatedState(freezeBitmapUpdates)
+    // Artwork can become available after the first request already answered "no art" (embedded
+    // cover extraction, folder artwork scan, remote artwork download). The provider bumps this
+    // revision on invalidation; restart only the request lifetime so the accepted wrapper stays
+    // attached and the holder never falls back to the system default for the rest of the song.
+    val artworkRevision = BitmapProvider.artworkRevision
     val requestSlot = remember(key, targetWidth, targetHeight, priority, surface, aspectPolicy, exactTarget) {
         arrayOfNulls<BitmapRequest>(1)
     }
 
     // Request lifetime may restart when freeze toggles, but handle lifetime deliberately does not.
     // Cancelling an in-flight request is enough to make the frozen transition cheap and stable.
-    DisposableEffect(key, targetWidth, targetHeight, priority, surface, freezeBitmapUpdates, aspectPolicy, exactTarget) {
+    DisposableEffect(
+        key,
+        targetWidth,
+        targetHeight,
+        priority,
+        surface,
+        freezeBitmapUpdates,
+        aspectPolicy,
+        exactTarget,
+        artworkRevision,
+    ) {
         requestSlot[0]?.let(BitmapProvider::cancel)
         requestSlot[0] = if (!freezeBitmapUpdates && key.isNotBlank()) {
             BitmapProvider.loadHandle(

@@ -7,4 +7,7 @@
     <string name="usb_volume_transition">USB is switching; try hardware volume again shortly</string>
     <string name="usb_volume_exclusive_only">Hardware volume is available only in USB exclusive mode</string>
     <string name="usb_volume_disabled">Hardware volume disabled</string>
+    <string name="player_notice_online_retrying">Online playback failed, retrying: %1$s</string>
+    <string name="player_notice_online_skipped">Skipped unplayable online track: %1$s</string>
+    <string name="player_notice_online_failed_stopped">Several online tracks could not be played; playback stopped</string>
 </resources>

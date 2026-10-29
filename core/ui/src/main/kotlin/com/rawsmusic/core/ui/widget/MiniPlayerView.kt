@@ -694,6 +694,27 @@ fun ComposeMiniPlayer(
         }
     }
 
+    // A song identity can be published before its artwork key is resolvable (online artwork URL
+    // arrives later, embedded/folder artwork is extracted asynchronously). The identity-only
+    // effect below would then never refresh the center holder, leaving the mini player on the
+    // system default cover. Refresh the holder carrying the authoritative identity in place when
+    // only the cover changes, without replaying the title/artwork slide.
+    androidx.compose.runtime.LaunchedEffect(
+        authoritativeSnapshot.identity,
+        authoritativeSnapshot.coverPath,
+        transitionRunning,
+    ) {
+        if (transitionRunning) return@LaunchedEffect
+        if (authoritativeSnapshot.coverPath.isNullOrBlank()) return@LaunchedEffect
+        if (visibleSnapshot.identity != authoritativeSnapshot.identity) return@LaunchedEffect
+        if (visibleSnapshot.coverPath == authoritativeSnapshot.coverPath) return@LaunchedEffect
+        val holderSlot = (0..2).firstOrNull { slot ->
+            holderSnapshot(slot).identity == authoritativeSnapshot.identity
+        } ?: centerHolderSlot
+        setHolderSnapshot(holderSlot, authoritativeSnapshot)
+        visibleSnapshot = authoritativeSnapshot
+    }
+
     androidx.compose.runtime.LaunchedEffect(
         authoritativeSnapshot.identity,
         transitionRunning

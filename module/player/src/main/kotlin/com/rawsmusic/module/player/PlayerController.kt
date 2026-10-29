@@ -9,6 +9,7 @@ import kotlin.math.pow
 import com.rawsmusic.core.common.ffmpeg.FFmpegBridge
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.PowerTraceLogger
+import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.LyricData
@@ -24,6 +25,8 @@ import com.rawsmusic.module.data.prefs.PlaybackStatsStore
 import com.rawsmusic.module.data.prefs.UsbBitPerfectMode
 import com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackSnapshot
+import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
 import com.rawsmusic.module.data.source.playback.MusicSourceResolvedStreamRegistry
 import com.rawsmusic.module.data.prefs.TransitionPreferences
 import com.rawsmusic.module.player.dsp.NativeDSPEngine
@@ -275,6 +278,11 @@ class PlayerController private constructor(context: Context) {
         const val ACTION_SLEEP_TIMER_EXIT_APP = "com.rawsmusic.action.SLEEP_TIMER_EXIT_APP"
         private const val TAG = "PlayerController"
         private const val USB_BACKGROUND_REAL_PCM_LOW_MS = 120L
+        /** First online failure retries the same item once; the second failure skips it. */
+        private const val ONLINE_FAILURE_RETRY_LIMIT = 1
+        private const val ONLINE_FAILURE_RETRY_DELAY_MS = 650L
+        /** Prevent an all-dead online queue from cycling notices forever. */
+        private const val ONLINE_FAILURE_MAX_CONSECUTIVE_SKIPS = 5
         @Volatile
         private var instance: PlayerController? = null
 
@@ -543,6 +551,13 @@ class PlayerController private constructor(context: Context) {
     private val _playbackSourceOverride = MutableStateFlow<PlaybackSourceOverride?>(null)
     val playbackSourceOverride: StateFlow<PlaybackSourceOverride?> = _playbackSourceOverride.asStateFlow()
     private val playbackSourceOverrideGeneration = AtomicLong(0L)
+
+    /** Online resolution/playback failure fuse (see handleOnlinePlaybackError). */
+    @Volatile private var onlineFailureSongKey: String? = null
+    @Volatile private var onlineFailureCount = 0
+    @Volatile private var onlineConsecutiveSkips = 0
+    @Volatile private var lastHandledOnlineErrorItem: String? = null
+    private var onlineFailureRetryJob: Job? = null
 
     private fun currentRendererSongForOutputPolicy(): AudioFile? = _currentSong.value?.let { song ->
         PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
@@ -1018,7 +1033,151 @@ class PlayerController private constructor(context: Context) {
 
     init {
         eventQueue.start(scope)
+        startOnlineFailureMonitor()
         sleepTimerController.restorePersistedTimer()
+    }
+
+    /**
+     * Watches the online playback snapshot and turns a final resolution/render error into the
+     * retry-once / skip-with-notice policy.
+     *
+     * This intentionally does not run for local songs: MusicSourcePlaybackController is only the
+     * online source lane, and a local failure must stay on the normal local error path.
+     */
+    private fun startOnlineFailureMonitor() {
+        scope.launch {
+            MusicSourcePlaybackController.snapshot.collect { snapshot ->
+                when (snapshot.status) {
+                    MusicSourcePlaybackStatus.Error -> handleOnlinePlaybackError(snapshot)
+                    MusicSourcePlaybackStatus.Playing -> resetOnlineFailureFuse()
+                    MusicSourcePlaybackStatus.Preparing,
+                    MusicSourcePlaybackStatus.Resolving -> {
+                        // A retry entered a new preparation attempt; allow the next Error to be
+                        // handled, but keep the per-song failure count so retry #2 skips.
+                        lastHandledOnlineErrorItem = null
+                    }
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    private fun handleOnlinePlaybackError(snapshot: MusicSourcePlaybackSnapshot) {
+        if (isReleased) return
+        // A paused/stopped/errored controller must not be resurrected by a late snapshot Error.
+        if (_playState.value != PlayState.PLAYING && _playState.value != PlayState.PREPARING) return
+        val item = snapshot.currentItem ?: return
+        // During a deferred manual switch the public currentSong intentionally still points at the
+        // retiring track. Resolve the failure owner from the pending renderer commit instead.
+        val song = pendingRendererUiCommit?.song ?: _currentSong.value ?: return
+        if (!com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) return
+        val expectedPath = com.rawsmusic.core.common.model.onlineSongKey(item.sourceId, item.remoteId)
+        if (song.path != expectedPath && !rendererSourceMatches(song.path, expectedPath)) return
+
+        val itemIdentity = "${item.sourceId}/${item.remoteId}"
+        if (lastHandledOnlineErrorItem == itemIdentity) return
+        lastHandledOnlineErrorItem = itemIdentity
+
+        val songKey = "${song.path}|${song.cueOffsetMs}|${song.cueTrackIndex}"
+        if (onlineFailureSongKey != songKey) {
+            onlineFailureSongKey = songKey
+            onlineFailureCount = 0
+        }
+        onlineFailureCount++
+
+        if (onlineFailureCount <= ONLINE_FAILURE_RETRY_LIMIT) {
+            AppLogger.w(
+                TAG,
+                "ONLINE_PLAY_FAILURE retry attempt=$onlineFailureCount song=${song.title} " +
+                    "error=${snapshot.error.take(160)}",
+            )
+            AppNoticeBus.post(
+                context.getString(R.string.player_notice_online_retrying, song.title),
+                AppNoticeIcon.WARNING,
+            )
+            scheduleOnlineRetry(song)
+            return
+        }
+
+        onlineFailureSongKey = null
+        onlineFailureCount = 0
+        onlineConsecutiveSkips += 1
+        AppLogger.w(
+            TAG,
+            "ONLINE_PLAY_FAILURE skip after retry song=${song.title} " +
+                "consecutiveSkips=$onlineConsecutiveSkips error=${snapshot.error.take(160)}",
+        )
+
+        // A deferred manual switch has not published the failed target yet. Commit that target
+        // first so next() advances from the failed row, not from the retiring song.
+        commitPendingFailureTarget()
+        val queue = _queue.value
+        val canAdvance = queue.songs.size > 1 && (
+            playbackModeController.currentRepeatMode == RepeatMode.ALL ||
+                queueControlCoordinator.hasAutomaticContinuation()
+            )
+        if (!canAdvance || onlineConsecutiveSkips > ONLINE_FAILURE_MAX_CONSECUTIVE_SKIPS) {
+            AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
+            stop()
+            return
+        }
+
+        AppNoticeBus.post(
+            context.getString(R.string.player_notice_online_skipped, song.title),
+            AppNoticeIcon.WARNING,
+        )
+        if (queueControlCoordinator.next() == null) {
+            AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
+            stop()
+        }
+    }
+
+    private fun scheduleOnlineRetry(song: AudioFile) {
+        onlineFailureRetryJob?.cancel()
+        onlineFailureRetryJob = scope.launch {
+            delay(ONLINE_FAILURE_RETRY_DELAY_MS)
+            if (isReleased) return@launch
+            val current = pendingRendererUiCommit?.song ?: _currentSong.value
+            if (current == null || !samePlaybackItem(current, song)) return@launch
+            if (MusicSourcePlaybackController.snapshot.value.status != MusicSourcePlaybackStatus.Error) {
+                return@launch
+            }
+            lastHandledOnlineErrorItem = null
+            AppLogger.i(TAG, "ONLINE_PLAY_FAILURE retrying song=${song.title} path=${song.path}")
+            MusicSourcePlaybackController.playPause()
+        }
+    }
+
+    /**
+     * Publish the deferred target that just exhausted its retries, so the failure-skip advances
+     * from that row. Without this, a deferred online switch would still have _queue/_currentSong
+     * on the retiring track and next() would select the wrong item.
+     */
+    private fun commitPendingFailureTarget() {
+        val pending = pendingRendererUiCommit ?: return
+        pendingRendererUiCommit = null
+        _queue.value = _queue.value.copy(
+            songs = pending.queue,
+            currentIndex = pending.index.coerceIn(0, pending.queue.lastIndex.coerceAtLeast(0)),
+        )
+        clearPlaybackSourceOverrideIfOwnerChanged(pending.song, "online_failure_commit")
+        _currentSong.value = pending.song
+        _position.value = 0L
+        _duration.value = pending.song.duration.coerceAtLeast(0L)
+        queueControlCoordinator.onManualTargetCommitted(pending.song)
+        clearRequestedSongIfCommitted(pending.song)
+        smForceTransition(PlayState.PREPARING, "online_failure_target_commit")
+    }
+
+    private fun resetOnlineFailureFuse() {
+        onlineFailureRetryJob?.cancel()
+        onlineFailureRetryJob = null
+        onlineFailureSongKey = null
+        onlineFailureCount = 0
+        onlineConsecutiveSkips = 0
+        // Keep lastHandledOnlineErrorItem: a stale Error snapshot must not be replayed by the
+        // next explicit play before that play publishes its own Preparing/Resolving snapshot.
+        // The Preparing/Resolving branch above clears it for the new attempt.
     }
 
     @Volatile
@@ -1711,9 +1870,12 @@ class PlayerController private constructor(context: Context) {
         override fun onPositionChanged(positionMs: Long, durationMs: Long, trackPath: String?) {
             if (cachedCueEndMs > 0) return
             val committedPath = _currentSong.value?.path
-            if (trackPath != null && committedPath != null && trackPath != committedPath) {
+            if (trackPath != null && committedPath != null && !rendererSourceMatches(committedPath, trackPath)) {
                 // A retiring decoder can publish one last clock tick after the handoff. Reference
                 // never lets that old timeline overwrite the committed queue cursor.
+                // Use the source-override-aware comparison: an online semantic path legitimately
+                // renders from a cache file or a matched local file, and those ticks must not be
+                // discarded as "stale".
                 AppLogger.d(
                     TAG,
                     "Ignoring stale position callback path=$trackPath committed=$committedPath " +
@@ -1821,6 +1983,7 @@ class PlayerController private constructor(context: Context) {
                     clearRequestedSongIfCommitted(song)
                     AppPreferences.Player.lastPosition = _position.value
                     smForceTransition(PlayState.PLAYING, "native_track_started")
+                    resetOnlineFailureFuse()
                     if (oldSong == null || !samePlaybackItem(oldSong, song)) {
                         AppLogger.markPlaybackReportStart(
                             title = song.title,
@@ -1854,7 +2017,11 @@ class PlayerController private constructor(context: Context) {
                     AppLogger.i(
                         TAG,
                         "TRACK_STARTED committed UI index=$oldIndex->$newIndex " +
-                            "position=$positionMs duration=${_duration.value} path=$newPath",
+                            "title=${song.title} artist=${song.artist} " +
+                            "cover=${song.albumArtPath.takeLast(64)} " +
+                            "position=$positionMs duration=${_duration.value} " +
+                            "semantic=${song.path} renderer=$newPath " +
+                            "override=${_playbackSourceOverride.value?.playbackPath?.takeLast(64).orEmpty()}",
                     )
                     // Two native slots are still occupied until the old track retires.
                     // Preparing next-next here would replace the in-flight pending decoder.
@@ -5591,8 +5758,13 @@ class PlayerController private constructor(context: Context) {
         androidAudioInterruptionController.stopBluetoothSco()
     }
 
-    fun play(song: AudioFile, queue: List<AudioFile> = emptyList(), index: Int = 0) =
+    fun play(song: AudioFile, queue: List<AudioFile> = emptyList(), index: Int = 0) {
+        // A user/explicit play starts a new intent. Do not let the previous queue's failure
+        // count leak into it. The internal failure-skip path uses queueControlCoordinator.next()
+        // directly, so it intentionally does not pass through here.
+        resetOnlineFailureFuse()
         transportControlCoordinator.play(song, queue, index)
+    }
 
     fun playResolvedOnlineSource(
         song: AudioFile,
@@ -5631,6 +5803,23 @@ class PlayerController private constructor(context: Context) {
 
     private fun samePlaybackItem(a: AudioFile, b: AudioFile): Boolean =
         playRequestResolver.sameItem(a, b)
+
+    /**
+     * A queue produced directly by an online playlist.
+     *
+     * This includes the online portal, artist detail, global search and **favorited online
+     * playlists**: playing a favorite still opens the online detail / OnlinePlaybackLauncher, and
+     * every queue row is created by MusicSourcePlaybackBackend with the online encoding marker.
+     *
+     * An online playlist becomes a local/mixed playlist only after the user explicitly imports it
+     * into a local playlist. Imported rows are UserPlaylistSong entries; toAudioFile() does not
+     * carry the online encoding marker, so even an all-online imported playlist remains a local
+     * playlist and may use the local-file fast path.
+     */
+    private fun isPureOnlineQueue(songs: List<AudioFile>): Boolean =
+        songs.isNotEmpty() &&
+            songs.all { com.rawsmusic.core.common.model.isOnlineSongKey(it.path) } &&
+            songs.any { it.encodingFormat == MUSIC_SOURCE_ONLINE_ENCODING_MARKER }
 
     private fun rendererSourceMatches(requestedPath: String, rendererPath: String): Boolean {
         val normReq = normalizeRendererSource(requestedPath)
@@ -5767,26 +5956,61 @@ class PlayerController private constructor(context: Context) {
             val isResolved = activeOverride != null && activeOverride.matches(song) && activeOverride.sourceExists()
             if (!isResolved) {
                 // 本地曲库优先秒开探活：
-                // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时
-                val localMatch = try {
-                    val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
-                    com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
-                } catch (_: Throwable) {
+                // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时。
+                // 但纯网络歌单（在线广场/歌手/搜索产生的队列）必须只走网络源：
+                // 只有本地混合歌单（用户歌单、含本地条的在线收藏歌单）才允许命中本地文件。
+                val sourceQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                val allowLocalMatch = !isPureOnlineQueue(sourceQueue)
+                if (!allowLocalMatch) {
+                    AppLogger.i(
+                        TAG,
+                        "playInternal: pure online queue, skip local library match for '${song.title}'",
+                    )
+                }
+                val localMatch = if (allowLocalMatch) {
+                    try {
+                        val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
+                        com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                } else {
                     null
                 }
                 if (localMatch != null && java.io.File(localMatch.path).exists()) {
-                    AppLogger.i(TAG, "playInternal: online song '${song.title}' matched local file '${localMatch.path}', redirecting to local 0ms instant playback")
-                    val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
-                    val redirectedQueue = effectiveQueue.map { q ->
-                        if (q.path == song.path) localMatch else q
-                    }
-                    playInternal(
-                        song = localMatch,
-                        queue = redirectedQueue,
-                        index = index,
-                        deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                    // 关键：这里不能把 song/queue 替换成本地文件。
+                    // 手动切歌时 pendingRendererUiCommit 仍以 online:// 语义身份等待 TRACK_STARTED；
+                    // 直接把 renderer song 换成 /storage/... 会让 TRACK_STARTED 永远匹配不上，
+                    // 结果是「声音已经是下一首，标题/封面/队列还停在上上首」。
+                    // 改用 PlaybackSourceOverride：队列/currentSong 保持在线语义身份，只把物理解码源
+                    // 指向本地文件，rendererSourceMatches() 已支持这种映射。
+                    val localOverride = PlaybackSourceOverridePolicy.normalizeForSong(
+                        song = song,
+                        playbackPath = localMatch.path,
+                        sourceTag = "local_library_match",
+                        sampleRate = localMatch.sampleRate,
+                        channels = localMatch.channelCount,
+                        bitsPerSample = localMatch.bitsPerSample,
+                        format = localMatch.format,
+                        generation = playbackSourceOverrideGeneration.incrementAndGet(),
                     )
-                    return
+                    if (localOverride != null) {
+                        AppLogger.i(
+                            TAG,
+                            "playInternal: online song '${song.title}' matched local file '${localMatch.path}', " +
+                                "switching renderer source while keeping semantic identity=${song.path}",
+                        )
+                        _playbackSourceOverride.value = localOverride
+                        MusicSourcePlaybackController.resetForLocalPlayback()
+                        val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
+                        playInternal(
+                            song = song,
+                            queue = effectiveQueue,
+                            index = index,
+                            deferPublicCommitToRenderer = deferPublicCommitToRenderer,
+                        )
+                        return
+                    }
                 }
 
                 // 即将进入网络寻源。如果当前底层正在播放/准备，平滑淡出并停止，避免在网络寻源期间旧音频持续发声或残留缓冲回响
@@ -5849,15 +6073,35 @@ class PlayerController private constructor(context: Context) {
                         )
                     }
                 }
-                primeSongSelectionForUi(song)
-                _currentSong.value = song
-                _playState.value = PlayState.PREPARING
-                _position.value = 0L
-                _duration.value = song.duration.coerceAtLeast(0L)
-                _queue.value = PlayQueue(
-                    songs = finalQueue,
-                    currentIndex = resolvedIndex,
-                )
+                if (deferPublicCommitToRenderer) {
+                    // Reference-style deferred ownership: keep the retiring song's public
+                    // title/artist/queue visible until TRACK_STARTED confirms the online target.
+                    // Publishing currentSong here made the player title jump to the target and
+                    // then fall back to the old song on the next queue emission (new -> old -> new).
+                    val existing = pendingRendererUiCommit
+                    pendingRendererUiCommit = if (
+                        existing != null && samePlaybackItem(existing.song, song)
+                    ) {
+                        existing.copy(queue = finalQueue, index = resolvedIndex)
+                    } else {
+                        PendingRendererUiCommit(
+                            song = song,
+                            queue = finalQueue,
+                            index = resolvedIndex,
+                            prepareFollowingAfterCommit = true,
+                        )
+                    }
+                } else {
+                    primeSongSelectionForUi(song)
+                    _currentSong.value = song
+                    _playState.value = PlayState.PREPARING
+                    _position.value = 0L
+                    _duration.value = song.duration.coerceAtLeast(0L)
+                    _queue.value = PlayQueue(
+                        songs = finalQueue,
+                        currentIndex = resolvedIndex,
+                    )
+                }
                 MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
                 return
             }
