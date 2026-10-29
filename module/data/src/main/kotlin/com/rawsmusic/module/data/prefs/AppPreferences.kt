@@ -2275,6 +2275,15 @@ object AppPreferences {
     }
 
     object FloatingWindow {
+        const val THEME_SYSTEM = 0
+        const val THEME_LIGHT = 1
+        const val THEME_DARK = 2
+
+        /** 悬浮窗主题模式：0=跟随系统，1=亮色主题，2=暗色主题（默认跟随系统） */
+        var themeMode: Int
+            get() = kv.decodeInt("floating_window_theme_mode", THEME_SYSTEM).coerceIn(THEME_SYSTEM, THEME_DARK)
+            set(value) { kv.encode("floating_window_theme_mode", value.coerceIn(THEME_SYSTEM, THEME_DARK)) }
+
         /** 悬浮窗功能开关（默认开启） */
         var isEnabled: Boolean
             get() = kv.decodeBool("floating_window_enabled", true)

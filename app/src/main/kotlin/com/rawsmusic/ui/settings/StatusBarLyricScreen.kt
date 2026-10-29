@@ -93,6 +93,7 @@ fun LiquidGlassStatusBarLyricScreen(
     }
 
     var floatingWindowEnabled by remember { mutableStateOf(AppPreferences.FloatingWindow.isEnabled) }
+    var floatingWindowThemeMode by remember { mutableStateOf(AppPreferences.FloatingWindow.themeMode) }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -153,6 +154,12 @@ fun LiquidGlassStatusBarLyricScreen(
         stringResource(R.string.settings_car_lyrics_field_dual),
     )
     val bluetoothMetadataEntries = bluetoothMetadataLabels.map { DropdownItem(title = it) }
+    val floatingThemeLabels = listOf(
+        stringResource(R.string.settings_theme_system),
+        stringResource(R.string.settings_theme_light),
+        stringResource(R.string.settings_theme_dark)
+    )
+    val floatingThemeEntries = floatingThemeLabels.map { DropdownItem(title = it) }
 
     SettingsPage(title = stringResource(R.string.settings_status_bar_lyric_title), onBack = onBack) {
         SettingsSection(stringResource(R.string.floating_window_section)) {
@@ -169,6 +176,15 @@ fun LiquidGlassStatusBarLyricScreen(
                     com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setEnabled(checked)
                 }
             }
+            WindowSpinnerPreference(
+                title = stringResource(R.string.floating_window_theme_mode),
+                items = floatingThemeEntries,
+                selectedIndex = floatingWindowThemeMode.coerceIn(0, floatingThemeEntries.lastIndex),
+                onSelectedIndexChange = { index ->
+                    floatingWindowThemeMode = index
+                    com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setThemeMode(index)
+                }
+            )
             SettingsNavigationEntry(
                 title = stringResource(R.string.floating_window_reset),
                 description = stringResource(R.string.floating_window_reset_desc)

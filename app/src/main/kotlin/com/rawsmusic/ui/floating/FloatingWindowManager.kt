@@ -230,6 +230,160 @@ class FloatingWindowManager private constructor(private val context: Context) {
 
     fun isEnabled(): Boolean = AppPreferences.FloatingWindow.isEnabled
 
+    fun getThemeMode(): Int = AppPreferences.FloatingWindow.themeMode
+
+    fun setThemeMode(mode: Int) {
+        val normalized = mode.coerceIn(
+            AppPreferences.FloatingWindow.THEME_SYSTEM,
+            AppPreferences.FloatingWindow.THEME_DARK
+        )
+        AppPreferences.FloatingWindow.themeMode = normalized
+        floatingView?.let { view ->
+            applyTheme(view)
+            updateResizeHintText(dragging = false)
+        }
+    }
+
+    fun cycleThemeMode(): Int {
+        val next = when (getThemeMode()) {
+            AppPreferences.FloatingWindow.THEME_SYSTEM -> AppPreferences.FloatingWindow.THEME_LIGHT
+            AppPreferences.FloatingWindow.THEME_LIGHT -> AppPreferences.FloatingWindow.THEME_DARK
+            else -> AppPreferences.FloatingWindow.THEME_SYSTEM
+        }
+        setThemeMode(next)
+        return next
+    }
+
+    fun isDarkTheme(config: Configuration = context.resources.configuration): Boolean {
+        return when (AppPreferences.FloatingWindow.themeMode) {
+            AppPreferences.FloatingWindow.THEME_LIGHT -> false
+            AppPreferences.FloatingWindow.THEME_DARK -> true
+            else -> (config.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        }
+    }
+
+    private fun currentThemeLabel(): String {
+        return when (getThemeMode()) {
+            AppPreferences.FloatingWindow.THEME_LIGHT -> context.getString(R.string.settings_theme_light)
+            AppPreferences.FloatingWindow.THEME_DARK -> context.getString(R.string.settings_theme_dark)
+            else -> context.getString(R.string.settings_theme_system)
+        }
+    }
+
+    private fun primaryLyricColor(isDark: Boolean = isDarkTheme()): Int =
+        if (isDark) Color.WHITE else Color.parseColor("#0F172A")
+
+    private fun activeSplitSecondaryLyricColor(isDark: Boolean = isDarkTheme()): Int =
+        if (isDark) Color.parseColor("#B8F1F5F9") else Color.parseColor("#B81E293B")
+
+    private fun secondaryLyricColor(isDark: Boolean = isDarkTheme()): Int =
+        if (isDark) Color.parseColor("#80FFFFFF") else Color.parseColor("#8A475569")
+
+    fun applyTheme(root: View? = floatingView, config: Configuration = context.resources.configuration) {
+        val view = root ?: return
+        val isDark = isDarkTheme(config)
+        val density = context.resources.displayMetrics.density
+
+        val capsuleH = (capsuleContainer?.layoutParams?.height ?: 0).takeIf { it > 0 }
+            ?: capsuleContainer?.height?.takeIf { it > 0 }
+            ?: (baseCapsuleSizeDp().second * userScaleFactor * density).toInt()
+        val capsuleRadius = capsuleH / 2f
+
+        val capsuleBg = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            if (isDark) {
+                intArrayOf(
+                    Color.parseColor("#E60E121A"),
+                    Color.parseColor("#D9090C12"),
+                    Color.parseColor("#CC06080D")
+                )
+            } else {
+                intArrayOf(
+                    Color.parseColor("#F5FFFFFF"),
+                    Color.parseColor("#EEF4F6FA"),
+                    Color.parseColor("#E8EBF0F7")
+                )
+            }
+        ).apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = capsuleRadius
+            setStroke(
+                (0.75f * density).toInt().coerceAtLeast(1),
+                if (isDark) Color.parseColor("#33FFFFFF") else Color.parseColor("#240F172A")
+            )
+        }
+        capsuleContainer?.background = capsuleBg
+
+        val vinylBg = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.BL_TR,
+            if (isDark) {
+                intArrayOf(
+                    Color.parseColor("#1A1C24"),
+                    Color.parseColor("#0F1117"),
+                    Color.parseColor("#14171F")
+                )
+            } else {
+                intArrayOf(
+                    Color.parseColor("#E2E8F0"),
+                    Color.parseColor("#CBD5E1"),
+                    Color.parseColor("#D8E0EB")
+                )
+            }
+        ).apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setStroke(
+                (0.8f * density).toInt().coerceAtLeast(1),
+                if (isDark) Color.parseColor("#3DFFFFFF") else Color.parseColor("#260F172A")
+            )
+        }
+        coverContainer?.background = vinylBg
+
+        tvTitle?.setTextColor(if (isDark) Color.WHITE else Color.parseColor("#0F172A"))
+        tvTitleDot?.setTextColor(if (isDark) Color.parseColor("#66FFFFFF") else Color.parseColor("#660F172A"))
+        tvArtist?.setTextColor(if (isDark) Color.parseColor("#80FFFFFF") else Color.parseColor("#99334155"))
+
+        val shadowColor = if (isDark) Color.parseColor("#99000000") else Color.parseColor("#4DFFFFFF")
+        val shadowRadius = if (isDark) 2f else 1.5f
+        tvLyric?.setShadowLayer(shadowRadius, 0f, 1f, shadowColor)
+        tvLyricNext?.setShadowLayer(shadowRadius, 0f, 1f, shadowColor)
+
+        if (currentLineSplitPart2StartMs != Long.MAX_VALUE) {
+            if (isCurrentSplitSecondPartActive) {
+                tvLyric?.setTextColor(activeSplitSecondaryLyricColor(isDark))
+                tvLyricNext?.setTextColor(primaryLyricColor(isDark))
+            } else {
+                tvLyric?.setTextColor(primaryLyricColor(isDark))
+                tvLyricNext?.setTextColor(activeSplitSecondaryLyricColor(isDark))
+            }
+        } else {
+            tvLyric?.setTextColor(primaryLyricColor(isDark))
+            tvLyricNext?.setTextColor(secondaryLyricColor(isDark))
+        }
+
+        val iconTint = android.content.res.ColorStateList.valueOf(
+            if (isDark) Color.WHITE else Color.parseColor("#0F172A")
+        )
+        btnPlayPause?.imageTintList = iconTint
+        btnClose?.imageTintList = iconTint
+
+        resizeFrame?.background = PillDashFrameDrawable(
+            strokeWidthPx = 1.6f * density,
+            dashLengthPx = 4.5f * density,
+            dashColor = if (isDark) Color.argb(215, 255, 255, 255) else Color.argb(190, 15, 23, 42)
+        )
+        val hintBg = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = 11f * density
+            setColor(if (isDark) Color.parseColor("#B3000000") else Color.parseColor("#E6FFFFFF"))
+            setStroke(
+                (1f * density).toInt().coerceAtLeast(1),
+                if (isDark) Color.parseColor("#3DFFFFFF") else Color.parseColor("#290F172A")
+            )
+        }
+        resizeHint?.background = hintBg
+        resizeHint?.setTextColor(if (isDark) Color.WHITE else Color.parseColor("#0F172A"))
+    }
+
     fun setEnabled(enabled: Boolean) {
         AppPreferences.FloatingWindow.isEnabled = enabled
         if (!enabled) {
@@ -246,6 +400,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             AppPreferences.FloatingWindow.userScale = clamped
             floatingView?.let { view ->
                 applyAdaptiveDimensions(view)
+            applyTheme(view)
                 windowParams?.let { params ->
                     val density = context.resources.displayMetrics.density
                     val (baseW, baseH) = baseCapsuleSizeDp()
@@ -419,6 +574,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             bindViews(view)
             userScaleFactor = clampScale(userScaleFactor)
             applyAdaptiveDimensions(view)
+            applyTheme(view)
             clampCoordinates(params, view)
             setupTouchAndDrag(view, params)
             setupResizeHandles()
@@ -493,6 +649,12 @@ class FloatingWindowManager private constructor(private val context: Context) {
         resizeOverlay = root.findViewById(R.id.floating_resize_overlay)
         resizeFrame = root.findViewById(R.id.floating_resize_frame)
         resizeHint = root.findViewById(R.id.floating_resize_hint)
+        resizeHint?.isClickable = true
+        resizeHint?.setOnClickListener {
+            cancelResizeIdleExit()
+            cycleThemeMode()
+            scheduleResizeIdleExit()
+        }
         resizeHandles.clear()
         listOf(
             Triple(R.id.floating_resize_handle_tl, -1, -1),
@@ -569,6 +731,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
         view.post {
             userScaleFactor = clampScale(userScaleFactor)
             applyAdaptiveDimensions(view)
+            applyTheme(view, newConfig)
             clampCoordinates(params, view)
             try {
                 if (view.isAttachedToWindow) {
@@ -840,7 +1003,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             val hDp = (baseH * userScaleFactor).toInt()
             "$percent% · ${wDp}×${hDp}dp"
         } else {
-            "拖动圆点调整大小"
+            context.getString(R.string.floating_window_resize_hint_with_theme, currentThemeLabel())
         }
         hint.setTextSize(
             TypedValue.COMPLEX_UNIT_SP,
@@ -991,6 +1154,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 val factor = detector.scaleFactor
                 userScaleFactor = clampScale(userScaleFactor * factor)
                 applyAdaptiveDimensions(view)
+            applyTheme(view)
                 clampCoordinates(params, view)
                 try {
                     if (view.isAttachedToWindow) {
@@ -1244,7 +1408,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 tvTitle?.text = song.title.ifBlank { "RawS-Music" }
                 tvArtist?.text = song.artist.ifBlank { "未知艺术家" }
                 tvLyric?.text = "正在同步歌词..."
-                tvLyric?.setTextColor(Color.WHITE)
+                tvLyric?.setTextColor(primaryLyricColor())
                 tvLyricNext?.text = ""
                 lastLyricStateKey = ""
                 currentLineSplitPart2StartMs = Long.MAX_VALUE
@@ -1360,7 +1524,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 lastLyricStateKey = "empty"
                 currentLineSplitPart2StartMs = Long.MAX_VALUE
                 isCurrentSplitSecondPartActive = false
-                setLyricDirectly("♪ 享受音乐旋律 ♪", "", Color.WHITE, Color.parseColor("#80FFFFFF"))
+                setLyricDirectly("♪ 享受音乐旋律 ♪", "", primaryLyricColor(), secondaryLyricColor())
             }
             return
         }
@@ -1380,8 +1544,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 isCurrentSplitSecondPartActive = false
                 targetText1 = state.text1
                 targetText2 = state.text2
-                targetColor1 = Color.WHITE
-                targetColor2 = Color.parseColor("#80FFFFFF")
+                targetColor1 = primaryLyricColor()
+                targetColor2 = secondaryLyricColor()
             } else {
                 val currentText = state.text1
                 val nextText = state.text2
@@ -1406,19 +1570,19 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     targetText1 = split.part1
                     targetText2 = split.part2
                     if (split.isSecondPartActive) {
-                        targetColor1 = Color.parseColor("#B8F1F5F9")
-                        targetColor2 = Color.WHITE
+                        targetColor1 = activeSplitSecondaryLyricColor()
+                        targetColor2 = primaryLyricColor()
                     } else {
-                        targetColor1 = Color.WHITE
-                        targetColor2 = Color.parseColor("#B8F1F5F9")
+                        targetColor1 = primaryLyricColor()
+                        targetColor2 = activeSplitSecondaryLyricColor()
                     }
                 } else {
                     currentLineSplitPart2StartMs = Long.MAX_VALUE
                     isCurrentSplitSecondPartActive = false
                     targetText1 = currentText
                     targetText2 = nextText
-                    targetColor1 = Color.WHITE
-                    targetColor2 = Color.parseColor("#80FFFFFF")
+                    targetColor1 = primaryLyricColor()
+                    targetColor2 = secondaryLyricColor()
                 }
             }
 
@@ -1432,11 +1596,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
             if (secondPartNowActive != isCurrentSplitSecondPartActive) {
                 isCurrentSplitSecondPartActive = secondPartNowActive
                 if (secondPartNowActive) {
-                    tvLyric?.setTextColor(Color.parseColor("#B8F1F5F9"))
-                    tvLyricNext?.setTextColor(Color.WHITE)
+                    tvLyric?.setTextColor(activeSplitSecondaryLyricColor())
+                    tvLyricNext?.setTextColor(primaryLyricColor())
                 } else {
-                    tvLyric?.setTextColor(Color.WHITE)
-                    tvLyricNext?.setTextColor(Color.parseColor("#B8F1F5F9"))
+                    tvLyric?.setTextColor(primaryLyricColor())
+                    tvLyricNext?.setTextColor(activeSplitSecondaryLyricColor())
                 }
             }
         }

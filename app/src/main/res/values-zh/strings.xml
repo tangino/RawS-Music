@@ -1586,6 +1586,8 @@
     <string name="floating_window_title">灵动音乐悬浮胶囊</string>
     <string name="floating_window_desc">呈现黑胶唱片自转、左右切歌、双行智能歌词与自由拉伸调整。退出到后台自动弹出。</string>
     <string name="floating_window_enable">启用桌面音乐悬浮窗</string>
+    <string name="floating_window_theme_mode">悬浮窗主题</string>
+    <string name="floating_window_resize_hint_with_theme">拖动圆点调整大小 · 点此切换主题（%1$s）</string>
     <string name="floating_window_reset">重置悬浮窗位置与大小</string>
     <string name="floating_window_reset_desc">将桌面悬浮窗恢复至默认位置与 100% 标准大小。</string>
     <string name="desktop_lyric_title">悬浮窗歌词</string>

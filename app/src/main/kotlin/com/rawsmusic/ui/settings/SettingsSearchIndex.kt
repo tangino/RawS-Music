@@ -416,6 +416,8 @@ internal val settingsSearchIndex = listOf(
     SettingsSearchIndexEntry("Lyrics", R.string.settings_lyric_getter_lyrics, StatusBarLyricActivity::class.java),
     SettingsSearchIndexEntry("Lyrics", R.string.settings_samsung_floating_lyric_translation, StatusBarLyricActivity::class.java),
     SettingsSearchIndexEntry("Lyrics", R.string.settings_status_bar_lyric_title, StatusBarLyricActivity::class.java),
+    SettingsSearchIndexEntry("Lyrics", R.string.floating_window_title, StatusBarLyricActivity::class.java),
+    SettingsSearchIndexEntry("Lyrics", R.string.floating_window_theme_mode, StatusBarLyricActivity::class.java),
     SettingsSearchIndexEntry("Effects", R.string.settings_surround360_title, Surround360Activity::class.java),
     SettingsSearchIndexEntry("Lyrics", R.string.settings_coloros_bridge_enabled, SystemLyricDeliveryActivity::class.java),
     SettingsSearchIndexEntry("Lyrics", R.string.settings_coloros_bridge_mode, SystemLyricDeliveryActivity::class.java),
