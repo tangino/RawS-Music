@@ -727,6 +727,7 @@ fun ComposePlayerContainer(
             onPlayPause = onPlayPause,
             onNext = nextFromPlayer,
             onPlayMode = onPlayMode,
+            onPlayModeLongPress = onPlayModeLongPress,
             onLyricModifyAlbumArt = onLyricModifyAlbumArt,
             onSearchLyrico = onSearchLyrico,
             onOpenInLyrico = onOpenInLyrico,

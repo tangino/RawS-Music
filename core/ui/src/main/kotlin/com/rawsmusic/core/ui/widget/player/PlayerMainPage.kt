@@ -582,6 +582,7 @@ fun PlayerMainPage(
                             onPlayPause = onPlayPause,
                             onNext = onNext,
                             onPlayMode = onPlayMode,
+                            onPlayModeLongPress = onPlayModeLongPress,
                             onQueuePlaceholder = {
                                 if (!queueVisible) queueFullscreen = false
                                 onToggleQueue()

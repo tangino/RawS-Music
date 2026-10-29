@@ -174,6 +174,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private var currentSongIdentity: String? = null
     private var currentLyricLines: List<LyricLine> = emptyList()
     private var lastLyricStateKey: String = ""
+    private var currentLineSplitPart2StartMs: Long = Long.MAX_VALUE
+    private var isCurrentSplitSecondPartActive: Boolean = false
 
     // 控件引用
     private var rootCard: View? = null
@@ -467,6 +469,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
             currentSongIdentity = null
             currentLyricLines = emptyList()
             lastLyricStateKey = ""
+            currentLineSplitPart2StartMs = Long.MAX_VALUE
+            isCurrentSplitSecondPartActive = false
         }
     }
 
@@ -1240,8 +1244,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 tvTitle?.text = song.title.ifBlank { "RawS-Music" }
                 tvArtist?.text = song.artist.ifBlank { "未知艺术家" }
                 tvLyric?.text = "正在同步歌词..."
+                tvLyric?.setTextColor(Color.WHITE)
                 tvLyricNext?.text = ""
                 lastLyricStateKey = ""
+                currentLineSplitPart2StartMs = Long.MAX_VALUE
+                isCurrentSplitSecondPartActive = false
 
                 loadSongCover(song)
 
@@ -1260,6 +1267,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
             currentSongIdentity = null
             currentLyricLines = emptyList()
             lastLyricStateKey = ""
+            currentLineSplitPart2StartMs = Long.MAX_VALUE
+            isCurrentSplitSecondPartActive = false
             tvTitle?.text = "RawS-Music"
             tvArtist?.text = "未在播放音乐"
             tvLyric?.text = "享受美好旋律"
@@ -1345,26 +1354,33 @@ class FloatingWindowManager private constructor(private val context: Context) {
     }
 
     private fun updateLyricLine(currentPositionMs: Long) {
+        val lyricPositionMs = com.rawsmusic.core.common.utils.LyricPlaybackTimeline.toLyricTime(currentPositionMs)
         if (currentLyricLines.isEmpty()) {
             if (lastLyricStateKey != "empty") {
                 lastLyricStateKey = "empty"
-                setLyricDirectly("♪ 享受音乐旋律 ♪", "", Color.parseColor("#80FFFFFF"))
+                currentLineSplitPart2StartMs = Long.MAX_VALUE
+                isCurrentSplitSecondPartActive = false
+                setLyricDirectly("♪ 享受音乐旋律 ♪", "", Color.WHITE, Color.parseColor("#80FFFFFF"))
             }
             return
         }
 
-        val state = FloatingLyricHelper.resolveLyricState(currentLyricLines, currentPositionMs)
+        val state = FloatingLyricHelper.resolveLyricState(currentLyricLines, lyricPositionMs)
         if (state.stateKey != lastLyricStateKey) {
             val prevStateKey = lastLyricStateKey
             lastLyricStateKey = state.stateKey
 
             val targetText1: String
             val targetText2: String
+            val targetColor1: Int
             val targetColor2: Int
 
             if (state.isInstrumental) {
+                currentLineSplitPart2StartMs = Long.MAX_VALUE
+                isCurrentSplitSecondPartActive = false
                 targetText1 = state.text1
                 targetText2 = state.text2
+                targetColor1 = Color.WHITE
                 targetColor2 = Color.parseColor("#80FFFFFF")
             } else {
                 val currentText = state.text1
@@ -1379,21 +1395,49 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 val textWidth = paint?.measureText(currentText) ?: 0f
 
                 if (textWidth > availableWidth && currentText.length >= 7) {
-                    val (part1, part2) = splitLongLyric(currentText)
-                    targetText1 = part1
-                    targetText2 = part2
-                    targetColor2 = Color.parseColor("#F1F5F9")
+                    val split = FloatingLyricHelper.splitLongLyric(
+                        line = state.activeLine,
+                        displayText = currentText,
+                        currentPositionMs = lyricPositionMs,
+                        nextLine = state.nextLine
+                    )
+                    currentLineSplitPart2StartMs = split.part2StartMs
+                    isCurrentSplitSecondPartActive = split.isSecondPartActive
+                    targetText1 = split.part1
+                    targetText2 = split.part2
+                    if (split.isSecondPartActive) {
+                        targetColor1 = Color.parseColor("#B8F1F5F9")
+                        targetColor2 = Color.WHITE
+                    } else {
+                        targetColor1 = Color.WHITE
+                        targetColor2 = Color.parseColor("#B8F1F5F9")
+                    }
                 } else {
+                    currentLineSplitPart2StartMs = Long.MAX_VALUE
+                    isCurrentSplitSecondPartActive = false
                     targetText1 = currentText
                     targetText2 = nextText
+                    targetColor1 = Color.WHITE
                     targetColor2 = Color.parseColor("#80FFFFFF")
                 }
             }
 
             if (isSequentialLyricState(prevStateKey, state.stateKey) && isShowing) {
-                animateLyricTransition(targetText1, targetText2, targetColor2)
+                animateLyricTransition(targetText1, targetText2, targetColor1, targetColor2)
             } else {
-                setLyricDirectly(targetText1, targetText2, targetColor2)
+                setLyricDirectly(targetText1, targetText2, targetColor1, targetColor2)
+            }
+        } else if (currentLineSplitPart2StartMs != Long.MAX_VALUE) {
+            val secondPartNowActive = lyricPositionMs >= currentLineSplitPart2StartMs
+            if (secondPartNowActive != isCurrentSplitSecondPartActive) {
+                isCurrentSplitSecondPartActive = secondPartNowActive
+                if (secondPartNowActive) {
+                    tvLyric?.setTextColor(Color.parseColor("#B8F1F5F9"))
+                    tvLyricNext?.setTextColor(Color.WHITE)
+                } else {
+                    tvLyric?.setTextColor(Color.WHITE)
+                    tvLyricNext?.setTextColor(Color.parseColor("#B8F1F5F9"))
+                }
             }
         }
     }
@@ -1401,6 +1445,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private fun animateLyricTransition(
         targetText1: String,
         targetText2: String,
+        targetColor1: Int,
         targetColor2: Int
     ) {
         val l1 = tvLyric ?: return
@@ -1418,6 +1463,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             .setInterpolator(lyricDecelerateInterpolator)
             .withEndAction {
                 l1.text = targetText1
+                l1.setTextColor(targetColor1)
                 l2.text = targetText2
                 l2.setTextColor(targetColor2)
 
@@ -1452,6 +1498,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private fun setLyricDirectly(
         targetText1: String,
         targetText2: String,
+        targetColor1: Int,
         targetColor2: Int
     ) {
         val l1 = tvLyric ?: return
@@ -1461,39 +1508,10 @@ class FloatingWindowManager private constructor(private val context: Context) {
         l1.translationY = 0f
         l1.alpha = 1f
         l1.text = targetText1
+        l1.setTextColor(targetColor1)
         l2.translationY = 0f
         l2.alpha = 1f
         l2.text = targetText2
         l2.setTextColor(targetColor2)
-    }
-
-    private fun splitLongLyric(text: String): Pair<String, String> {
-        val length = text.length
-        val half = length / 2
-        val delims = charArrayOf(' ', '　', ',', '，', '、', '/', '-', '—', ';', '；', '!', '！')
-        var bestSplit = -1
-        var minDiff = Int.MAX_VALUE
-
-        for (i in text.indices) {
-            if (text[i] in delims) {
-                val diff = abs(i - half)
-                if (diff < minDiff && diff <= (length * 0.35).toInt()) {
-                    minDiff = diff
-                    bestSplit = i
-                }
-            }
-        }
-
-        return if (bestSplit > 0) {
-            val part1 = text.substring(0, bestSplit).trim()
-            val part2 = text.substring(bestSplit + 1).trim()
-            if (part1.isNotEmpty() && part2.isNotEmpty()) {
-                Pair(part1, part2)
-            } else {
-                Pair(text.substring(0, half).trim(), text.substring(half).trim())
-            }
-        } else {
-            Pair(text.substring(0, half).trim(), text.substring(half).trim())
-        }
     }
 }
