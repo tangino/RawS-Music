@@ -3,6 +3,7 @@ package com.rawsmusic.core.ui.widget.player
 import android.content.Context
 import android.graphics.Canvas
 import android.os.Build
+import android.view.MotionEvent
 import android.view.View
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.ui.widget.bitmaps.playerActivity
@@ -26,6 +27,10 @@ internal class ClassicNativeProgressView(context: Context) : View(context) {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         setWillNotDraw(false)
     }
+
+    override fun dispatchTouchEvent(event: MotionEvent?): Boolean = false
+
+    override fun onTouchEvent(event: MotionEvent?): Boolean = false
 
     fun bind(next: ClassicNativeRenderPacket) {
         if (!shouldRedrawClassicNative(packet, next)) return

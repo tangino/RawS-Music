@@ -1,5 +1,8 @@
 package com.rawsmusic.core.ui.widget.player
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -236,6 +239,9 @@ fun ImmersivePlayerHorizontalStack(
     queueSongs: List<AudioFile>,
     queueCurrentIndex: Int,
     onQueueSongClick: (AudioFile, Int) -> Unit,
+    onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
+        list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
+    },
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onBack: () -> Unit,
@@ -551,6 +557,7 @@ fun ImmersivePlayerHorizontalStack(
             queueFullscreen = queueFullscreen,
             onQueueFullscreenChange = { queueFullscreen = it },
             onQueueSongClick = onQueueSongClick,
+            onPlayLibraryQueue = onPlayLibraryQueue,
             onClearPriorityQueue = onClearPriorityQueue,
             onToggleQueue = {
                 if (!queueVisible) queueFullscreen = false
@@ -743,6 +750,9 @@ internal fun ImmersivePlayerMainPage(
     queueFullscreen: Boolean,
     onQueueFullscreenChange: (Boolean) -> Unit,
     onQueueSongClick: (AudioFile, Int) -> Unit,
+    onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
+        list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
+    },
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onBack: () -> Unit,
@@ -826,9 +836,16 @@ internal fun ImmersivePlayerMainPage(
             }
         }
         if (landscape) {
+            val middleColumnState = rememberPlayerMiddleColumnState()
+            val middleExpanded = middleColumnState.expanded
+            val leftWidth = if (middleExpanded) {
+                (windowProfile.windowWidth * 0.30f).coerceAtLeast(220.dp)
+            } else {
+                (windowProfile.windowWidth * IMMERSIVE_CLEAR_ARTWORK_FRACTION - 24.dp).coerceAtLeast(0.dp)
+            }
             Row(Modifier.fillMaxSize().rawStableStatusBarsPadding().rawStableNavigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)) {
-                Column(Modifier.width((windowProfile.windowWidth * IMMERSIVE_CLEAR_ARTWORK_FRACTION - 24.dp)
+                Column(Modifier.width(leftWidth
                     .coerceAtLeast(0.dp)).fillMaxHeight()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(
@@ -879,10 +896,34 @@ internal fun ImmersivePlayerMainPage(
                             IconCircle(iconRes = if (isPlaying) pauseIconRes else playIconRes, size = 52.dp, tint = tone.icon, onClick = onPlayPause)
                         }
                         IconCircle(iconRes = nextIconRes, size = 42.dp, tint = tone.icon, onClick = onNext)
-                        ImmersiveQueueButton(queueVisible, if (queueVisible) tone.icon else tone.iconSoft, onToggleQueue)
+                        ImmersiveQueueButton(middleExpanded, if (middleExpanded) tone.icon else tone.iconSoft) {
+                            middleColumnState.toggleExpanded()
+                        }
                     }
                 }
-                Spacer(Modifier.width(IMMERSIVE_CLEAR_ARTWORK_FADE_EXTENSION + 24.dp))
+                if (middleExpanded) {
+                    Spacer(Modifier.width(16.dp))
+                    PlayerLibraryMiddleColumn(
+                        currentSong = currentSong,
+                        queueSongs = queueSongs,
+                        queueCurrentIndex = queueCurrentIndex,
+                        showCovers = middleColumnState.showCovers,
+                        onToggleShowCovers = { middleColumnState.toggleShowCovers() },
+                        onCollapse = { middleColumnState.updateExpanded(false) },
+                        onQueueSongClick = onQueueSongClick,
+                        onPlayLibraryQueue = onPlayLibraryQueue,
+                        primaryTextColor = tone.primary,
+                        secondaryTextColor = tone.secondary,
+                        accentColor = tone.icon,
+                        chipBackgroundColor = tone.chipBackground,
+                        modifier = Modifier
+                            .weight(0.95f)
+                            .fillMaxHeight(),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                } else {
+                    Spacer(Modifier.width(28.dp))
+                }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     if (queueVisible) {
                         InlinePlayerQueue(songs = queueSongs, currentIndex = queueCurrentIndex,
@@ -1248,25 +1289,35 @@ internal fun ImmersivePlayerMainPage(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ImmersiveQueueButton(
     selected: Boolean,
     tint: Color,
     onClick: () -> Unit
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+    val queueDesc = stringResource(R.string.player_queue_description)
     Box(
         modifier = Modifier
             .size(38.dp)
             .clip(CircleShape)
             .background(if (selected) tint.copy(alpha = 0.12f) else Color.Transparent)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClick = {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onClick()
+                }
+            )
+            .semantics { contentDescription = queueDesc },
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = MiuixIcons.Regular.ListView,
-            contentDescription = stringResource(R.string.player_queue_description),
+            contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier.size(26.dp)
         )
     }
 }

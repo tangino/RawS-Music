@@ -1,5 +1,8 @@
 package com.rawsmusic.core.ui.widget.player
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+
 import android.graphics.Bitmap
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedContent
@@ -245,6 +248,9 @@ fun PlayerMainPage(
     queueSongs: List<AudioFile>,
     queueCurrentIndex: Int,
     onQueueSongClick: (AudioFile, Int) -> Unit,
+    onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
+        list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
+    },
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onClosePlayer: () -> Unit = {},
@@ -470,22 +476,31 @@ fun PlayerMainPage(
         }
 
         if (useWidePlayerLayout) {
+            val middleColumnState = rememberPlayerMiddleColumnState()
+            val middleExpanded = middleColumnState.expanded
+            val wideMaxWidth = if (middleExpanded) 1720.dp else windowLayoutProfile.playerContentMaxWidth
+            val wideHorizontalPadding = when {
+                middleExpanded && isTabletWindow -> 20.dp
+                middleExpanded -> 12.dp
+                isTabletWindow -> 34.dp
+                else -> 18.dp
+            }
             Row(
                 modifier = Modifier
-                    .widthIn(max = windowLayoutProfile.playerContentMaxWidth)
+                    .widthIn(max = wideMaxWidth)
                     .fillMaxWidth()
                     .fillMaxHeight()
                     .align(Alignment.Center)
                     .rawStableStatusBarsPadding()
                     .rawStableNavigationBarsPadding()
                     .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) }
-                    .padding(horizontal = if (isTabletWindow) 34.dp else 18.dp,
+                    .padding(horizontal = wideHorizontalPadding,
                         vertical = if (isTabletWindow) 22.dp else 0.dp)
                     .layerBackdrop(playerContentBackdrop),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(
-                    modifier = Modifier.weight(0.46f).fillMaxHeight(),
+                    modifier = Modifier.weight(if (middleExpanded) 0.31f else 0.46f).fillMaxHeight(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (tabletPlayerChrome) {
@@ -577,20 +592,42 @@ fun PlayerMainPage(
                             pauseIconRes = pauseIconRes,
                             nextIconRes = nextIconRes,
                             playModeIconRes = playModeIconRes,
-                            queueVisible = queueVisible,
+                            queueVisible = middleExpanded,
                             onPrevious = onPrevious,
                             onPlayPause = onPlayPause,
                             onNext = onNext,
                             onPlayMode = onPlayMode,
                             onPlayModeLongPress = onPlayModeLongPress,
                             onQueuePlaceholder = {
-                                if (!queueVisible) queueFullscreen = false
-                                onToggleQueue()
+                                if (queueVisible) onToggleQueue()
+                                middleColumnState.toggleExpanded()
                             },
                         )
                     }
                 }
-                Spacer(Modifier.width(28.dp))
+                if (middleExpanded) {
+                    Spacer(Modifier.width(16.dp))
+                    PlayerLibraryMiddleColumn(
+                        currentSong = currentSong,
+                        queueSongs = queueSongs,
+                        queueCurrentIndex = queueCurrentIndex,
+                        showCovers = middleColumnState.showCovers,
+                        onToggleShowCovers = { middleColumnState.toggleShowCovers() },
+                        onCollapse = { middleColumnState.updateExpanded(false) },
+                        onQueueSongClick = onQueueSongClick,
+                        onPlayLibraryQueue = onPlayLibraryQueue,
+                        primaryTextColor = queueTone.primary,
+                        secondaryTextColor = queueTone.secondary,
+                        accentColor = baseColor,
+                        chipBackgroundColor = queueTone.chipBackground,
+                        modifier = Modifier
+                            .weight(0.35f)
+                            .fillMaxHeight(),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                } else {
+                    Spacer(Modifier.width(28.dp))
+                }
                 StandardPlayerBody(
                     currentSong = currentSong,
                     artworkTransitionState = artworkTransitionState,
@@ -663,7 +700,7 @@ fun PlayerMainPage(
                     showTransport = !tabletPlayerChrome,
                     mainPlayerSheetTransitionActive = mainPlayerSheetTransitionActive,
                     mainPlayerContentOffsetProvider = mainPlayerContentOffsetProvider,
-                    modifier = Modifier.weight(0.54f)
+                    modifier = Modifier.weight(if (middleExpanded) 0.34f else 0.54f).clipToBounds()
                 )
             }
         } else {
@@ -1705,6 +1742,9 @@ private fun StandardPlayerBody(
     queueSongs: List<AudioFile>,
     queueCurrentIndex: Int,
     onQueueSongClick: (AudioFile, Int) -> Unit,
+    onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
+        list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
+    },
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onQueueBoundsChanged: (Rect) -> Unit,
@@ -2235,31 +2275,42 @@ private fun StandardTransportButtons(
             )
         }
         PlayerTransportIcon(iconRes = nextIconRes, size = 48.dp * controlScale, iconSize = 40.dp * controlScale, tint = tone.icon, onClick = onNext)
-        PlayerQueuePlaceholder(size = 40.dp * controlScale, tint = if (queueVisible) tone.icon else tone.tertiary, selected = queueVisible, onClick = onQueuePlaceholder)
+        PlayerQueuePlaceholder(size = 40.dp * controlScale, iconSize = 28.dp * controlScale, tint = if (queueVisible) tone.icon else tone.tertiary, selected = queueVisible, onClick = onQueuePlaceholder)
     }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PlayerQueuePlaceholder(
     size: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
     tint: Color,
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+    val queueDesc = stringResource(R.string.player_queue_description)
     Box(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
             .background(if (selected) tint.copy(alpha = 0.12f) else Color.Transparent)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClick = {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onClick()
+                }
+            )
+            .semantics { contentDescription = queueDesc },
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = MiuixIcons.Regular.ListView,
-            contentDescription = stringResource(R.string.player_queue_description),
+            contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier.size(iconSize)
         )
     }
 }
@@ -2544,7 +2595,7 @@ private fun ArtworkTitleInfoPager(
         // display whenever tracks share the same album cover, have no cover, or during automatic crossfade.
         val isGestureDragging = artworkTransitionState.isGestureActive || artworkTransitionState.isSettling
         val currentTitleSong = if (isGestureDragging) (resolvedCurrent ?: currentSong) else (currentSong ?: resolvedCurrent)
-        val targetTitleSong = if (automaticArtworkFade) (currentSong ?: resolvedTarget) else resolvedTarget
+        val targetTitleSong = if (targetKey.isBlank()) null else if (automaticArtworkFade) (currentSong ?: resolvedTarget) else resolvedTarget
         val currentTitleKey = currentKey.ifBlank {
             currentTitleSong?.path?.takeIf { it.isNotBlank() } ?: "player-title-empty"
         }
@@ -2637,7 +2688,7 @@ private fun ArtworkTitleInfoPager(
                     song = holder.song,
                     role = holder.role,
                     parkedDirection = holder.parkedDirection,
-                    motionPaused = titleMotionActive || holder.parkedDirection != null,
+                    motionPaused = titleMotionActive || holder.parkedDirection != null || holder.role != PlayerArtworkItemRole.Current,
                     marqueeVisible = playerTitleMarqueeVisible(
                         holderVisible = holder.parkedDirection == null,
                         transitionActive = titleMotionActive,
@@ -2704,7 +2755,7 @@ private fun PlayerTitlePage(
             onClick = onMore,
             enabled = !motionPaused,
             modifier = Modifier.onGloballyPositioned { coordinates ->
-                onMoreBoundsChanged(coordinates.boundsInRoot())
+                if (!motionPaused) onMoreBoundsChanged(coordinates.boundsInRoot())
             },
         )
     }

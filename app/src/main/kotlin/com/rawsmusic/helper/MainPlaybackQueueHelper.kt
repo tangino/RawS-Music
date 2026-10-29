@@ -19,7 +19,7 @@ class MainPlaybackQueueHelper(
         val queue = when (scene) {
             NavScene.SONGS -> MusicRepository.songs.value
             NavScene.RECENTLY_ADDED -> recentSongs()
-            else -> listOf(song)
+            else -> MusicRepository.songs.value.takeIf { list -> list.isNotEmpty() && list.any { it.id == song.id || (song.path.isNotBlank() && it.path == song.path) } } ?: listOf(song)
         }.ifEmpty { listOf(song) }
 
         val index = queue.indexOfFirst { it.id == song.id && it.path == song.path }

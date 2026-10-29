@@ -521,4 +521,24 @@
     <!-- Online playback preparation -->
     <string name="player_online_resolving">Finding source...</string>
     <string name="player_online_buffering">Buffering...</string>
+
+    <!-- Landscape player three-column middle library panel -->
+    <string name="player_middle_tab_queue">Queue</string>
+    <string name="player_middle_tab_songs">Songs</string>
+    <string name="player_middle_tab_playlists">Playlists</string>
+    <string name="player_middle_tab_folders">Folders</string>
+    <string name="player_middle_tab_artists">Artists</string>
+    <string name="player_middle_tab_albums">Albums</string>
+    <string name="player_middle_toggle_cover_show">Show list covers</string>
+    <string name="player_middle_toggle_cover_hide">Hide list covers</string>
+    <string name="player_middle_collapse">Collapse library panel</string>
+    <string name="player_middle_expand">Expand library panel</string>
+    <string name="player_middle_locate_current">Locate playing track</string>
+    <string name="player_middle_search_hint">Filter current list…</string>
+    <string name="player_middle_empty">No items</string>
+    <string name="player_middle_loading_online">Loading online playlist…</string>
+    <string name="player_middle_favorites">Favorites</string>
+    <string name="player_middle_disliked">Disliked</string>
+    <string name="player_middle_song_count">%1$d songs</string>
+    <string name="player_middle_online_tag">Online · %1$s</string>
 </resources>

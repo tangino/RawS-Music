@@ -1983,7 +1983,17 @@ class MainActivity : ComponentActivity() {
                     Unit
                 }
             },
-            onQueueSongClick = { song, _ ->
+            onQueueSongClick = queueClick@{ song, index ->
+                val currentQueueSongs = playerController?.visibleQueue?.value?.songs.orEmpty()
+                if (currentQueueSongs.isNotEmpty()) {
+                    primePlayerUi(song)
+                    val targetIndex = index.takeIf { it in currentQueueSongs.indices && (currentQueueSongs[it].id == song.id || currentQueueSongs[it].path == song.path) }
+                        ?: currentQueueSongs.indexOfFirst { it.id == song.id && it.path == song.path }.takeIf { it >= 0 }
+                        ?: currentQueueSongs.indexOfFirst { it.path == song.path }.takeIf { it >= 0 }
+                        ?: 0
+                    playbackQueueHelper.playQueue(currentQueueSongs, targetIndex)
+                    return@queueClick
+                }
                 primePlayerUi(song)
                 playbackQueueHelper.playSongFromScene(song, mainNavState.currentScene)
             },
@@ -3963,6 +3973,12 @@ class MainActivity : ComponentActivity() {
                         primePlayerUi(song)
                         playerController?.clearPriorityQueue()
                         playerController?.play(song, queueSongs, index)
+                    },
+                    onPlayLibraryQueue = { list, index ->
+                        val song = list.getOrNull(index) ?: return@ComposePlayerContainer
+                        primePlayerUi(song)
+                        playerController?.clearPriorityQueue()
+                        playerController?.play(song, list, index)
                     },
                     onClearPriorityQueue = { playerController?.clearPriorityQueue() },
                     albumSongs = playerAlbumSongs,

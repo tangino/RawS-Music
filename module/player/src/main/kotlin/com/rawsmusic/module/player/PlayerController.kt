@@ -727,7 +727,7 @@ class PlayerController private constructor(context: Context) {
         persistence = statePersistence,
         currentSong = { currentOrRequestedSongForUi() },
         shouldPersistPlayback = {
-            currentOrRequestedSongForUi()?.encodingFormat != MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+            true
         },
         playStateOrdinal = { _playState.value.ordinal },
         keepUsbExclusive = { _usbExclusiveActive.value || ffmpegPlayer.usbExclusiveMode },

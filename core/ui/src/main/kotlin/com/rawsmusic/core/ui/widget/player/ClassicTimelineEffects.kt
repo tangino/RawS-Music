@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -228,7 +229,7 @@ internal fun ClassicTimelineEffects(
     }
 
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().height(28.dp)
+        Box(Modifier.fillMaxWidth().height(28.dp).clipToBounds()
             .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
             .pointerInput(animation, totalDurationMs, widthPx, rtl, lightEnabled, animationsEnabled) {
                 fun fractionAt(x: Float): Float {

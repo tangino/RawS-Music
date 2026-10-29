@@ -903,6 +903,16 @@ object AppPreferences {
             get() = kv.decodeBool("ui_player_more_favorite_visible", false)
             set(value) { kv.encode("ui_player_more_favorite_visible", value) }
 
+        /** 大屏横屏播放页中间栏（曲库/歌单）是否展开为三栏布局，默认展开。 */
+        var landscapePlayerMiddleColumnExpanded: Boolean
+            get() = kv.decodeBool("ui_landscape_player_middle_column_expanded", true)
+            set(value) { kv.encode("ui_landscape_player_middle_column_expanded", value) }
+
+        /** 大屏横屏播放页中间栏歌曲列表是否显示封面，默认显示。 */
+        var landscapePlayerMiddleColumnShowCovers: Boolean
+            get() = kv.decodeBool("ui_landscape_player_middle_column_show_covers", true)
+            set(value) { kv.encode("ui_landscape_player_middle_column_show_covers", value) }
+
         /** 普通播放页专辑图切换动画：0=透视切换，1=内倾轮播，2=平移。 */
         var playerArtworkAnimationStyle: Int
             get() = kv.decodeInt("ui_player_artwork_animation_style", 0).coerceIn(0, 2)

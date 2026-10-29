@@ -23,7 +23,10 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
 import com.rawsmusic.helper.SongActionSheetHelper
 import com.rawsmusic.helper.SongActionSheetOverlay
+import com.rawsmusic.core.ui.widget.player.PlayerLibraryMiddleColumn
+
 import com.rawsmusic.core.ui.widget.player.PlayerPlaylistActionProvider
+import com.rawsmusic.core.ui.widget.player.rememberPlayerMiddleColumnState
 import com.rawsmusic.core.ui.widget.player.rememberPlayerPlaylistAction
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -982,7 +985,7 @@ private fun LandscapePlayerScreen(
                 ) {
                     Row(
                         modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(22.dp)
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Column(
                             modifier = Modifier
@@ -1105,6 +1108,34 @@ private fun LandscapePlayerScreen(
                                 modifier = Modifier
                                     .fillMaxWidth(0.86f)
                                     .padding(bottom = 2.dp)
+                            )
+                        }
+
+                        val middleColumnState = rememberPlayerMiddleColumnState()
+                        if (middleColumnState.expanded) {
+                            PlayerLibraryMiddleColumn(
+                                currentSong = currentSong,
+                                queueSongs = queue.songs,
+                                queueCurrentIndex = queue.currentIndex,
+                                showCovers = middleColumnState.showCovers,
+                                onToggleShowCovers = { middleColumnState.toggleShowCovers() },
+                                onCollapse = { middleColumnState.updateExpanded(false) },
+                                onQueueSongClick = { song, index ->
+                                    playerController.clearPriorityQueue()
+                                    playerController.play(song, queue.songs, index)
+                                },
+                                onPlayLibraryQueue = { list, index ->
+                                    val song = list.getOrNull(index) ?: return@PlayerLibraryMiddleColumn
+                                    playerController.clearPriorityQueue()
+                                    playerController.play(song, list, index)
+                                },
+                                primaryTextColor = Color.White.copy(alpha = 0.92f),
+                                secondaryTextColor = Color.White.copy(alpha = 0.66f),
+                                accentColor = rememberCoverAccentColor(artworkKey),
+                                chipBackgroundColor = Color.Black.copy(alpha = 0.28f),
+                                modifier = Modifier
+                                    .weight(1.06f)
+                                    .fillMaxHeight(),
                             )
                         }
 

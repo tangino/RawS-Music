@@ -997,4 +997,24 @@
     <!-- 在线播放准备中提示 -->
     <string name="player_online_resolving">正在寻源...</string>
     <string name="player_online_buffering">正在缓冲...</string>
+
+    <!-- 大屏横屏播放页三栏曲库中间栏 -->
+    <string name="player_middle_tab_queue">当前队列</string>
+    <string name="player_middle_tab_songs">歌曲</string>
+    <string name="player_middle_tab_playlists">歌单</string>
+    <string name="player_middle_tab_folders">文件夹</string>
+    <string name="player_middle_tab_artists">歌手</string>
+    <string name="player_middle_tab_albums">专辑</string>
+    <string name="player_middle_toggle_cover_show">显示列表封面</string>
+    <string name="player_middle_toggle_cover_hide">隐藏列表封面</string>
+    <string name="player_middle_collapse">折叠曲库栏</string>
+    <string name="player_middle_expand">展开曲库栏</string>
+    <string name="player_middle_locate_current">定位当前播放</string>
+    <string name="player_middle_search_hint">搜索当前列表…</string>
+    <string name="player_middle_empty">暂无内容</string>
+    <string name="player_middle_loading_online">正在加载在线歌单…</string>
+    <string name="player_middle_favorites">我喜欢的音乐</string>
+    <string name="player_middle_disliked">我不喜欢的音乐</string>
+    <string name="player_middle_song_count">%1$d 首</string>
+    <string name="player_middle_online_tag">在线 · %1$s</string>
 </resources>
