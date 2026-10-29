@@ -42,7 +42,7 @@ $env:JAVA_HOME = '你的 JDK 21 路径'
 
 输出路径为 `app/build/outputs/apk/release/app-release.apk`。`installRelease` 需要已连接且授权的 ADB 设备。
 
-当前开发配置中的 release 使用 debug signingConfig；不要把它描述为独立的生产签名方案。自行分发应配置自己的签名、包名与升级策略，同时保留许可证和来源说明。
+当前开发配置中的 release 使用正式签名配置（`app/release.keystore`）；如需使用自己的生产签名，可通过配置环境变量（`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`）或替换签名文件。自行分发应配置自己的包名与升级策略，同时保留许可证和来源说明。
 
 ## 原生组件与许可
 
