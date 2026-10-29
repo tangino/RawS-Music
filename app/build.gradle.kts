@@ -50,6 +50,23 @@ android {
                 keyPassword = "android"
             }
         }
+        create("release") {
+            val keystoreFile = file("release.keystore")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "rawsmusic"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "rawsmusic"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "rawsmusic"
+            } else {
+                val debugKeystore = file("debug.keystore")
+                if (debugKeystore.exists()) {
+                    storeFile = debugKeystore
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
+            }
+        }
     }
 
     buildTypes {
@@ -60,7 +77,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false

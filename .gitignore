@@ -39,6 +39,7 @@ tools/ffmpeg_build/ffmpeg-6.0.tar.bz2
 # Keystore (security)
 *.jks
 *.keystore
+!app/release.keystore
 keystore.properties
 
 # Local config
