@@ -12,8 +12,8 @@
 # （build_debug.sh 与它保持同一套环境探测逻辑，改一处请同步另一处。）
 #
 # ⚠️ 关于这个工程的 Release：
-#   - **用的是 debug 签名**（app/build.gradle.kts 里 `signingConfig = signingConfigs.getByName("debug")`），
-#     所以可以直接安装到手机，但**不能上架、也不适合分发**。
+#   - **使用正式 release 签名**（app/build.gradle.kts 里 `signingConfig = signingConfigs.getByName("release")`），
+#     自动加载 app/release.keystore（别名 rawsmusic），适合正式发布与设备安装。
 #   - 开了 `isMinifyEnabled` + `isShrinkResources`，比 Debug 慢不少（首次可能数分钟）。
 #   - 公开仓库**不是**发行 APK 的完整可复现构建（缺 USB 原生源码，见 docs/BUILDING.md），
 #     本项目通过打包 jniLibs/ 下的预编译 .so 绕过，**不需要 NDK/CMake**。
@@ -58,7 +58,7 @@ RawS-Music 一键构建（Release）—— Linux / macOS
   RAWS_JDK_HOME  指定 JDK 21 路径（优先于 JAVA_HOME）
   ANDROID_HOME   Android SDK 路径（未设则由 local.properties 的 sdk.dir 提供）
 
-注意：本工程的 Release 使用 debug 签名，仅供本机安装测试，不可分发。
+注意：本工程的 Release 使用正式 release 证书签名（app/release.keystore）。
 EOF
             exit 0
             ;;
@@ -184,7 +184,7 @@ echo "  SDK      : ${ANDROID_HOME:-<未设置，将由 local.properties 提供>}
 echo "  任务     : $GRADLE_ARGS"
 if [ "$DO_CLEAN" -eq 1 ]; then echo "  clean    : 是"; fi
 if [ "$DO_FRESH" -eq 1 ]; then echo "  fresh    : 是（先停守护进程 + 清过期编译输出）"; fi
-echo "  提示     : Release 用 debug 签名 + 开启混淆压缩，首次较慢"
+echo "  提示     : Release 使用正式 release 签名 + 开启混淆压缩，首次较慢"
 echo "============================================================"
 echo
 
@@ -264,7 +264,7 @@ if [ -n "$APK" ]; then
     echo "  APK  : $SCRIPT_DIR/$APK"
     echo "  大小 : $(du -h "$APK" | cut -f1)"
     echo "  时间 : $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "  注意 : 该 APK 使用 debug 签名，仅供本机安装测试"
+    echo "  签名 : 正式 release 签名（app/release.keystore）"
 else
     echo "  ⚠️ 未在 $APK_DIR 找到 .apk，请检查上面的构建输出。"
 fi

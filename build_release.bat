@@ -50,7 +50,7 @@ echo 环境变量：
 echo   RAWS_JDK_HOME  指定 JDK 21 路径（优先于 JAVA_HOME）
 echo   ANDROID_HOME   Android SDK 路径（未设则由 local.properties 的 sdk.dir 提供）
 echo.
-echo 注意：本工程的 Release 使用 debug 签名，仅供本机安装测试，不可分发。
+echo 注意：本工程的 Release 使用正式 release 证书签名（app/release.keystore）。
 exit /b 0
 
 :args_done
@@ -122,7 +122,7 @@ echo   SDK      : %ANDROID_HOME%
 echo   任务     : %GRADLE_ARGS%
 if "%DO_CLEAN%"=="1" echo   clean    : 是
 if "%DO_FRESH%"=="1" echo   fresh    : 是（先停守护进程 + 清过期编译输出）
-echo   提示     : Release 用 debug 签名 + 开启混淆压缩，首次较慢
+echo   提示     : Release 使用正式 release 签名 + 开启混淆压缩，首次较慢
 echo ============================================================
 echo.
 
@@ -180,7 +180,7 @@ if defined APK (
     set /a "APK_MB=!APK_BYTES!/1048576"
     echo   APK  : !APK!
     echo   大小 : !APK_MB! MB
-    echo   注意 : 该 APK 使用 debug 签名，仅供本机安装测试
+    echo   签名 : 正式 release 签名（app/release.keystore）
 ) else (
     echo   [!] 未在 app\build\outputs\apk\%VARIANT% 找到 .apk，请检查上面的构建输出。
 )
