@@ -43,6 +43,20 @@ internal class PlayerPlayRequestResolver(
     ): ResolvedPlayRequest {
         if (requestedQueue.isNotEmpty()) {
             val safeIndex = requestedIndex.coerceIn(0, requestedQueue.lastIndex)
+            // 先按“路径 / id”精确匹配。搜索里同歌名、同歌手的多个版本在 sameItem() 看来完全
+            // 相同（它有意忽略 path/id，兼容元数据刷新）；如果先用 sameItem()，第一条会把
+            // 第三条“认领”掉，播放页于是显示第一条的标题/封面。
+            if (sameExactItem(requestedQueue[safeIndex], song)) {
+                return ResolvedPlayRequest(requestedQueue, safeIndex)
+            }
+            val exactIndex = requestedQueue.indexOfFirst { sameExactItem(it, song) }
+            if (exactIndex >= 0) {
+                logWarning(
+                    "play queue exact index corrected: requested=$requestedIndex resolved=$exactIndex " +
+                        "title=${song.title} queueSize=${requestedQueue.size}"
+                )
+                return ResolvedPlayRequest(requestedQueue, exactIndex)
+            }
             if (sameItem(requestedQueue[safeIndex], song)) {
                 return ResolvedPlayRequest(requestedQueue, safeIndex)
             }
@@ -67,7 +81,9 @@ internal class PlayerPlayRequestResolver(
             return ResolvedPlayRequest(listOf(song), 0)
         }
 
-        val existingIndex = currentQueue.indexOfFirst { sameItem(it, song) }
+        val existingIndex = currentQueue.indexOfFirst { sameExactItem(it, song) }
+            .takeIf { it >= 0 }
+            ?: currentQueue.indexOfFirst { sameItem(it, song) }
         return if (existingIndex >= 0) {
             ResolvedPlayRequest(currentQueue, existingIndex)
         } else if (currentQueue.isNotEmpty()) {
@@ -75,6 +91,15 @@ internal class PlayerPlayRequestResolver(
         } else {
             ResolvedPlayRequest(listOf(song), 0)
         }
+    }
+
+    /** Identity that can distinguish two versions of the same song; unlike [sameItem]. */
+    private fun sameExactItem(left: AudioFile, right: AudioFile): Boolean {
+        if (left.path == right.path &&
+            left.cueOffsetMs == right.cueOffsetMs &&
+            left.cueTrackIndex == right.cueTrackIndex
+        ) return true
+        return left.id != 0L && left.id == right.id
     }
 
     fun shouldUseManualSwitch(

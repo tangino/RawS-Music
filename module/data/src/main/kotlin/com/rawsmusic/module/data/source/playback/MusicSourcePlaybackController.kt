@@ -192,9 +192,18 @@ object MusicSourcePlaybackController {
             return
         }
         val requestedItem = queue.getOrNull(index)
-        val resolvedIndex = requestedItem?.let { selected ->
-            playableQueue.indexOfFirst { it.stableIdentity == selected.stableIdentity }
-        }?.takeIf { it >= 0 } ?: index.coerceIn(playableQueue.indices)
+        // Prefer the caller's exact row. Some search platforms return several versions of the
+        // same song with an identical remote id; indexOfFirst() would then pick version #1 even
+        // when the user tapped version #3, making the player show the wrong metadata/artwork.
+        val resolvedIndex = index
+            .takeIf {
+                it in playableQueue.indices &&
+                    playableQueue[it].stableIdentity == requestedItem?.stableIdentity
+            }
+            ?: requestedItem?.let { selected ->
+                playableQueue.indexOfFirst { it.stableIdentity == selected.stableIdentity }
+            }?.takeIf { it >= 0 }
+            ?: index.coerceIn(playableQueue.indices)
         startQueueIndex(playableQueue, resolvedIndex)
     }
 
@@ -251,8 +260,16 @@ object MusicSourcePlaybackController {
                 listOf(item)
             }
         }
-        val activeIndex = activeQueue.indexOfFirst { it.stableIdentity == item.stableIdentity }
-            .takeIf { it >= 0 }
+        // Same duplicate-identity trap as play(): the clicked queue position must win over the
+        // first identical stableIdentity, otherwise currentItem is the clicked version but the
+        // player/mini-player bind their metadata and artwork to queue[0] (the first result).
+        val activeIndex = index
+            .takeIf {
+                it in activeQueue.indices &&
+                    activeQueue[it].stableIdentity == item.stableIdentity
+            }
+            ?: activeQueue.indexOfFirst { it.stableIdentity == item.stableIdentity }
+                .takeIf { it >= 0 }
             ?: if (index in activeQueue.indices) index else 0
         val origPlatform = resolvePlatformDisplayName(originalPlatform ?: item.sourceId)
         val resPlatform = resolvePlatformDisplayName(resolvedPlatform ?: source.platform ?: origPlatform)

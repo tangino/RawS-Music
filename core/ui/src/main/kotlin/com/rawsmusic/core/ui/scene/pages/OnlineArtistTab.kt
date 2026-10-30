@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.scene.RawWindowWidthClass
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineArtist
 import com.rawsmusic.module.online.model.OnlineArtistCategory
@@ -214,30 +218,57 @@ internal fun OnlineArtistTab(
  * 「全部」是固定项：分类拉取失败或平台不支持歌手能力时，这一行仍然只剩「全部」，
  * 配合空态文案给出明确反馈，而不是留一片空白。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ArtistCategoryRow(
     categories: List<OnlineArtistCategory>,
     selectedCategory: String,
     onSelect: (String) -> Unit,
 ) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item {
+    val compact = LocalRawWindowLayoutProfile.current.widthClass == RawWindowWidthClass.Compact
+    if (compact) {
+        // 小屏上分类胶囊数量多、总宽度明显超过一行；FlowRow 自动换行，避免最右侧的
+        // 「欧美男歌手」等分类被屏幕裁掉，也避免横向拖动与系统返回手势互相抢事件。
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             ArtistCategoryChip(
                 label = stringResource(R.string.online_artist_category_all),
                 selected = selectedCategory == ALL_CATEGORY,
                 onClick = { onSelect(ALL_CATEGORY) },
             )
+            categories.forEach { category ->
+                ArtistCategoryChip(
+                    label = category.name,
+                    selected = selectedCategory == category.id,
+                    onClick = { onSelect(category.id) },
+                )
+            }
         }
-        items(categories, key = { it.id }) { category ->
-            ArtistCategoryChip(
-                label = category.name,
-                selected = selectedCategory == category.id,
-                onClick = { onSelect(category.id) },
-            )
+    } else {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                ArtistCategoryChip(
+                    label = stringResource(R.string.online_artist_category_all),
+                    selected = selectedCategory == ALL_CATEGORY,
+                    onClick = { onSelect(ALL_CATEGORY) },
+                )
+            }
+            items(categories, key = { it.id }) { category ->
+                ArtistCategoryChip(
+                    label = category.name,
+                    selected = selectedCategory == category.id,
+                    onClick = { onSelect(category.id) },
+                )
+            }
         }
     }
     Spacer(Modifier.height(6.dp))

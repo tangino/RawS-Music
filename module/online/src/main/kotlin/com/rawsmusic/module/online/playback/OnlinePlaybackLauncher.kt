@@ -118,8 +118,13 @@ object OnlinePlaybackLauncher {
             }
         }
         val targetMediaItem = OnlineSourceMediaMapper.toRawSourceMediaItem(item)
-        val resolvedIndex = rawQueue.indexOfFirst { it.stableIdentity == targetMediaItem.stableIdentity }
-            .takeIf { it >= 0 }
+        // The caller's index is the exact row the user tapped. Prefer it when it still points at
+        // that item: some search platforms return the same remote id for multiple versions of a
+        // song, and indexOfFirst() would then silently select the first version (and its cover).
+        val resolvedIndex = index
+            .takeIf { it in rawQueue.indices && rawQueue[it].stableIdentity == targetMediaItem.stableIdentity }
+            ?: rawQueue.indexOfFirst { it.stableIdentity == targetMediaItem.stableIdentity }
+                .takeIf { it >= 0 }
             ?: if (index in rawQueue.indices) index else 0
 
         // 0. 🌟 对齐 OrBitPlayer 核心机制：检查本地磁盘是否已存在有效缓存文件

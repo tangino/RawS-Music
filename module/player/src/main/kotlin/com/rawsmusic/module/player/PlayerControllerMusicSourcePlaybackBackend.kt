@@ -86,8 +86,13 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
                 listOf(song)
             }
         }
-        val targetIndex = allSongs.indexOfFirst { it.path == song.path }
-            .takeIf { it >= 0 } ?: request.queueIndex.coerceIn(allSongs.indices)
+        // Keep the clicked queue row authoritative. indexOfFirst() can select an earlier row when
+        // search results share an online key (same remote id / duplicate catalog entry), which made
+        // the player artwork bind to the first result while the mini player showed the clicked one.
+        val targetIndex = request.queueIndex
+            .takeIf { it in allSongs.indices && allSongs[it].path == song.path }
+            ?: allSongs.indexOfFirst { it.path == song.path }.takeIf { it >= 0 }
+            ?: request.queueIndex.coerceIn(allSongs.indices)
         AppLogger.i(
             TAG,
             "${OnlinePlaybackDiagnostics.PREFIX} PLAY_START generation=${request.generation} " +

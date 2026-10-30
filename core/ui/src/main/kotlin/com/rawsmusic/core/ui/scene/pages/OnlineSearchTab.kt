@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -143,9 +145,23 @@ internal fun OnlineSearchTab(modifier: Modifier = Modifier) {
     fun playSong(item: OnlineSongItem, songs: List<OnlineSongItem>, index: Int) {
         val songKey = "${item.platform.id}_${item.id}"
         resolvingSongKey = songKey
+        // 搜索里同歌名版本很多（布拉格广场等），平台有时给多个版本相同的 remoteId/时长。
+        // 下游按身份找队列位置时可能命中第一条；这里把点击项旋到队首再以 index=0 起播，
+        // 保证即使下游只能稳定拿到 queue[0]，播放页也一定是用户点的那一条。
+        val orderedQueue = if (songs.size > 1 && index in songs.indices && index != 0) {
+            songs.drop(index) + songs.take(index)
+        } else {
+            songs
+        }
+        val orderedIndex = if (orderedQueue !== songs) 0 else index
         scope.launch {
             try {
-                when (val result = OnlinePlaybackLauncher.play(context, item, queue = songs, index = index)) {
+                when (val result = OnlinePlaybackLauncher.play(
+                    context,
+                    item,
+                    queue = orderedQueue,
+                    index = orderedIndex,
+                )) {
                     OnlinePlayResult.Started -> Unit
                     OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
                         context.getString(R.string.online_detail_no_source)
@@ -522,7 +538,13 @@ private fun OnlineSearchField(
     )
 }
 
-/** 平台过滤 chip 行：「全部」+ 5 个平台。选中态与 `OnlinePlazaTab` 的 chip 保持一致。 */
+/**
+ * 平台过滤 chip 行：「全部」+ 5 个平台。选中态与 `OnlinePlazaTab` 的 chip 保持一致。
+ *
+ * 小屏上 6 个平台胶囊超出单行宽度；这里用 FlowRow 自动换行，保证「咪咕」等最后一枚
+ * 不会被屏幕右缘裁掉，也不必依赖容易与系统返回手势冲突的横向滚动。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun OnlineSearchPlatformRow(
     searchAllPlatforms: Boolean,
@@ -530,11 +552,12 @@ private fun OnlineSearchPlatformRow(
     onSelectAll: () -> Unit,
     onSelectPlatform: (OnlinePlatform) -> Unit,
 ) {
-    Row(
+    FlowRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         OnlineSearchChip(
             label = stringResource(R.string.online_search_platform_all),
