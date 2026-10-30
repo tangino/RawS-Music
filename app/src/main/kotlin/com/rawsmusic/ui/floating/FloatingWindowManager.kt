@@ -1,6 +1,9 @@
 package com.rawsmusic.ui.floating
 
 import android.animation.ObjectAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
@@ -108,6 +111,12 @@ class FloatingWindowManager private constructor(private val context: Context) {
      */
     var userScaleFactor: Float = AppPreferences.FloatingWindow.userScale
         .coerceIn(MIN_USER_SCALE, MAX_USER_SCALE)
+        private set
+
+    /**
+     * 当前是否处于折叠歌词状态（仅显示唱片封面）
+     */
+    var isCollapsed: Boolean = AppPreferences.FloatingWindow.isCollapsed
         private set
 
     /**
@@ -502,7 +511,9 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val bounds = getScreenBounds()
         val density = context.resources.displayMetrics.density
 
-        val (baseW, baseH) = baseCapsuleSizeDp()
+        val (baseCapsuleW, baseCapsuleH) = baseCapsuleSizeDp()
+        val baseW = if (isCollapsed) baseCapsuleH else baseCapsuleW
+        val baseH = baseCapsuleH
         val expectedWidth = if (expectedWidthPx > 0) expectedWidthPx
         else (baseW * userScaleFactor * density).toInt()
         val expectedHeight = if (expectedHeightPx > 0) expectedHeightPx
@@ -548,7 +559,9 @@ class FloatingWindowManager private constructor(private val context: Context) {
             val savedY = AppPreferences.FloatingWindow.posY.takeIf { it >= 0 } ?: defaultY
 
             val density = context.resources.displayMetrics.density
-            val (baseW, baseH) = baseCapsuleSizeDp()
+            val (baseCapsuleW, baseCapsuleH) = baseCapsuleSizeDp()
+            val baseW = if (isCollapsed) baseCapsuleH else baseCapsuleW
+            val baseH = baseCapsuleH
             val padPx = (2 * density).toInt() * 2
             val initW = (baseW * userScaleFactor * density + padPx).toInt()
             val initH = (baseH * userScaleFactor * density + padPx).toInt()
@@ -794,21 +807,31 @@ class FloatingWindowManager private constructor(private val context: Context) {
             DeviceTier.PHONE -> 80f
         }
 
-        val capsuleW = (baseCapsuleWidthDp * scale * density).toInt()
         val capsuleH = (baseCapsuleHeightDp * scale * density).toInt()
+        val capsuleW = if (isCollapsed) capsuleH else (baseCapsuleWidthDp * scale * density).toInt()
 
         capsuleContainer?.let { container ->
             val lp = container.layoutParams
             lp.width = capsuleW
             lp.height = capsuleH
             container.layoutParams = lp
-            container.setPadding(
-                (basePadStartDp * scale * density).toInt(),
-                (basePadVDp * scale * density).toInt(),
-                (basePadEndDp * scale * density).toInt(),
-                (basePadVDp * scale * density).toInt()
-            )
+            if (isCollapsed) {
+                val padH = ((capsuleW - (baseCoverSizeDp * scale * density).toInt()) / 2).coerceAtLeast(0)
+                val padV = ((capsuleH - (baseCoverSizeDp * scale * density).toInt()) / 2).coerceAtLeast(0)
+                container.setPadding(padH, padV, padH, padV)
+            } else {
+                container.setPadding(
+                    (basePadStartDp * scale * density).toInt(),
+                    (basePadVDp * scale * density).toInt(),
+                    (basePadEndDp * scale * density).toInt(),
+                    (basePadVDp * scale * density).toInt()
+                )
+            }
         }
+
+        infoContainer?.visibility = if (isCollapsed) View.GONE else View.VISIBLE
+        btnPlayPause?.visibility = if (isCollapsed) View.GONE else View.VISIBLE
+        btnClose?.visibility = if (isCollapsed) View.GONE else View.VISIBLE
 
         coverContainer?.let { container ->
             val lp = container.layoutParams
@@ -871,6 +894,17 @@ class FloatingWindowManager private constructor(private val context: Context) {
         capsuleContainer?.invalidateOutline()
 
         rootCard?.clipToOutline = false
+        val padPx = (2 * density).toInt() * 2
+        windowParams?.let { wp ->
+            wp.width = capsuleW + padPx
+            wp.height = capsuleH + padPx
+            clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
+            if (root.isAttachedToWindow) {
+                try {
+                    windowManager.updateViewLayout(root, wp)
+                } catch (_: Exception) {}
+            }
+        }
         updateResizeOverlayGeometry(root)
     }
 
@@ -1100,13 +1134,98 @@ class FloatingWindowManager private constructor(private val context: Context) {
     }
 
     private fun setupClickListeners() {
+        coverContainer?.setOnClickListener {
+            toggleCollapsed()
+        }
+        ivCover?.setOnClickListener {
+            toggleCollapsed()
+        }
         btnPlayPause?.setOnClickListener {
             sendPlayerAction(PlayerService.ACTION_TOGGLE_PLAYBACK)
         }
-
         btnClose?.setOnClickListener {
             hide()
         }
+    }
+
+    fun setCollapsed(collapsed: Boolean, animate: Boolean = true) {
+        if (isCollapsed == collapsed) return
+        isCollapsed = collapsed
+        AppPreferences.FloatingWindow.isCollapsed = collapsed
+        val view = floatingView ?: return
+        if (!view.isAttachedToWindow) return
+
+        if (animate) {
+            animateCollapseTransition(view, collapsed)
+        } else {
+            applyAdaptiveDimensions(view)
+        }
+    }
+
+    fun toggleCollapsed() {
+        setCollapsed(!isCollapsed, animate = true)
+    }
+
+    private fun animateCollapseTransition(root: View, collapsed: Boolean) {
+        val tier = getDeviceTier()
+        val density = context.resources.displayMetrics.density
+        val scale = userScaleFactor
+        val (baseCapsuleWidthDp, baseCapsuleHeightDp) = baseCapsuleSizeDp(tier)
+        val capsuleH = (baseCapsuleHeightDp * scale * density).toInt()
+        val fullW = (baseCapsuleWidthDp * scale * density).toInt()
+        val collapsedW = capsuleH
+        val padPx = (2 * density).toInt() * 2
+
+        val startW = capsuleContainer?.width ?: if (collapsed) fullW else collapsedW
+        val targetW = if (collapsed) collapsedW else fullW
+
+        val rightViews = listOfNotNull(infoContainer, btnPlayPause, btnClose)
+
+        if (collapsed) {
+            rightViews.forEach { v ->
+                v.animate().alpha(0f).setDuration(80).withEndAction {
+                    v.visibility = View.GONE
+                    v.alpha = 1f
+                }.start()
+            }
+        } else {
+            rightViews.forEach { v ->
+                v.alpha = 0f
+                v.visibility = View.VISIBLE
+            }
+        }
+
+        val anim = ValueAnimator.ofInt(startW, targetW).apply {
+            duration = 200L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { va ->
+                val currentW = va.animatedValue as Int
+                capsuleContainer?.let { c ->
+                    val lp = c.layoutParams
+                    lp.width = currentW
+                    c.layoutParams = lp
+                }
+                windowParams?.let { wp ->
+                    wp.width = currentW + padPx
+                    if (root.isAttachedToWindow) {
+                        try {
+                            windowManager.updateViewLayout(root, wp)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    applyAdaptiveDimensions(root)
+                    if (!collapsed) {
+                        rightViews.forEach { v ->
+                            v.animate().alpha(1f).setDuration(120).start()
+                        }
+                    }
+                }
+            })
+        }
+        anim.start()
     }
 
     private fun sendPlayerAction(action: String) {
@@ -1145,6 +1264,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
+        var initialTouchXInView = 0f
         var isDragging = false
         var isScaling = false
 
@@ -1216,6 +1336,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
+                    initialTouchXInView = event.x
                     isDragging = false
                     isScaling = false
                     true
@@ -1254,7 +1375,17 @@ class FloatingWindowManager private constructor(private val context: Context) {
                         AppPreferences.FloatingWindow.posX = params.x
                         AppPreferences.FloatingWindow.posY = params.y
                     } else if (!isScaling) {
-                        openMainActivity()
+                        if (isCollapsed) {
+                            toggleCollapsed()
+                        } else {
+                            val density = context.resources.displayMetrics.density
+                            val coverRight = coverContainer?.right ?: 0
+                            if (coverRight > 0 && initialTouchXInView <= coverRight + 12 * density) {
+                                toggleCollapsed()
+                            } else {
+                                openMainActivity()
+                            }
+                        }
                     }
                     isDragging = false
                     isScaling = false

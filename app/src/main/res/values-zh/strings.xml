@@ -1588,6 +1588,8 @@
     <string name="floating_window_enable">启用桌面音乐悬浮窗</string>
     <string name="floating_window_theme_mode">悬浮窗主题</string>
     <string name="floating_window_resize_hint_with_theme">拖动圆点调整大小 · 点此切换主题（%1$s）</string>
+    <string name="floating_window_collapse_lyrics">折叠右侧歌词 (仅显示专辑封面)</string>
+    <string name="floating_window_collapse_lyrics_desc">仅保留精致黑胶专辑封面悬浮展示，可随时点击封面快捷展开或折叠。</string>
     <string name="floating_window_reset">重置悬浮窗位置与大小</string>
     <string name="floating_window_reset_desc">将桌面悬浮窗恢复至默认位置与 100% 标准大小。</string>
     <string name="desktop_lyric_title">悬浮窗歌词</string>

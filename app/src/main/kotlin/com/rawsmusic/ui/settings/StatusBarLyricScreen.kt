@@ -94,6 +94,7 @@ fun LiquidGlassStatusBarLyricScreen(
 
     var floatingWindowEnabled by remember { mutableStateOf(AppPreferences.FloatingWindow.isEnabled) }
     var floatingWindowThemeMode by remember { mutableStateOf(AppPreferences.FloatingWindow.themeMode) }
+    var floatingWindowCollapsed by remember { mutableStateOf(AppPreferences.FloatingWindow.isCollapsed) }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -175,6 +176,13 @@ fun LiquidGlassStatusBarLyricScreen(
                     floatingWindowEnabled = checked
                     com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setEnabled(checked)
                 }
+            }
+            SwitchRow(
+                stringResource(R.string.floating_window_collapse_lyrics),
+                floatingWindowCollapsed
+            ) { checked ->
+                floatingWindowCollapsed = checked
+                com.rawsmusic.ui.floating.FloatingWindowManager.getInstance(context).setCollapsed(checked)
             }
             WindowSpinnerPreference(
                 title = stringResource(R.string.floating_window_theme_mode),

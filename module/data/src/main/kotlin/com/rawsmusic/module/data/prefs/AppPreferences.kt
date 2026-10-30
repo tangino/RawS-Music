@@ -2313,6 +2313,11 @@ object AppPreferences {
         var userScale: Float
             get() = kv.decodeFloat("floating_window_user_scale", 1.0f)
             set(value) { kv.encode("floating_window_user_scale", value) }
+
+        /** 是否折叠右侧歌词（仅显示专辑封面），默认 false */
+        var isCollapsed: Boolean
+            get() = kv.decodeBool("floating_window_collapsed", false)
+            set(value) { kv.encode("floating_window_collapsed", value) }
     }
 }
 

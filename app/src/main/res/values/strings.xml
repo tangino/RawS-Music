@@ -1610,6 +1610,8 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="floating_window_enable">Enable floating music capsule</string>
     <string name="floating_window_theme_mode">Capsule theme</string>
     <string name="floating_window_resize_hint_with_theme">Drag corners to resize · Tap for theme (%1$s)</string>
+    <string name="floating_window_collapse_lyrics">Collapse lyrics (Show album art only)</string>
+    <string name="floating_window_collapse_lyrics_desc">Keep only the vinyl album art floating; tap the cover anytime to expand or collapse.</string>
     <string name="floating_window_reset">Reset capsule position &amp; size</string>
     <string name="floating_window_reset_desc">Reset floating music capsule to default position and 100% standard size.</string>
     <string name="desktop_lyric_title">Floating desktop lyrics</string>
