@@ -8,7 +8,10 @@ import java.net.URI
 import java.net.URLEncoder
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -18,12 +21,21 @@ import org.json.JSONObject
 object OnlineLyricFetcher {
 
     private const val TAG = "OnlineLyricFetcher"
-    private const val CONNECT_TIMEOUT_MS = 8_000
-    private const val READ_TIMEOUT_MS = 10_000
+
+    // 播放页歌词必须尽快出现：抓不到就尽快失败，不能让上一首的歌词/占位词幕在屏幕上挂太久。
+    // 因此超时明显短于默认值，并且给整次抓取再套一个总预算（见 TOTAL_BUDGET_MS）。
+    private const val CONNECT_TIMEOUT_MS = 3_000
+    private const val READ_TIMEOUT_MS = 4_500
+    private const val TOTAL_BUDGET_MS = 12_000L
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     // 内存缓存：50 首歌曲的 LRC 字符串
     private val lyricCache = LruCache<String, String>(50)
+
+    // 抓不到歌词的歌曲（纯音乐 / 冷门曲）也要记住，避免每次播放都重新等一遍网络。
+    // 只缓存「失败」一小段时间，网络恢复后仍有机会重新命中。
+    private const val MISS_TTL_MS = 5 * 60 * 1000L
+    private val lyricMissCache = LruCache<String, Long>(50)
 
     /**
      * 获取在线歌曲的 LRC 歌词文本（包含翻译，格式为标准 LRC）
@@ -40,6 +52,10 @@ object OnlineLyricFetcher {
 
         val cacheKey = buildCacheKey(cleanTitle, cleanArtist, platform, songId)
         lyricCache.get(cacheKey)?.let { return@withContext it }
+        val missedAt = lyricMissCache.get(cacheKey)
+        if (missedAt != null && System.currentTimeMillis() - missedAt < MISS_TTL_MS) {
+            return@withContext null
+        }
 
         // 尝试从当前正在播放的 MusicSourcePlaybackController 上下文提取平台和 ID
         var targetPlatform = platform
@@ -52,30 +68,30 @@ object OnlineLyricFetcher {
             }
         }
 
-        // 1. 尝试按平台 + ID 精确获取
-        if (!targetPlatform.isNullOrBlank() && !targetSongId.isNullOrBlank()) {
-            val directLrc = fetchDirectByPlatform(targetPlatform, targetSongId)
-            if (!directLrc.isNullOrBlank()) {
-                lyricCache.put(cacheKey, directLrc)
-                return@withContext directLrc
+        val fetched = withTimeoutOrNull(TOTAL_BUDGET_MS) {
+            // 1. 尝试按平台 + ID 精确获取
+            if (!targetPlatform.isNullOrBlank() && !targetSongId.isNullOrBlank()) {
+                val directLrc = fetchDirectByPlatform(targetPlatform, targetSongId)
+                if (!directLrc.isNullOrBlank()) return@withTimeoutOrNull directLrc
+            }
+
+            // 2. 兜底方案：按「歌名 + 歌手」检索网易云 / 酷我。
+            //    两个搜索并行发起，谁先给出可用歌词就用谁；串行执行会把最坏等待时间翻倍。
+            coroutineScope {
+                val netease = async { searchNeteaseLyric(cleanTitle, cleanArtist) }
+                val kuwo = async { searchKuwoLyric(cleanTitle, cleanArtist) }
+                netease.await()?.takeIf { it.isNotBlank() } ?: kuwo.await()
             }
         }
 
-        // 2. 兜底方案：按「歌名 + 歌手」检索网易云歌词
-        val neteaseSearchLrc = searchNeteaseLyric(cleanTitle, cleanArtist)
-        if (!neteaseSearchLrc.isNullOrBlank()) {
-            lyricCache.put(cacheKey, neteaseSearchLrc)
-            return@withContext neteaseSearchLrc
+        if (fetched.isNullOrBlank()) {
+            lyricMissCache.put(cacheKey, System.currentTimeMillis())
+            null
+        } else {
+            lyricCache.put(cacheKey, fetched)
+            lyricMissCache.remove(cacheKey)
+            fetched
         }
-
-        // 3. 兜底方案：按「歌名 + 歌手」检索酷我歌词
-        val kuwoSearchLrc = searchKuwoLyric(cleanTitle, cleanArtist)
-        if (!kuwoSearchLrc.isNullOrBlank()) {
-            lyricCache.put(cacheKey, kuwoSearchLrc)
-            return@withContext kuwoSearchLrc
-        }
-
-        null
     }
 
     private fun buildCacheKey(title: String, artist: String, platform: String?, songId: String?): String {

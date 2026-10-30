@@ -985,7 +985,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope,
             { enabled -> if (::playerSceneController.isInitialized) playerSceneController.lyricEnabled = enabled },
             { playerController?.currentSong?.value },
-            { song, data ->
+            { song, data, _ ->
                 currentLyricDataSongKey = lyricSongKey(song)
                 setCurrentLyricDataForCompose(data)
             },

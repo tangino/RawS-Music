@@ -106,14 +106,17 @@ fun SongMultiSelectActionBar(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRemoveFromPlaylistDialog by remember { mutableStateOf(false) }
 
-    ActivityOverlayBackOwner(active = state.isActive)
+    val isAnyDialogShowing = showRemoveDialog || showDeleteDialog || showRemoveFromPlaylistDialog
+
+    ActivityOverlayBackOwner(active = state.isActive && !isAnyDialogShowing)
 
     val predictiveProgress = rememberPredictiveDialogProgress(
-        enabled = state.isActive,
+        enabled = state.isActive && !isAnyDialogShowing,
         onDismissRequest = { state.exit() },
     )
 
-    Popup(
+    if (state.isActive && !isAnyDialogShowing) {
+        Popup(
         alignment = Alignment.BottomCenter,
         onDismissRequest = {},
         properties = PopupProperties(
@@ -336,6 +339,7 @@ fun SongMultiSelectActionBar(
                 }
             }
         }
+    }
     }
 
     // 从歌单移出确认对话框

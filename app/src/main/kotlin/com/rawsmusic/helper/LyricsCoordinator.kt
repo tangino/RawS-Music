@@ -19,6 +19,7 @@ import io.github.proify.lyricon.lyric.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -75,6 +76,7 @@ class LyricsCoordinator(
     private var lyricBuildGeneration: Int = 0
     private var externalIdentityGeneration: Int = 0
     private var externalIdentityJob: Job? = null
+    private var pendingLyricRevealJob: Job? = null
     private val externalIdentityMutex = Mutex()
 
     private val publisher = LyricsPublisher(
@@ -101,7 +103,7 @@ class LyricsCoordinator(
         scope = lifecycleScope,
         setLyricEnabled = onLyricEnabledChanged,
         getCurrentSong = { getController()?.currentSong?.value },
-        setComposeLyricData = { requestSong, data -> setLyrics(requestSong, data) },
+        setComposeLyricData = { requestSong, data, pending -> setLyrics(requestSong, data, pending) },
         setMiniLyricData = { },
         clearCurrentLyricText = { currentLyricText = "" },
         updateLyricAnchor = { },
@@ -131,6 +133,51 @@ class LyricsCoordinator(
         // actual file read remains delayed/coalesced, but notification-bar consumers must never
         // see the previous song's lyric during that interval.
         scheduleExternalSongIdentity(song, startLyricsLoad = false)
+
+        // 保留上一首词幕只是为了在本地歌词很快就绪时让它直接交叉淡入（否则每次切歌都会
+        // 多一次「旧词幕 → 占位 → 新词幕」的重建）。但歌词来源可能很慢：无本地歌词时要走
+        // 联网兜底，最坏要等好几秒。超过宽限期仍未就绪就立刻换成当前歌曲的占位词幕，
+        // 不能让用户对着上一首的歌词听新歌。
+        pendingLyricRevealJob?.cancel()
+        pendingLyricRevealJob = lifecycleScope.launch {
+            delay(LYRIC_PENDING_REVEAL_DELAY_MS)
+            if (lastSongKey == key && displayedLyricSongKey != key) {
+                publishPendingLyrics(song)
+            }
+        }
+    }
+
+    /**
+     * 歌词尚未就绪时的占位词幕：只带歌名、没有任何歌词行。
+     *
+     * ComposeLyricView 在歌词行为空时显示 `Song.name`，所以这里用户看到的是当前歌曲名，
+     * 既不会继续显示上一首的歌词，也不会先闪一下「暂无歌词」。
+     *
+     * `id` 保持 null，与 [toLyriconSong] 生成的正式词幕使用同一个 playerLyricIdentity，
+     * 正式歌词到达时就地替换，不会再触发第二次交叉淡入。
+     */
+    private fun publishPendingLyrics(song: AudioFile) {
+        val key = lastSongKey ?: return
+        if (song.lyricRequestKey() != key || displayedLyricSongKey == key) return
+        if (getController()?.currentSong?.value?.lyricRequestKey() != key) return
+
+        val placeholder = Song(
+            name = song.title.ifBlank { song.displayName },
+            artist = song.artist,
+            duration = song.duration,
+            lyrics = emptyList(),
+        )
+        currentLyricData = LyricData()
+        lyricSong = placeholder
+        displayedLyricSongKey = key
+        if (currentLyricText.isNotEmpty() || currentLyricTranslation.isNotEmpty()) {
+            currentLyricText = ""
+            currentLyricTranslation = ""
+            TickerBridge.clearLyric(context)
+            LyricGetterBridge.clearLyric(context)
+            onCapsuleTextNeedRefresh()
+        }
+        onLyricsPrepared(song, LyricData(), placeholder)
     }
 
     fun loadLyricsForSong(song: AudioFile) {
@@ -175,8 +222,11 @@ class LyricsCoordinator(
 
     /**
      * 歌词加载完成后由 LyricLoadHelper 回调。
+     *
+     * [pending] 为 true 表示本机没有歌词、正在联网兜底：此时只把词幕换成当前歌曲的占位，
+     * 最终结果会再回调一次。
      */
-    fun setLyrics(requestSong: AudioFile, data: LyricData) {
+    fun setLyrics(requestSong: AudioFile, data: LyricData, pending: Boolean = false) {
         val currentSong = getController()?.currentSong?.value
         val expectedKey = lastSongKey
         val requestKey = requestSong.lyricRequestKey()
@@ -189,6 +239,11 @@ class LyricsCoordinator(
                 "LyricsCoordinator",
                 "drop stale lyrics: request=$requestKey expected=$expectedKey current=$currentKey"
             )
+            return
+        }
+
+        if (pending) {
+            publishPendingLyrics(requestSong)
             return
         }
 
@@ -238,6 +293,8 @@ class LyricsCoordinator(
         explicitLyrics: Boolean,
         generation: Int,
     ) {
+        pendingLyricRevealJob?.cancel()
+        pendingLyricRevealJob = null
         if (generation != lyricBuildGeneration) return
         val expectedKey = lastSongKey ?: return
         val requestKey = requestSong.lyricRequestKey()
@@ -346,5 +403,14 @@ class LyricsCoordinator(
     private fun clearExternalLyrics() {
         TickerBridge.clearLyric(context)
         LyricGetterBridge.clearLyric(context)
+    }
+
+    private companion object {
+        /**
+         * 切歌后最多保留上一首词幕的时间。本地歌词通常几十毫秒内就绪，这段保留能让词幕
+         * 直接交叉淡入；超过它仍未就绪说明走了慢路径（内嵌歌词解析、联网兜底），
+         * 必须马上换成当前歌曲的占位词幕。
+         */
+        const val LYRIC_PENDING_REVEAL_DELAY_MS = 350L
     }
 }
