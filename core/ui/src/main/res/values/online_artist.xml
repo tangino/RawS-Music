@@ -8,4 +8,10 @@
     <string name="online_artist_empty">暂无歌手</string>
     <string name="online_artist_load_failed">加载失败，请重试</string>
     <string name="online_artist_retry">重试</string>
+    <string name="online_artist_search_action">搜歌手</string>
+    <string name="online_artist_search_hint">搜索歌手…</string>
+    <string name="online_artist_search_cancel">取消</string>
+    <string name="online_artist_search_initial">输入关键词搜索歌手</string>
+    <string name="online_artist_search_empty">未找到相关歌手</string>
+    <string name="online_artist_title">歌手</string>
 </resources>

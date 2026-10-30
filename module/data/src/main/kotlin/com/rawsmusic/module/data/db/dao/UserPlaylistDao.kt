@@ -40,6 +40,12 @@ interface UserPlaylistDao {
     )
     suspend fun deleteSong(playlistId: String, songKey: String)
 
+    @Query(
+        "DELETE FROM user_playlist_songs " +
+            "WHERE playlist_id = :playlistId AND song_key IN (:songKeys)"
+    )
+    suspend fun deleteSongs(playlistId: String, songKeys: List<String>)
+
     @Query("DELETE FROM user_playlist_songs WHERE playlist_id = :playlistId")
     suspend fun deleteSongsForPlaylist(playlistId: String)
 

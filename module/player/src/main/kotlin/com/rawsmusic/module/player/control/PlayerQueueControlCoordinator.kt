@@ -193,7 +193,22 @@ internal class PlayerQueueControlCoordinator(
         }
         return when (mode.currentPlayMode()) {
             PlayMode.SEQUENTIAL -> (queue.currentIndex + 1) % queue.songs.size
-            PlayMode.SHUFFLE_ALL, PlayMode.SHUFFLE_ONCE -> mode.nextShuffleIndex(queue)
+            PlayMode.SHUFFLE_ALL -> {
+                // 全部随机必须在遍历耗尽后继续下一轮。ShuffleQueueController 读取的是持久化
+                // 偏好；若偏好与内存模式短暂不同步（或恢复的 traversal 已失效），它会返回 -1，
+                // 播放器就停在当前曲末。这里先重建再取一次，仍失败则退化为顺序下一首，
+                // 保证“全部随机”不会静默停止。
+                val shuffled = mode.nextShuffleIndex(queue)
+                if (shuffled in queue.songs.indices) {
+                    shuffled
+                } else {
+                    mode.rebuildShuffleForCurrentQueue()
+                    mode.nextShuffleIndex(queue)
+                        .takeIf { it in queue.songs.indices }
+                        ?: ((queue.currentIndex + 1) % queue.songs.size)
+                }
+            }
+            PlayMode.SHUFFLE_ONCE -> mode.nextShuffleIndex(queue)
             PlayMode.REPEAT_ONE -> if (automatic) queue.currentIndex else (queue.currentIndex + 1) % queue.songs.size
         }
     }

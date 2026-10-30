@@ -41,6 +41,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
+import top.yukonga.miuix.kmp.basic.Button as MiuixButton
+import top.yukonga.miuix.kmp.basic.ButtonDefaults as MiuixButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
 import androidx.compose.ui.window.PopupProperties
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.ui.R
@@ -74,9 +84,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun SongMultiSelectActionBar(
     state: SongMultiSelectState,
     songs: List<AudioFile>,
-    onAddToPlaylist: (List<AudioFile>) -> Unit,
-    onRemoveFromLibrary: (List<AudioFile>) -> Unit,
-    onDeleteSongs: (List<AudioFile>, Boolean) -> Unit,
+    onAddToPlaylist: ((List<AudioFile>) -> Unit)? = null,
+    onRemoveFromLibrary: ((List<AudioFile>) -> Unit)? = null,
+    onDeleteSongs: ((List<AudioFile>, Boolean) -> Unit)? = null,
+    onRemoveFromPlaylist: ((List<AudioFile>) -> Unit)? = null,
+    playlistName: String = "",
     onAddToQueue: ((List<AudioFile>) -> Unit)? = null,
     onPlayNext: ((List<AudioFile>) -> Unit)? = null,
     onShare: ((List<AudioFile>) -> Unit)? = null,
@@ -92,6 +104,7 @@ fun SongMultiSelectActionBar(
 
     var showRemoveDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showRemoveFromPlaylistDialog by remember { mutableStateOf(false) }
 
     ActivityOverlayBackOwner(active = state.isActive)
 
@@ -236,38 +249,19 @@ fun SongMultiSelectActionBar(
                     horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 1. 添加到歌单
-                    ActionBarActionButton(
-                        title = stringResource(R.string.songs_action_add_to_playlist),
-                        icon = MiuixIcons.Regular.ListView,
-                        enabled = hasSelection,
-                        onClick = {
-                            if (hasSelection) onAddToPlaylist(selectedSongs)
-                        },
-                    )
+                    // 1. 下一首播放
+                    if (onPlayNext != null) {
+                        ActionBarActionButton(
+                            title = stringResource(R.string.songs_action_play_next),
+                            drawableRes = R.drawable.ic_speed_fill,
+                            enabled = hasSelection,
+                            onClick = {
+                                if (hasSelection) onPlayNext(selectedSongs)
+                            },
+                        )
+                    }
 
-                    // 2. 从库移除（软移除）
-                    ActionBarActionButton(
-                        title = stringResource(R.string.songs_action_remove_from_library),
-                        drawableRes = R.drawable.ic_delete,
-                        enabled = hasSelection,
-                        onClick = {
-                            if (hasSelection) showRemoveDialog = true
-                        },
-                    )
-
-                    // 3. 删除歌曲（物理彻底删除选项）
-                    ActionBarActionButton(
-                        title = stringResource(R.string.songs_action_delete_selected),
-                        icon = MiuixIcons.Regular.Delete,
-                        enabled = hasSelection,
-                        danger = true,
-                        onClick = {
-                            if (hasSelection) showDeleteDialog = true
-                        },
-                    )
-
-                    // 4. 更多辅助操作：加入队列
+                    // 2. 加入队列
                     if (onAddToQueue != null) {
                         ActionBarActionButton(
                             title = stringResource(R.string.songs_action_add_to_queue),
@@ -279,14 +273,38 @@ fun SongMultiSelectActionBar(
                         )
                     }
 
-                    // 5. 下一首播放
-                    if (onPlayNext != null) {
+                    // 3. 添加到歌单
+                    if (onAddToPlaylist != null) {
                         ActionBarActionButton(
-                            title = stringResource(R.string.songs_action_play_next),
-                            drawableRes = R.drawable.ic_speed_fill,
+                            title = stringResource(R.string.songs_action_add_to_playlist),
+                            icon = MiuixIcons.Regular.ListView,
                             enabled = hasSelection,
                             onClick = {
-                                if (hasSelection) onPlayNext(selectedSongs)
+                                if (hasSelection) onAddToPlaylist(selectedSongs)
+                            },
+                        )
+                    }
+
+                    // 4. 从歌单移除
+                    if (onRemoveFromPlaylist != null) {
+                        ActionBarActionButton(
+                            title = stringResource(R.string.songs_action_remove_from_playlist),
+                            drawableRes = R.drawable.ic_delete,
+                            enabled = hasSelection,
+                            onClick = {
+                                if (hasSelection) showRemoveFromPlaylistDialog = true
+                            },
+                        )
+                    }
+
+                    // 5. 从库移除（软移除）
+                    if (onRemoveFromLibrary != null) {
+                        ActionBarActionButton(
+                            title = stringResource(R.string.songs_action_remove_from_library),
+                            drawableRes = R.drawable.ic_delete,
+                            enabled = hasSelection,
+                            onClick = {
+                                if (hasSelection) showRemoveDialog = true
                             },
                         )
                     }
@@ -302,13 +320,40 @@ fun SongMultiSelectActionBar(
                             },
                         )
                     }
+
+                    // 7. 删除歌曲（物理彻底删除选项）
+                    if (onDeleteSongs != null) {
+                        ActionBarActionButton(
+                            title = stringResource(R.string.songs_action_delete_selected),
+                            icon = MiuixIcons.Regular.Delete,
+                            enabled = hasSelection,
+                            danger = true,
+                            onClick = {
+                                if (hasSelection) showDeleteDialog = true
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 
+    // 从歌单移出确认对话框
+    if (showRemoveFromPlaylistDialog && onRemoveFromPlaylist != null) {
+        RemoveFromPlaylistConfirmDialog(
+            count = selectedSongs.size,
+            playlistName = playlistName,
+            onDismiss = { showRemoveFromPlaylistDialog = false },
+            onConfirm = {
+                showRemoveFromPlaylistDialog = false
+                onRemoveFromPlaylist(selectedSongs)
+                state.exit()
+            },
+        )
+    }
+
     // 从歌曲库移除确认对话框（软移除）
-    if (showRemoveDialog) {
+    if (showRemoveDialog && onRemoveFromLibrary != null) {
         RemoveFromLibraryConfirmDialog(
             count = selectedSongs.size,
             onDismiss = { showRemoveDialog = false },
@@ -321,7 +366,7 @@ fun SongMultiSelectActionBar(
     }
 
     // 删除歌曲确认对话框（含可选物理删除）
-    if (showDeleteDialog) {
+    if (showDeleteDialog && onDeleteSongs != null) {
         DeleteSongsConfirmDialog(
             count = selectedSongs.size,
             onDismiss = { showDeleteDialog = false },
@@ -423,37 +468,89 @@ fun RemoveFromLibraryConfirmDialog(
     onConfirm: () -> Unit,
 ) {
     val scheme = MiuixTheme.colorScheme
-    RawMiuixOverlayDialog(
-        show = true,
-        title = stringResource(R.string.songs_action_remove_dialog_title),
-        onDismissRequest = onDismiss,
-        renderInRootScaffold = true,
+    var dialogReady by remember { mutableStateOf(false) }
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
+
+    LaunchedEffect(Unit) {
+        delay(100L)
+        dialogReady = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (dialogReady) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = true,
+        )
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(
-                text = stringResource(R.string.songs_action_remove_dialog_message, count),
-                color = scheme.onSurface,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-            )
-            Spacer(Modifier.height(20.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    text = stringResource(R.string.common_cancel),
-                    onClick = onDismiss,
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = { if (dialogReady) onDismiss() }
                 )
-                Spacer(Modifier.width(10.dp))
-                TextButton(
-                    text = stringResource(R.string.songs_action_remove_confirm),
-                    colors = ButtonDefaults.textButtonColors(
-                        textColor = scheme.primary,
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 380.dp)
+                    .clip(RoundedCornerShape(26.dp))
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
                     ),
-                    onClick = onConfirm,
-                )
+                color = scheme.surface,
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 10.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.songs_action_remove_dialog_title),
+                        color = scheme.onSurface,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    Text(
+                        text = stringResource(R.string.songs_action_remove_dialog_message, count),
+                        color = scheme.onSurface.copy(alpha = 0.75f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MiuixTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MiuixButton(
+                            onClick = onConfirm,
+                            colors = MiuixButtonDefaults.buttonColorsPrimary(),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.songs_action_remove_confirm),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -468,59 +565,213 @@ fun DeleteSongsConfirmDialog(
 ) {
     val scheme = MiuixTheme.colorScheme
     var deletePhysical by remember { mutableStateOf(false) }
+    var dialogReady by remember { mutableStateOf(false) }
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
 
-    RawMiuixOverlayDialog(
-        show = true,
-        title = stringResource(R.string.songs_action_delete_dialog_title),
-        onDismissRequest = onDismiss,
-        renderInRootScaffold = true,
+    LaunchedEffect(Unit) {
+        delay(100L)
+        dialogReady = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (dialogReady) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = true,
+        )
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(
-                text = stringResource(R.string.songs_action_delete_dialog_message, count),
-                color = scheme.onSurface,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-            )
-            Spacer(Modifier.height(16.dp))
-
-            // 物理删除复选框选项
-            Row(
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = { if (dialogReady) onDismiss() }
+                )
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { deletePhysical = !deletePhysical }
-                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SelectionCheckSquare(checked = deletePhysical)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = stringResource(R.string.songs_action_delete_physical_checkbox),
-                    color = if (deletePhysical) Color(0xFFEF5350) else scheme.onSurface,
-                    fontSize = 13.sp,
-                    fontWeight = if (deletePhysical) FontWeight.SemiBold else FontWeight.Normal,
-                )
-            }
-
-            Spacer(Modifier.height(18.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    text = stringResource(R.string.common_cancel),
-                    onClick = onDismiss,
-                )
-                Spacer(Modifier.width(10.dp))
-                TextButton(
-                    text = stringResource(R.string.songs_action_delete_confirm),
-                    colors = ButtonDefaults.textButtonColors(
-                        textColor = Color(0xFFEF5350),
+                    .widthIn(max = 380.dp)
+                    .clip(RoundedCornerShape(26.dp))
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
                     ),
-                    onClick = { onConfirm(deletePhysical) },
+                color = scheme.surface,
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 10.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.songs_action_delete_dialog_title),
+                        color = scheme.onSurface,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    Text(
+                        text = stringResource(R.string.songs_action_delete_dialog_message, count),
+                        color = scheme.onSurface.copy(alpha = 0.75f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    // 物理删除复选框选项
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { deletePhysical = !deletePhysical }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SelectionCheckSquare(checked = deletePhysical)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = stringResource(R.string.songs_action_delete_physical_checkbox),
+                            color = if (deletePhysical) Color(0xFFEF5350) else scheme.onSurface,
+                            fontSize = 13.sp,
+                            fontWeight = if (deletePhysical) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MiuixTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MiuixButton(
+                            onClick = { onConfirm(deletePhysical) },
+                            colors = MiuixButtonDefaults.buttonColors(
+                                color = Color(0xFFEF4444)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.songs_action_delete_confirm),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 从歌单移出确认对话框（不删物理文件） */
+@Composable
+fun RemoveFromPlaylistConfirmDialog(
+    count: Int,
+    playlistName: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val scheme = MiuixTheme.colorScheme
+    var dialogReady by remember { mutableStateOf(false) }
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
+
+    LaunchedEffect(Unit) {
+        delay(100L)
+        dialogReady = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (dialogReady) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = true,
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = { if (dialogReady) onDismiss() }
                 )
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 380.dp)
+                    .clip(RoundedCornerShape(26.dp))
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
+                    ),
+                color = scheme.surface,
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 10.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.songs_action_remove_from_playlist_dialog_title),
+                        color = scheme.onSurface,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    Text(
+                        text = stringResource(
+                            R.string.songs_action_remove_from_playlist_dialog_message,
+                            count,
+                            playlistName.ifBlank { stringResource(R.string.playlist_title) }
+                        ),
+                        color = scheme.onSurface.copy(alpha = 0.75f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MiuixTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MiuixButton(
+                            onClick = onConfirm,
+                            colors = MiuixButtonDefaults.buttonColorsPrimary(),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.songs_action_remove_confirm),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
             }
         }
     }

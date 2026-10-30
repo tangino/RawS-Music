@@ -1,5 +1,6 @@
 package com.rawsmusic.core.ui.scene.pages
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +21,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -33,14 +38,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import com.rawsmusic.core.ui.scene.RawWindowWidthClass
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineArtist
@@ -51,30 +61,20 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.icon.extended.Search
 
 // 分页与网格参数：30 是各平台源推荐的页大小，与仓库 getArtists 的默认值一致。
 private const val PAGE_SIZE = 30
-private const val GRID_COLUMNS = 2
 
 /**
  * 仓库约定的「不分类」哨兵值。
- *
- * 这是**数据契约**而不是界面文案（`OnlineMusicRepository.getArtists(category = "全部")` 是默认值，
- * QQ 源会把 `"全部"` 翻译成 `all_all_all`，网易源因不含 `_` 而退化为 `area=-1&type=-1`）。
- * 界面上的「全部」标签走 [R.string.online_artist_category_all]，不要用这个常量去渲染。
  */
 private const val ALL_CATEGORY = "全部"
 
 /**
  * 在线音乐门户 · 歌手库。
- *
- * 结构照 `OnlinePlazaTab`（唯一模板）：四态**页面内联**（全仓没有共享的 Loading/Empty/Error 组件，
- * 见根 `AGENTS.MD` §4.4）；网格用 `chunked(2)` + `LazyColumn` 内嵌 `Row`，**不用 `LazyVerticalGrid`**
- * （全仓 0 使用，决策 D11）；重试用自增 `reloadToken` 驱动 `LaunchedEffect`，不引入 ViewModel。
- *
- * 与广场的区别只有一处：歌手库多了「分类」这一维度，且**多数平台并不支持歌手能力**
- * （酷狗 / 酷我 / 咪咕沿用 `OnlinePlatformSource` 的默认空实现），所以分类为空时必须能降级，
- * 而不是停在白屏或空 chip 行。
  */
 @Composable
 internal fun OnlineArtistTab(
@@ -84,6 +84,7 @@ internal fun OnlineArtistTab(
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
+    val keyboard = LocalSoftwareKeyboardController.current
     val gridColumns = resolveOnlineGridColumns()
 
     var categories by remember { mutableStateOf<List<OnlineArtistCategory>>(emptyList()) }
@@ -94,20 +95,81 @@ internal fun OnlineArtistTab(
     var loadingMore by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var endReached by remember { mutableStateOf(false) }
-    // 重试令牌：自增即触发下面的 LaunchedEffect 重新拉取（不引入 ViewModel，AGENTS §4.4）。
     var reloadToken by remember { mutableIntStateOf(0) }
+
+    // 歌手搜索状态
+    var isSearchMode by remember { mutableStateOf(false) }
+    var searchKeyword by remember { mutableStateOf("") }
+    var activeSearchKeyword by remember { mutableStateOf("") }
+    var searchResults by remember(platform) { mutableStateOf<List<OnlineArtist>>(emptyList()) }
+    var searchPage by remember(platform) { mutableIntStateOf(1) }
+    var searching by remember { mutableStateOf(false) }
+    var searchLoadingMore by remember { mutableStateOf(false) }
+    var searchEndReached by remember(platform) { mutableStateOf(false) }
+    var searchErrorText by remember { mutableStateOf<String?>(null) }
 
     val loadFailedMessage = stringResource(R.string.online_artist_load_failed)
 
-    // 平台切换必须把「分类」和「选中项」一起重置：分类 id 是各平台私有的
-    // （网易 "7_1" / QQ "cn_man_all"），沿用上一个平台的 id 只会拉到空结果。
-    // 分类请求失败**不报错、不阻塞**：降级成只剩「全部」一个 chip，歌手列表照常走下面的 effect。
+    val sceneMotionFrozen = LocalSceneBackgroundFrozen.current
+    BackHandler(enabled = isSearchMode && !sceneMotionFrozen) {
+        isSearchMode = false
+    }
+
+    fun startSearchArtists(query: String) {
+        val q = query.trim()
+        if (q.isBlank()) return
+        keyboard?.hide()
+        activeSearchKeyword = q
+        searching = true
+        searchErrorText = null
+        searchPage = 1
+        searchEndReached = false
+        scope.launch {
+            repository.searchArtists(keyword = q, page = 1, pageSize = PAGE_SIZE, platform = platform)
+                .onSuccess {
+                    searchResults = it
+                    searchEndReached = it.size < PAGE_SIZE
+                    searchErrorText = null
+                }
+                .onFailure {
+                    searchResults = emptyList()
+                    searchErrorText = loadFailedMessage
+                    AppNoticeBus.error(loadFailedMessage)
+                }
+            searching = false
+        }
+    }
+
+    fun loadMoreSearchResults() {
+        if (searching || searchLoadingMore || searchEndReached || activeSearchKeyword.isBlank()) return
+        searchLoadingMore = true
+        scope.launch {
+            val next = searchPage + 1
+            repository.searchArtists(keyword = activeSearchKeyword, page = next, pageSize = PAGE_SIZE, platform = platform)
+                .onSuccess {
+                    searchResults = searchResults + it
+                    searchPage = next
+                    searchEndReached = it.size < PAGE_SIZE
+                }
+                .onFailure { AppNoticeBus.error(loadFailedMessage) }
+            searchLoadingMore = false
+        }
+    }
+
+    // 搜索模式下若切换了平台，自动使用新平台搜索当前关键词
+    LaunchedEffect(platform) {
+        if (isSearchMode && activeSearchKeyword.isNotBlank()) {
+            startSearchArtists(activeSearchKeyword)
+        }
+    }
+
+    // 平台切换重置分类
     LaunchedEffect(platform, reloadToken) {
         selectedCategory = ALL_CATEGORY
         categories = repository.getArtistCategories(platform).getOrNull().orEmpty()
     }
 
-    // 平台、选中分类或重试令牌变化都要重新拉第一页，避免把上一个平台/分类的数据留在列表里。
+    // 平台、选中分类或重试令牌变化拉取第一页
     LaunchedEffect(platform, selectedCategory, reloadToken) {
         loading = true
         errorText = null
@@ -121,8 +183,6 @@ internal fun OnlineArtistTab(
             platform = platform,
         )
 
-        // 仓库层用 runCatching 包住了平台调用，会把 CancellationException 也当成 Failure 返回；
-        // 这里必须再查一次 isActive，否则切平台/切分类时被取消的旧请求会闪一下错误态并把 loading 关掉。
         if (!isActive) return@LaunchedEffect
 
         result
@@ -161,50 +221,100 @@ internal fun OnlineArtistTab(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        ArtistCategoryRow(
-            categories = categories,
-            selectedCategory = selectedCategory,
-            onSelect = { selectedCategory = it },
-        )
+        if (isSearchMode) {
+            OnlineArtistSearchBar(
+                query = searchKeyword,
+                onQueryChange = { searchKeyword = it },
+                onSearch = { startSearchArtists(searchKeyword) },
+                onCancel = { isSearchMode = false },
+            )
+        } else {
+            ArtistTopBar(onOpenSearch = { isSearchMode = true })
+            ArtistCategoryRow(
+                categories = categories,
+                selectedCategory = selectedCategory,
+                onSelect = { selectedCategory = it },
+            )
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                loading -> ArtistLoadingState()
-                errorText != null -> ArtistErrorState(
-                    message = errorText.orEmpty(),
-                    onRetry = { reloadToken++ },
-                )
-                artists.isEmpty() -> ArtistEmptyState(stringResource(R.string.online_artist_empty))
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(
-                        items = artists.chunked(gridColumns),
-                        // 平台内 id 唯一，带上平台前缀可避免换平台后 key 撞车导致复用错卡片。
-                        key = { row -> "${platform.id}_${row.first().id}" },
-                    ) { rowItems ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rowItems.forEach { artist ->
-                                OnlineArtistCard(
-                                    artist = artist,
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { onOpenArtist(artist.platform, artist.id, artist.name, artist.avatarUrl) },
-                                )
-                            }
-                            // 不足 columns 个时补齐等宽空位，避免最后一张卡被拉成整行宽。
-                            repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
-                                Spacer(Modifier.weight(1f))
+            if (isSearchMode) {
+                when {
+                    searching -> ArtistLoadingState()
+                    searchErrorText != null -> ArtistErrorState(
+                        message = searchErrorText.orEmpty(),
+                        onRetry = { startSearchArtists(activeSearchKeyword) },
+                    )
+                    activeSearchKeyword.isBlank() -> ArtistEmptyState(stringResource(R.string.online_artist_search_initial))
+                    searchResults.isEmpty() -> ArtistEmptyState(stringResource(R.string.online_artist_search_empty))
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(
+                            items = searchResults.chunked(gridColumns),
+                            key = { row -> "search_${platform.id}_" + row.joinToString("_") { it.id } },
+                        ) { rowItems ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                rowItems.forEach { artist ->
+                                    OnlineArtistCard(
+                                        artist = artist,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = { onOpenArtist(artist.platform, artist.id, artist.name, artist.avatarUrl) },
+                                    )
+                                }
+                                repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
+                                    Spacer(Modifier.weight(1f))
+                                }
                             }
                         }
+                        item {
+                            ArtistLoadMoreFooter(
+                                loadingMore = searchLoadingMore,
+                                endReached = searchEndReached,
+                                onLoadMore = ::loadMoreSearchResults,
+                            )
+                        }
                     }
-                    item {
-                        ArtistLoadMoreFooter(
-                            loadingMore = loadingMore,
-                            endReached = endReached,
-                            onLoadMore = ::loadNextPage,
-                        )
+                }
+            } else {
+                when {
+                    loading -> ArtistLoadingState()
+                    errorText != null -> ArtistErrorState(
+                        message = errorText.orEmpty(),
+                        onRetry = { reloadToken++ },
+                    )
+                    artists.isEmpty() -> ArtistEmptyState(stringResource(R.string.online_artist_empty))
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(
+                            items = artists.chunked(gridColumns),
+                            key = { row -> "${platform.id}_${row.first().id}" },
+                        ) { rowItems ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                rowItems.forEach { artist ->
+                                    OnlineArtistCard(
+                                        artist = artist,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = { onOpenArtist(artist.platform, artist.id, artist.name, artist.avatarUrl) },
+                                    )
+                                }
+                                repeat((gridColumns - rowItems.size).coerceAtLeast(0)) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        item {
+                            ArtistLoadMoreFooter(
+                                loadingMore = loadingMore,
+                                endReached = endReached,
+                                onLoadMore = ::loadNextPage,
+                            )
+                        }
                     }
                 }
             }
@@ -212,11 +322,127 @@ internal fun OnlineArtistTab(
     }
 }
 
+@Composable
+private fun ArtistTopBar(onOpenSearch: () -> Unit) {
+    val colors = themeColors()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.surface)
+                .clickable(onClick = onOpenSearch)
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = MiuixIcons.Regular.Search,
+                contentDescription = stringResource(R.string.online_artist_search_action),
+                tint = colors.secondaryText,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = stringResource(R.string.online_artist_search_action),
+                color = colors.secondaryText,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun OnlineArtistSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val colors = themeColors()
+    val keyboard = LocalSoftwareKeyboardController.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = TextStyle(color = colors.onSurface, fontSize = 14.sp),
+            cursorBrush = SolidColor(colors.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    keyboard?.hide()
+                    onSearch()
+                }
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.surface)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            decorationBox = { inner ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Search,
+                        contentDescription = null,
+                        tint = colors.secondaryText,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (query.isBlank()) {
+                            Text(
+                                text = stringResource(R.string.online_artist_search_hint),
+                                color = colors.secondaryText,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        inner()
+                    }
+                    if (query.isNotBlank()) {
+                        Icon(
+                            imageVector = MiuixIcons.Regular.Close,
+                            contentDescription = stringResource(R.string.online_artist_search_cancel),
+                            tint = colors.secondaryText,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onQueryChange("") },
+                        )
+                    }
+                }
+            }
+        )
+        TextButton(
+            text = stringResource(R.string.online_artist_search_action),
+            onClick = {
+                keyboard?.hide()
+                onSearch()
+            },
+        )
+        TextButton(
+            text = stringResource(R.string.online_artist_search_cancel),
+            onClick = {
+                keyboard?.hide()
+                onCancel()
+            },
+        )
+    }
+}
+
 /**
  * 分类 chip 行。
- *
- * 「全部」是固定项：分类拉取失败或平台不支持歌手能力时，这一行仍然只剩「全部」，
- * 配合空态文案给出明确反馈，而不是留一片空白。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -227,8 +453,6 @@ private fun ArtistCategoryRow(
 ) {
     val compact = LocalRawWindowLayoutProfile.current.widthClass == RawWindowWidthClass.Compact
     if (compact) {
-        // 小屏上分类胶囊数量多、总宽度明显超过一行；FlowRow 自动换行，避免最右侧的
-        // 「欧美男歌手」等分类被屏幕裁掉，也避免横向拖动与系统返回手势互相抢事件。
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
@@ -294,10 +518,7 @@ private fun ArtistCategoryChip(label: String, selected: Boolean, onClick: () -> 
 
 /**
  * 歌手卡片。
- *
- * 头像走 [BitmapImage]，它底层已支持 http(s) 远程源与本地缓存；[BitmapImage] 的 `key` 用
- * `avatarUrl`，与广场用 `coverUrl` 同理——同一个歌手在不同页面复用同一份缓存。
- * 名字固定 `maxLines = 1`，保证同一行两张卡高度一致，不会被长名字顶高。
+ * 头像下副文本：若有歌曲数则显示歌曲数；无歌曲数则显示简介或“歌手”标识，避免全部显示“0 首”。
  */
 @Composable
 private fun OnlineArtistCard(
@@ -333,17 +554,23 @@ private fun OnlineArtistCard(
             modifier = Modifier.padding(horizontal = 8.dp),
         )
         Spacer(Modifier.height(3.dp))
+        val subtitle = when {
+            artist.songCount > 0 -> stringResource(R.string.online_artist_song_count, artist.songCount)
+            !artist.description.isNullOrBlank() -> artist.description.orEmpty()
+            else -> stringResource(R.string.online_artist_title)
+        }
         Text(
-            text = stringResource(R.string.online_artist_song_count, artist.songCount),
+            text = subtitle,
             color = colors.secondaryText,
             fontSize = 11.sp,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 8.dp),
         )
     }
 }
 
-/** 底部三态页脚：正在加载 / 没有更多了 / 加载更多。写法与 `OnlinePlazaTab.LoadMoreFooter` 一致。 */
+/** 底部三态页脚：正在加载 / 没有更多了 / 加载更多。 */
 @Composable
 private fun ArtistLoadMoreFooter(
     loadingMore: Boolean,

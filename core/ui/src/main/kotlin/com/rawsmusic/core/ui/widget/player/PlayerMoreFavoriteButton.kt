@@ -67,7 +67,9 @@ internal fun PlayerMoreFavoriteButton(song: AudioFile?, onAddSong: ((AudioFile) 
     val savedPlaylistIds = remember(songKey, playlists) {
         playerSavedPlaylistIds(songKey, playlists.asSequence().map { playlist -> playlist.id to playlist.songs.map { it.key } })
     }
-    val saved = savedPlaylistIds.isNotEmpty()
+    // 收藏行的 key 可能因重新扫描/改标签而与当前歌曲的 key 漂移；以 Store 的容错判断为准。
+    val isFavorite = remember(songKey, playlists) { song?.let(store::isFavorite) == true }
+    val saved = isFavorite || savedPlaylistIds.isNotEmpty()
     val scale = remember(songKey) { Animatable(1f) }
     val scope = rememberCoroutineScope()
     val event = PlayerFavoriteSuccessRuntime.latest

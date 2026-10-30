@@ -207,7 +207,11 @@ class SongActionSheetHelper(
         if (isPlaylistPickerShowing) return
         val store = PlaylistStore.getInstance(context)
         val key = song.playlistIdentityKey()
-        val memberships = store.playlists.value.filter { playlist -> playlist.songs.any { it.key == key } }
+        val isFavorite = store.isFavorite(song)
+        val memberships = store.playlists.value.filter { playlist ->
+            playlist.songs.any { it.key == key } ||
+                (playlist.isFavorites && isFavorite)
+        }
         showPlaylistPickerForSongs(listOf(song))
         isRemovingFromPlaylists = memberships.isNotEmpty()
         if (isRemovingFromPlaylists) playlistChoices = memberships

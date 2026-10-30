@@ -79,21 +79,86 @@ class KuwoMusicSource(
         return trimmed
     }
 
-    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
-        listOf(
+    @Volatile
+    private var dynamicTags: List<OnlinePlaylistTag>? = null
+
+    companion object {
+        /**
+         * 酷我音乐官方真实分类 ID 预设（与官方 getTagPlayList id 严格对应）
+         */
+        private val PRESET_TAGS = listOf(
             OnlinePlaylistTag("全部", "全部", "默认"),
-            OnlinePlaylistTag("热歌", "热歌", "热门"),
-            OnlinePlaylistTag("流行", "流行", "风格"),
-            OnlinePlaylistTag("华语", "华语", "语种"),
-            OnlinePlaylistTag("欧美", "欧美", "语种"),
-            OnlinePlaylistTag("DJ", "DJ", "风格"),
-            OnlinePlaylistTag("古风", "古风", "风格"),
-            OnlinePlaylistTag("治愈", "治愈", "情感"),
-            OnlinePlaylistTag("摇滚", "摇滚", "风格"),
-            OnlinePlaylistTag("车载", "车载", "场景"),
-            OnlinePlaylistTag("经典", "经典", "年代"),
-            OnlinePlaylistTag("ACG", "ACG", "风格")
+            // 曲风流派
+            OnlinePlaylistTag("393", "流行", "流派"),
+            OnlinePlaylistTag("389", "摇滚", "流派"),
+            OnlinePlaylistTag("392", "民谣", "流派"),
+            OnlinePlaylistTag("127", "古风", "流派"),
+            OnlinePlaylistTag("391", "电子", "流派"),
+            OnlinePlaylistTag("387", "说唱", "流派"),
+            OnlinePlaylistTag("168", "DJ", "流派"),
+            OnlinePlaylistTag("173", "轻音乐", "流派"),
+            OnlinePlaylistTag("577", "纯音乐", "流派"),
+            OnlinePlaylistTag("390", "古典", "流派"),
+            OnlinePlaylistTag("397", "爵士", "流派"),
+            OnlinePlaylistTag("394", "R&B", "流派"),
+            // 语言
+            OnlinePlaylistTag("37", "华语", "语种"),
+            OnlinePlaylistTag("35", "欧美", "语种"),
+            OnlinePlaylistTag("13", "粤语", "语种"),
+            OnlinePlaylistTag("1091", "日语", "语种"),
+            OnlinePlaylistTag("1093", "韩语", "语种"),
+            // 主题与专区
+            OnlinePlaylistTag("181", "ACG", "主题"),
+            OnlinePlaylistTag("1265", "经典", "主题"),
+            OnlinePlaylistTag("180", "影视", "主题"),
+            OnlinePlaylistTag("2200", "情歌", "主题"),
+            OnlinePlaylistTag("2189", "短视频", "主题"),
+            // 心情
+            OnlinePlaylistTag("146", "伤感", "心情"),
+            OnlinePlaylistTag("62", "解压", "心情"),
+            OnlinePlaylistTag("58", "治愈", "心情"),
+            OnlinePlaylistTag("67", "安静", "心情"),
+            OnlinePlaylistTag("137", "甜蜜", "心情"),
+            // 场景
+            OnlinePlaylistTag("376", "车载", "场景"),
+            OnlinePlaylistTag("366", "运动", "场景"),
+            OnlinePlaylistTag("354", "睡眠", "场景"),
+            OnlinePlaylistTag("1876", "学习", "场景"),
+            OnlinePlaylistTag("375", "旅行", "场景")
         )
+    }
+
+    override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
+        dynamicTags?.let { return@withContext it }
+        try {
+            val url = "http://wapi.kuwo.cn/api/pc/classify/playlist/getTagList"
+            val root = getApiJson(url)
+            val dataArr = root.optJSONArray("data")
+            if (dataArr != null && dataArr.length() > 0) {
+                val list = mutableListOf<OnlinePlaylistTag>()
+                list.add(OnlinePlaylistTag("全部", "全部", "默认"))
+                for (i in 0 until dataArr.length()) {
+                    val groupObj = dataArr.optJSONObject(i) ?: continue
+                    val groupName = groupObj.optString("name").trim()
+                    val subArr = groupObj.optJSONArray("data") ?: continue
+                    for (j in 0 until subArr.length()) {
+                        val item = subArr.optJSONObject(j) ?: continue
+                        val cid = item.optString("id").trim()
+                        val cname = item.optString("name").trim()
+                        if (cid.isNotEmpty() && cname.isNotEmpty() && list.none { it.id == cid }) {
+                            list.add(OnlinePlaylistTag(cid, cname, groupName))
+                        }
+                    }
+                }
+                if (list.size > 1) {
+                    dynamicTags = list
+                    return@withContext list
+                }
+            }
+        } catch (_: Exception) {
+            // 降级到预设标签
+        }
+        PRESET_TAGS
     }
 
     override suspend fun getPlaylists(
@@ -102,20 +167,58 @@ class KuwoMusicSource(
         pageSize: Int
     ): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         val list = mutableListOf<OnlinePlaylist>()
+        val normalizedTag = tagId.trim()
+        val isAll = normalizedTag.isEmpty() || normalizedTag == "全部" || normalizedTag == "0" || normalizedTag == "推荐"
 
         // 1. 如果是第一页，先加入酷我官方精选权威歌单/榜单，保证每位用户打开即有海量歌曲
-        if (page == 1 && (tagId == "全部" || tagId == "0" || tagId == "推荐")) {
+        if (page == 1 && isAll) {
             list.addAll(getOfficialRecommendPlaylists())
         }
 
-        // 2. 调用酷我官方分类歌单接口
+        // 2. 调用酷我官方分类歌单接口（必须传入酷我官方分类数字 ID）
         try {
-            val url = if (tagId == "全部" || tagId == "推荐" || tagId == "0") {
+            val url = if (isAll) {
                 "http://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList?pn=$page&rn=$pageSize&order=hot"
             } else {
-                val encoded = URLEncoder.encode(tagId, "UTF-8")
-                "http://wapi.kuwo.cn/api/pc/classify/playlist/getTagPlayList?pn=$page&rn=$pageSize&id=$encoded"
+                // 如果传入的是数字 ID 直接使用；如果是分类名称则匹配真实 ID
+                val effectiveId = if (normalizedTag.toIntOrNull() != null) {
+                    normalizedTag
+                } else {
+                    val allTags = dynamicTags ?: PRESET_TAGS
+                    allTags.firstOrNull { it.name.equals(normalizedTag, ignoreCase = true) || it.id == normalizedTag }?.id
+                        ?: when (normalizedTag) {
+                            "流行" -> "393"
+                            "摇滚" -> "389"
+                            "民谣" -> "392"
+                            "古风" -> "127"
+                            "华语" -> "37"
+                            "欧美" -> "35"
+                            "粤语" -> "13"
+                            "ACG" -> "181"
+                            "电子" -> "391"
+                            "DJ" -> "168"
+                            "纯音乐" -> "577"
+                            "经典" -> "1265"
+                            "影视" -> "180"
+                            "伤感" -> "146"
+                            "治愈" -> "58"
+                            "车载" -> "376"
+                            "运动" -> "366"
+                            "睡眠" -> "354"
+                            "说唱", "嘻哈" -> "387"
+                            else -> null
+                        }
+                }
+
+                if (effectiveId != null) {
+                    val encoded = URLEncoder.encode(effectiveId, "UTF-8")
+                    "http://wapi.kuwo.cn/api/pc/classify/playlist/getTagPlayList?pn=$page&rn=$pageSize&id=$encoded"
+                } else {
+                    null
+                }
             }
+
+            if (url != null) {
 
             val root = getApiJson(url)
             val dataArr = root.optJSONObject("data")?.optJSONArray("data")
@@ -143,6 +246,7 @@ class KuwoMusicSource(
                         )
                     }
                 }
+            }
             }
         } catch (_: Exception) {
         }

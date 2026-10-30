@@ -497,6 +497,9 @@
     <string name="songs_action_remove_from_library">Remove from library</string>
     <string name="songs_action_remove_dialog_title">Remove from library</string>
     <string name="songs_action_remove_dialog_message">Remove the selected %1$d songs from your library.\n\nThis will not delete the physical audio files from your storage device.</string>
+    <string name="songs_action_remove_from_playlist">Remove from playlist</string>
+    <string name="songs_action_remove_from_playlist_dialog_title">Remove from playlist</string>
+    <string name="songs_action_remove_from_playlist_dialog_message">Are you sure you want to remove the selected %1$d songs from playlist \"%2$s\"?\n\nThis will not delete physical audio files from your storage device.</string>
     <string name="songs_action_remove_confirm">Remove</string>
     <string name="songs_action_delete_dialog_title">Delete songs</string>
     <string name="songs_action_delete_dialog_message">Are you sure you want to delete the selected %1$d songs from your library?</string>

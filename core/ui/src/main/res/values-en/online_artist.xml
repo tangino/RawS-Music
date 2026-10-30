@@ -8,4 +8,10 @@
     <string name="online_artist_empty">No artists</string>
     <string name="online_artist_load_failed">Failed to load, tap to retry</string>
     <string name="online_artist_retry">Retry</string>
+    <string name="online_artist_search_action">Search Artists</string>
+    <string name="online_artist_search_hint">Search artists…</string>
+    <string name="online_artist_search_cancel">Cancel</string>
+    <string name="online_artist_search_initial">Type keywords to search artists</string>
+    <string name="online_artist_search_empty">No artists found</string>
+    <string name="online_artist_title">Artist</string>
 </resources>

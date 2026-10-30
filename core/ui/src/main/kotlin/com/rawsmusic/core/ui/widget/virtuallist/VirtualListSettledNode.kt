@@ -5608,8 +5608,11 @@ private class NodeArtworkActor(
         val nodes = retainedNodes ?: RetainedArtworkNodes().also { retainedNodes = it }
         val current = currentBitmap?.takeIf { !it.isRecycled }
         val previous = previousBitmap?.takeIf { !it.isRecycled }
+        val effectiveFallback = (fallbackBitmap ?: if (source.defaultArtworkEnabled) {
+            NodeDefaultArtworkCache.get(source.resources, maxOf(cover.width, cover.height).coerceAtLeast(source.decodeSide))
+        } else null)?.takeIf { !it.isRecycled }
         nodes.previous.bind(previous, cover, source.cornerRadiusPx)
-        nodes.current.bind(current ?: fallbackBitmap, cover, source.cornerRadiusPx)
+        nodes.current.bind(current ?: effectiveFallback, cover, source.cornerRadiusPx)
         val progress = fadeProgress.coerceIn(0f, 1f)
         val previousAlpha = if (source.hidden || previous == null) 0f else
             ReferenceInterruptedPreviousAlpha(previousStartAlpha, progress)
@@ -5648,7 +5651,9 @@ private class NodeArtworkActor(
             currentShader = null
             previousShader = null
             hasPresentedCurrentIdentity = false
-            fallbackBitmap = null
+            fallbackBitmap = if (next.defaultArtworkEnabled) {
+                NodeDefaultArtworkCache.get(next.resources, next.decodeSide)
+            } else null
             fallbackShader = null
             terminalNoArt = false
             stopFade()
@@ -5658,9 +5663,16 @@ private class NodeArtworkActor(
             invalidateOwner()
         }
 
-        if (defaultChanged && !next.defaultArtworkEnabled) {
-            fallbackBitmap = null
-            fallbackShader = null
+        if (defaultChanged) {
+            if (next.defaultArtworkEnabled) {
+                if (currentBitmap == null && fallbackBitmap == null) {
+                    fallbackBitmap = NodeDefaultArtworkCache.get(next.resources, next.decodeSide)
+                    fallbackShader = null
+                }
+            } else {
+                fallbackBitmap = null
+                fallbackShader = null
+            }
         }
         if (fadeDisabled) {
             stopFade()
@@ -5699,6 +5711,9 @@ private class NodeArtworkActor(
         physicallyAttached = true
         val live = binding ?: return
         if (live.hidden || live.deferLoad || live.key.isBlank()) return
+        if (currentBitmap == null && live.defaultArtworkEnabled && fallbackBitmap == null) {
+            fallbackBitmap = NodeDefaultArtworkCache.get(live.resources, live.decodeSide)
+        }
         ensureBestCached()
         ensureRequest()
         invalidateOwner()
@@ -5743,7 +5758,9 @@ private class NodeArtworkActor(
         val height = cover.height.toFloat().coerceAtLeast(1f)
         val radius = currentBinding.cornerRadiusPx
 
-        val fallback = fallbackBitmap?.takeIf { !it.isRecycled }
+        val fallback = (fallbackBitmap ?: if (currentBinding.defaultArtworkEnabled) {
+            NodeDefaultArtworkCache.get(currentBinding.resources, maxOf(cover.width, cover.height).coerceAtLeast(currentBinding.decodeSide))
+        } else null)?.takeIf { !it.isRecycled }
         if (fallback != null && currentBitmap == null) {
             val shader = fallbackShader ?: BitmapShader(fallback, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).also {
                 fallbackShader = it
@@ -5813,7 +5830,9 @@ private class NodeArtworkActor(
         val source = binding
         val current = currentBitmap?.takeIf { !it.isRecycled }
         val previous = previousBitmap?.takeIf { !it.isRecycled }
-        val fallback = fallbackBitmap?.takeIf { !it.isRecycled }
+        val fallback = (fallbackBitmap ?: if (source?.defaultArtworkEnabled == true) {
+            NodeDefaultArtworkCache.get(source.resources, source.decodeSide)
+        } else null)?.takeIf { !it.isRecycled }
         val progress = fadeProgress.coerceIn(0f, 1f)
         val hidden = source?.hidden == true
 
@@ -5864,6 +5883,9 @@ private class NodeArtworkActor(
     fun snapshotDisplayedBitmap(): Bitmap? =
         currentBitmap?.takeIf { !it.isRecycled }
             ?: fallbackBitmap?.takeIf { !it.isRecycled }
+            ?: (binding?.takeIf { it.defaultArtworkEnabled }?.let {
+                NodeDefaultArtworkCache.get(it.resources, it.decodeSide)
+            })?.takeIf { !it.isRecycled }
 
     /**
      * Bitmap currently owned by the same physical holder while it occupies the detail header.
@@ -6128,7 +6150,7 @@ private class NodeArtworkActor(
                 hasUsableBitmap = currentBitmap?.isRecycled == false,
                 hasValidProviderHandle = currentHandle?.isValid == true,
             )
-            if (terminalNoArt && live.defaultArtworkEnabled) {
+            if (live.defaultArtworkEnabled) {
                 fallbackBitmap = NodeDefaultArtworkCache.get(live.resources, side)
                 fallbackShader = null
             }

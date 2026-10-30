@@ -16,6 +16,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.model.isOnlineSongKey
+import com.rawsmusic.core.common.model.FAVORITES_PLAYLIST_ID
+import com.rawsmusic.core.common.model.DISLIKED_PLAYLIST_ID
 import com.rawsmusic.module.online.playback.OnlinePlayResult
 import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
@@ -275,29 +277,104 @@ class AppPageRendererImpl(
                     onRemoveSong = { song ->
                         val targetId = effectiveArgument
                         val targetName = playlist?.name ?: return@PlaylistDetailScreen
-                        // ⚠️ 在线条目的 song_key 就是那个 `online://` 串**本身**；而 playlistIdentityKey()
-                        // 会给它加上 `path|` 前缀（见 core 的 UserPlaylist.kt）→ 直接拿来删会匹配不上、
-                        // 静默什么都不做。所以这里先判在线。
-                        val songKey = if (isOnlineSongKey(song.path)) song.path else song.playlistIdentityKey()
+                        val storedSongs = playlist.songs
+                        val candidateKeys = mutableSetOf<String>()
+                        candidateKeys.add(song.playlistIdentityKey())
+                        if (song.path.isNotBlank()) candidateKeys.add(song.path)
+                        for (stored in storedSongs) {
+                            val keyMatch = stored.key == song.playlistIdentityKey() || stored.key == song.path || stored.path == song.path
+                            val metaMatch = stored.title.equals(song.title, ignoreCase = true) &&
+                                (stored.artist.equals(song.artist, ignoreCase = true) || stored.artist.isBlank() || song.artist.isBlank())
+                            if (keyMatch || metaMatch) {
+                                candidateKeys.add(stored.key)
+                                if (stored.path.isNotBlank()) candidateKeys.add(stored.path)
+                            }
+                        }
                         scope.launch {
                             try {
                                 val changed = when (targetId) {
-                                    // 「喜欢」是既有系统歌单，直接按 song_key 移除，避免 toggle 反向加回来。
-                                    ATTITUDE_FAVORITES_PLAYLIST_ID -> playlistStore.removeSongFromPlaylist(
-                                        FAVORITES_PLAYLIST_ID,
-                                        songKey,
-                                    )
+                                    ATTITUDE_FAVORITES_PLAYLIST_ID, FAVORITES_PLAYLIST_ID -> {
+                                        val removedKeys = playlistStore.removeFavoriteSongs(listOf(song))
+                                        val onlineKeys = removedKeys.filter {
+                                            isOnlineSongKey(it) || isOnlineSongKey(it.removePrefix("path|"))
+                                        }
+                                        if (onlineKeys.isNotEmpty()) {
+                                            SongAttitudeRepository.setOnlineFavorites(context, onlineKeys, false)
+                                        }
+                                        removedKeys.isNotEmpty()
+                                    }
                                     ATTITUDE_DISLIKED_PLAYLIST_ID -> {
-                                        SongAttitudeRepository.removeDislike(context, songKey)
+                                        candidateKeys.forEach { SongAttitudeRepository.removeDislike(context, it) }
+                                        playlistStore.removeSongsFromPlaylist(DISLIKED_PLAYLIST_ID, candidateKeys)
                                         true
                                     }
-                                    else -> playlistStore.removeSongFromPlaylist(targetId, songKey)
+                                    else -> playlistStore.removeSongsFromPlaylist(targetId, candidateKeys) > 0
                                 }
                                 if (changed) {
                                     com.rawsmusic.helper.playlistSongChangeMessage(context, listOf(song.title), targetName, true)
                                         ?.let { AppNoticeBus.post(it,
                                             AppNoticeIcon.PLAYLIST,
                                             com.rawsmusic.core.common.ui.AppNoticeAnimation.DELETE) }
+                                }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                AppNoticeBus.error(context.getString(com.rawsmusic.R.string.ui_playlist_remove_failed))
+                            }
+                        }
+                    },
+                    onRemoveSongs = { selectedSongs ->
+                        val targetId = effectiveArgument
+                        val targetName = playlist?.name ?: return@PlaylistDetailScreen
+                        if (selectedSongs.isEmpty()) return@PlaylistDetailScreen
+                        val storedSongs = playlist.songs
+                        val candidateKeys = mutableSetOf<String>()
+                        for (song in selectedSongs) {
+                            candidateKeys.add(song.playlistIdentityKey())
+                            if (song.path.isNotBlank()) candidateKeys.add(song.path)
+                            for (stored in storedSongs) {
+                                val keyMatch = stored.key == song.playlistIdentityKey() || stored.key == song.path || stored.path == song.path
+                                val metaMatch = stored.title.equals(song.title, ignoreCase = true) &&
+                                    (stored.artist.equals(song.artist, ignoreCase = true) || stored.artist.isBlank() || song.artist.isBlank())
+                                if (keyMatch || metaMatch) {
+                                    candidateKeys.add(stored.key)
+                                    if (stored.path.isNotBlank()) candidateKeys.add(stored.path)
+                                }
+                            }
+                        }
+                        scope.launch {
+                            try {
+                                val removedCount = when (targetId) {
+                                    ATTITUDE_FAVORITES_PLAYLIST_ID, FAVORITES_PLAYLIST_ID -> {
+                                        val removedKeys = playlistStore.removeFavoriteSongs(selectedSongs)
+                                        val onlineKeys = removedKeys.filter {
+                                            isOnlineSongKey(it) || isOnlineSongKey(it.removePrefix("path|"))
+                                        }
+                                        if (onlineKeys.isNotEmpty()) {
+                                            SongAttitudeRepository.setOnlineFavorites(context, onlineKeys, false)
+                                        }
+                                        removedKeys.size
+                                    }
+                                    ATTITUDE_DISLIKED_PLAYLIST_ID -> {
+                                        candidateKeys.forEach { SongAttitudeRepository.removeDislike(context, it) }
+                                        playlistStore.removeSongsFromPlaylist(DISLIKED_PLAYLIST_ID, candidateKeys)
+                                        candidateKeys.size
+                                    }
+                                    else -> playlistStore.removeSongsFromPlaylist(targetId, candidateKeys)
+                                }
+                                if (removedCount > 0) {
+                                    com.rawsmusic.helper.playlistSongChangeMessage(
+                                        context,
+                                        selectedSongs.map { it.title },
+                                        targetName,
+                                        true
+                                    )?.let {
+                                        AppNoticeBus.post(
+                                            it,
+                                            AppNoticeIcon.PLAYLIST,
+                                            com.rawsmusic.core.common.ui.AppNoticeAnimation.DELETE
+                                        )
+                                    }
                                 }
                             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                 throw cancelled

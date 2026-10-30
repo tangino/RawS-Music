@@ -274,7 +274,9 @@ internal class VirtualListArtworkNode(
                         canvas.drawRoundRect(currentRect, currentRadius, currentRadius, paint)
                     }
                 } else {
-                    val fallback = fallbackBitmap?.takeIf { !it.isRecycled }
+                    val fallback = (fallbackBitmap ?: if (binding.defaultArtworkEnabled) {
+                        VirtualListDefaultArtworkCache.get(binding.resources, binding.decodeSide)
+                    } else null)?.takeIf { !it.isRecycled }
                     if (fallback != null) {
                         val shader = fallbackShader ?: BitmapShader(
                             fallback,
@@ -332,7 +334,10 @@ internal class VirtualListArtworkNode(
             return
         }
 
-        ensureBestCachedHandle(allowAnimation = false)
+        val hasCached = ensureBestCachedHandle(allowAnimation = false)
+        if (!hasCached && next.defaultArtworkEnabled) {
+            fallbackBitmap = VirtualListDefaultArtworkCache.get(next.resources, next.decodeSide)
+        }
         if (!syncTerminalNoArtFromProvider(allowAnimation = false)) {
             markSynchronousMissChecked()
             ensureRequest()
@@ -341,9 +346,9 @@ internal class VirtualListArtworkNode(
     }
 
     /** Attach the best provider-owned wrapper without starting source work. */
-    private fun ensureBestCachedHandle(allowAnimation: Boolean) {
+    private fun ensureBestCachedHandle(allowAnimation: Boolean): Boolean {
         val key = binding.key
-        if (key.isBlank()) return
+        if (key.isBlank()) return false
 
         val targetSide = binding.decodeSide.coerceAtLeast(1)
         val lookupStartedNs = if (TransitionPerfTrace.isActive()) System.nanoTime() else 0L
@@ -360,7 +365,11 @@ internal class VirtualListArtworkNode(
                 System.nanoTime() - lookupStartedNs,
             )
         }
-        if (candidate != null) acceptHandle(candidate, allowAnimation = allowAnimation)
+        if (candidate != null) {
+            acceptHandle(candidate, allowAnimation = allowAnimation)
+            return true
+        }
+        return false
     }
 
 
@@ -462,7 +471,7 @@ internal class VirtualListArtworkNode(
                 loaded?.release()
                 val currentUsable = currentBitmap?.isRecycled == false
                 val terminal = shouldAcceptVirtualListTerminalNoArt(
-                    callbackTerminalNoArt = localRequest?.terminalNoArt == true,
+                    callbackTerminalNoArt = (localRequest?.terminalNoArt == true) || callbackDeliveredSynchronously,
                     hasUsableBitmap = currentUsable,
                     hasValidProviderHandle = currentHandle?.isValid == true,
                 )
@@ -471,6 +480,8 @@ internal class VirtualListArtworkNode(
                     stopFade(releasePrevious = true)
                     releaseCurrent()
                     refreshFallback(allowAnimation = binding.animateChanges && isAttached)
+                } else if (binding.defaultArtworkEnabled && fallbackBitmap == null) {
+                    refreshFallback(allowAnimation = false)
                 }
                 // A null/terminal result from a later target request never tears down an already
                 // accepted provider wrapper. baseline implementation keeps the current A/B wrapper pair until a
@@ -701,7 +712,7 @@ internal class VirtualListArtworkNode(
             terminalNoArt = terminalNoArt || binding.key.isBlank(),
             defaultArtworkEnabled = binding.defaultArtworkEnabled,
         )
-        val nextFallback = if (placeholder == VirtualListArtworkPlaceholder.TerminalDefaultArtwork) {
+        val nextFallback = if (placeholder == VirtualListArtworkPlaceholder.TerminalDefaultArtwork || binding.defaultArtworkEnabled) {
             VirtualListDefaultArtworkCache.get(binding.resources, binding.decodeSide)
         } else {
             null

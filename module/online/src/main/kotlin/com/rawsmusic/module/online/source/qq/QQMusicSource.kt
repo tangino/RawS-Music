@@ -77,41 +77,135 @@ class QQMusicSource(
         return trimmed
     }
 
+    @Volatile
+    private var dynamicTags: List<OnlinePlaylistTag>? = null
+
     companion object {
+        /**
+         * QQ 音乐歌单真实分类标签预设（与官方 categoryId 严格对应）
+         */
         private val PRESET_TAGS = listOf(
             OnlinePlaylistTag("10000000", "全部", "默认"),
-            OnlinePlaylistTag("39", "华语", "语种"),
-            OnlinePlaylistTag("40", "欧美", "语种"),
-            OnlinePlaylistTag("41", "日语", "语种"),
-            OnlinePlaylistTag("42", "韩语", "语种"),
-            OnlinePlaylistTag("43", "粤语", "语种"),
-            OnlinePlaylistTag("165", "流行", "风格"),
-            OnlinePlaylistTag("166", "摇滚", "风格"),
-            OnlinePlaylistTag("167", "民谣", "风格"),
-            OnlinePlaylistTag("168", "电子", "风格"),
-            OnlinePlaylistTag("169", "说唱", "风格"),
-            OnlinePlaylistTag("170", "轻音乐", "风格"),
-            OnlinePlaylistTag("171", "爵士", "风格"),
-            OnlinePlaylistTag("172", "古典", "风格"),
-            OnlinePlaylistTag("173", "中国风", "风格"),
-            OnlinePlaylistTag("174", "古风", "风格"),
-            OnlinePlaylistTag("175", "ACG", "风格"),
-            OnlinePlaylistTag("176", "影视原声", "主题"),
-            OnlinePlaylistTag("177", "治愈", "心情"),
-            OnlinePlaylistTag("178", "夜晚", "场景"),
-            OnlinePlaylistTag("179", "运动", "场景")
+            // 流派 (流派分类真实 categoryId)
+            OnlinePlaylistTag("6", "流行", "流派"),
+            OnlinePlaylistTag("11", "摇滚", "流派"),
+            OnlinePlaylistTag("28", "民谣", "流派"),
+            OnlinePlaylistTag("24", "电子", "流派"),
+            OnlinePlaylistTag("153", "说唱", "流派"),
+            OnlinePlaylistTag("15", "轻音乐", "流派"),
+            OnlinePlaylistTag("8", "R&B", "流派"),
+            OnlinePlaylistTag("21", "爵士", "流派"),
+            OnlinePlaylistTag("27", "古典", "流派"),
+            OnlinePlaylistTag("18", "乡村", "流派"),
+            OnlinePlaylistTag("22", "蓝调", "流派"),
+            OnlinePlaylistTag("164", "新世纪", "流派"),
+            OnlinePlaylistTag("218", "后摇", "流派"),
+            OnlinePlaylistTag("219", "中国传统", "流派"),
+            // 语种 (语种分类真实 categoryId)
+            OnlinePlaylistTag("165", "国语", "语种"),
+            OnlinePlaylistTag("166", "粤语", "语种"),
+            OnlinePlaylistTag("167", "英语", "语种"),
+            OnlinePlaylistTag("168", "韩语", "语种"),
+            OnlinePlaylistTag("169", "日语", "语种"),
+            OnlinePlaylistTag("203", "闽南语", "语种"),
+            // 主题 (主题分类真实 categoryId)
+            OnlinePlaylistTag("39", "ACG", "主题"),
+            OnlinePlaylistTag("194", "古风", "主题"),
+            OnlinePlaylistTag("145", "中国风", "主题"),
+            OnlinePlaylistTag("133", "影视", "主题"),
+            OnlinePlaylistTag("136", "经典", "主题"),
+            OnlinePlaylistTag("146", "网络歌曲", "主题"),
+            OnlinePlaylistTag("141", "KTV热歌", "主题"),
+            OnlinePlaylistTag("148", "情歌", "主题"),
+            OnlinePlaylistTag("14", "DJ", "主题"),
+            // 心情 (心情分类真实 categoryId)
+            OnlinePlaylistTag("116", "治愈", "心情"),
+            OnlinePlaylistTag("52", "伤感", "心情"),
+            OnlinePlaylistTag("122", "安静", "心情"),
+            OnlinePlaylistTag("117", "快乐", "心情"),
+            OnlinePlaylistTag("125", "励志", "心情"),
+            OnlinePlaylistTag("59", "甜蜜", "心情"),
+            // 场景 (场景分类真实 categoryId)
+            OnlinePlaylistTag("99", "运动", "场景"),
+            OnlinePlaylistTag("78", "睡前", "场景"),
+            OnlinePlaylistTag("85", "开车", "场景"),
+            OnlinePlaylistTag("101", "学习", "场景"),
+            OnlinePlaylistTag("94", "工作", "场景"),
+            OnlinePlaylistTag("81", "旅行", "场景"),
+            OnlinePlaylistTag("16", "校园", "场景")
         )
     }
 
     override suspend fun getTags(): List<OnlinePlaylistTag> = withContext(Dispatchers.IO) {
+        dynamicTags?.let { return@withContext it }
+        try {
+            val url = "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_tag_conf.fcg?format=json&inCharset=utf8&outCharset=utf-8"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", userAgent)
+                .header("Referer", "https://y.qq.com/")
+                .header("Host", "c.y.qq.com")
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            val bodyStr = response.body?.string()
+            if (!bodyStr.isNullOrBlank()) {
+                val root = JSONObject(bodyStr)
+                val categories = root.optJSONObject("data")?.optJSONArray("categories")
+                if (categories != null && categories.length() > 0) {
+                    val list = mutableListOf<OnlinePlaylistTag>()
+                    list.add(OnlinePlaylistTag("10000000", "全部", "默认"))
+                    for (i in 0 until categories.length()) {
+                        val groupObj = categories.optJSONObject(i) ?: continue
+                        val groupName = groupObj.optString("categoryGroupName").trim()
+                        val items = groupObj.optJSONArray("items") ?: continue
+                        for (j in 0 until items.length()) {
+                            val item = items.optJSONObject(j) ?: continue
+                            val cid = item.optInt("categoryId").toString()
+                            var cname = item.optString("categoryName").trim()
+                            if (cname.isEmpty() || cid == "10000000" || cid == "0") continue
+                            // 处理 HTML 字符实体例如 R&#38;B
+                            cname = cname.replace("&#38;", "&").replace("&amp;", "&")
+                            if (list.none { it.id == cid }) {
+                                list.add(OnlinePlaylistTag(cid, cname, groupName))
+                            }
+                        }
+                    }
+                    if (list.size > 1) {
+                        dynamicTags = list
+                        return@withContext list
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // 忽略网络异常，降级到预设兜底
+        }
         PRESET_TAGS
     }
 
     override suspend fun getPlaylists(tagId: String, page: Int, pageSize: Int): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+        val normalizedTag = tagId.trim()
         val categoryId = when {
-            tagId.isEmpty() || tagId == "全部" || tagId == "10000000" -> 10000000
-            tagId.toIntOrNull() != null -> tagId.toInt()
-            else -> PRESET_TAGS.firstOrNull { it.name == tagId }?.id?.toIntOrNull() ?: 10000000
+            normalizedTag.isEmpty() || normalizedTag == "全部" || normalizedTag == "10000000" || normalizedTag == "0" -> 10000000
+            normalizedTag.toIntOrNull() != null -> normalizedTag.toInt()
+            // 常见别名友好兼容
+            normalizedTag == "华语" -> 165
+            normalizedTag == "欧美" -> 167
+            normalizedTag == "嘻哈" -> 153
+            normalizedTag == "说唱" -> 153
+            normalizedTag == "流行" -> 6
+            normalizedTag == "摇滚" -> 11
+            normalizedTag == "民谣" -> 28
+            normalizedTag == "电子" -> 24
+            normalizedTag == "ACG" -> 39
+            normalizedTag == "古风" -> 194
+            normalizedTag == "中国风" -> 145
+            normalizedTag == "影视原声" -> 133
+            else -> {
+                val allTags = dynamicTags ?: PRESET_TAGS
+                allTags.firstOrNull { it.name.equals(normalizedTag, ignoreCase = true) || it.id == normalizedTag }?.id?.toIntOrNull()
+                    ?: 10000000
+            }
         }
         val sin = (page - 1) * pageSize
         val ein = sin + pageSize - 1
@@ -850,13 +944,20 @@ class QQMusicSource(
                 val singerName = sObj.optString("Fsinger_name").ifEmpty { sObj.optString("singer_name") }
                 val pic = "https://y.gtimg.cn/music/photo_new/T001R300x300M000$singerMid.jpg"
 
+                val songCount = sObj.optInt("Fsinger_song_num", sObj.optInt("song_count", sObj.optInt("songNum", 0)))
+                val albumCount = sObj.optInt("Fsinger_album_num", sObj.optInt("album_count", sObj.optInt("albumNum", 0)))
+                val mvCount = sObj.optInt("Fsinger_mv_num", sObj.optInt("mv_count", sObj.optInt("mvNum", 0)))
+
                 if (singerMid.isNotEmpty() && singerName.isNotEmpty()) {
                     list.add(
                         com.rawsmusic.module.online.model.OnlineArtist(
                             id = singerMid,
                             platform = platform,
                             name = singerName,
-                            avatarUrl = pic
+                            avatarUrl = pic,
+                            songCount = songCount,
+                            albumCount = albumCount,
+                            mvCount = mvCount
                         )
                     )
                 }

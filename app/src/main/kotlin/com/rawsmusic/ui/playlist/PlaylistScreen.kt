@@ -1,5 +1,10 @@
 package com.rawsmusic.ui.playlist
 
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.widthIn
+
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -64,6 +69,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.zIndex
 import com.rawsmusic.core.ui.scene.LocalSceneChromeAlpha
+
+import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
+
+import top.yukonga.miuix.kmp.basic.Button as MiuixButton
+
+import top.yukonga.miuix.kmp.basic.ButtonDefaults as MiuixButtonDefaults
+
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+
+import top.yukonga.miuix.kmp.basic.TextField as MiuixTextField
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -93,6 +108,7 @@ import com.rawsmusic.core.ui.widget.virtuallist.LocalVirtualListCustomProvider
 import com.rawsmusic.core.ui.widget.virtuallist.VirtualListCustomProvider
 import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
@@ -150,6 +166,14 @@ fun PlaylistScreen(
             SongAttitudeRepository.refresh(context)
             PlaylistGroupStore.refresh(context)
             OnlinePlaylistFavoriteStore.refresh(context)
+
+            // 自愈检查：清理 song_attitude 表中已经不存在于 FAVORITES 歌单的孤儿在线喜欢记录
+            val favPlaylist = playlistStore.playlists.value.firstOrNull { it.isFavorites }
+            val validFavoriteKeys = favPlaylist?.songs?.map { it.key }?.toSet().orEmpty()
+            val orphanOnlineKeys = SongAttitudeRepository.onlineFavoriteKeys.value.filterNot { it in validFavoriteKeys }
+            if (orphanOnlineKeys.isNotEmpty()) {
+                SongAttitudeRepository.setOnlineFavorites(context, orphanOnlineKeys, false)
+            }
         }
     }
 
@@ -195,9 +219,8 @@ fun PlaylistScreen(
     val useTabletLayout = windowLayoutProfile.widthClass != com.rawsmusic.core.ui.scene.RawWindowWidthClass.Compact
 
     // 喜欢与踩伪歌单（列表展示仅按需提取轻量信息，不遍历全库歌曲生成完整内存实体）
-    val favoriteKeyCount = remember(playlists, onlineFavoriteKeys) {
-        val favPlaylistSongs = playlists.firstOrNull { it.isFavorites }?.songs?.size ?: 0
-        maxOf(favPlaylistSongs, (playlistStore.favoriteSongKeys() + onlineFavoriteKeys).size)
+    val favoriteKeyCount = remember(playlists) {
+        playlists.firstOrNull { it.isFavorites }?.songs?.size ?: 0
     }
     val favPlaylistEntity = remember(playlists) { playlists.firstOrNull { it.isFavorites } }
     val disPlaylistEntity = remember(playlists) { playlists.firstOrNull { it.id == DISLIKED_PLAYLIST_ID } }
@@ -508,7 +531,7 @@ fun PlaylistScreen(
                 val rowIndex = song.encodingFormat.removePrefix(PLAYLIST_VIRTUAL_ITEM_PREFIX).toIntOrNull() ?: index
                 when (virtualRows.getOrNull(rowIndex)) {
                     is PlaylistVirtualItem.LocalSectionHeader,
-                    is PlaylistVirtualItem.OnlineSectionHeader -> 44.dp
+                    is PlaylistVirtualItem.OnlineSectionHeader -> 50.dp
                     is PlaylistVirtualItem.AttitudeRow,
                     is PlaylistVirtualItem.LocalPlaylistRow,
                     is PlaylistVirtualItem.OnlinePlaylistRow -> 88.dp
@@ -535,23 +558,22 @@ fun PlaylistScreen(
                                     collapsedGroups = if (item.isCollapsed) collapsedGroups - "LOCAL" else collapsedGroups + "LOCAL"
                                 },
                                 actionContent = {
-                                    TextButton(
-                                        onClick = { importDialog = true },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = colors.primary.copy(alpha = 0.12f),
+                                        border = BorderStroke(0.6.dp, colors.primary.copy(alpha = 0.28f)),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .clickable { createDialog = true }
                                     ) {
-                                        Icon(painter = painterResource(R.drawable.ic_play_list_add_fill), contentDescription = null, tint = colors.primary, modifier = Modifier.size(14.dp))
-                                        Spacer(Modifier.width(2.dp))
-                                        Text("导入歌单", fontSize = 11.5.sp, color = colors.primary, fontWeight = FontWeight.Medium, fontFamily = appFontFamily())
-                                    }
-                                    TextButton(
-                                        onClick = { createDialog = true },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
-                                    ) {
-                                        Icon(Icons.Default.Add, contentDescription = null, tint = colors.primary, modifier = Modifier.size(14.dp))
-                                        Spacer(Modifier.width(2.dp))
-                                        Text("新建歌单", fontSize = 11.5.sp, color = colors.primary, fontWeight = FontWeight.Medium, fontFamily = appFontFamily())
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = null, tint = colors.primary, modifier = Modifier.size(13.dp))
+                                            Text("新建歌单", fontSize = 11.5.sp, color = colors.primary, fontWeight = FontWeight.SemiBold, fontFamily = appFontFamily())
+                                        }
                                     }
                                 }
                             )
@@ -836,6 +858,7 @@ fun PlaylistScreen(
                     selectedCategory = selectedPlaylistGroup,
                     onSelectCategory = { selectedPlaylistGroup = it },
                     onGroupLongClick = { grpName -> groupChrome.groupMenuTarget = grpName },
+                    onCreatePlaylist = { createDialog = true },
                     onCreateGroup = { groupChrome.createGroupDialog = true },
                     onManageGroups = { groupChrome.manageGroupsDialog = true },
                     modifier = Modifier
@@ -896,12 +919,16 @@ fun PlaylistScreen(
             onDismiss = { renameTarget = null },
             onConfirm = { newName ->
                 scope.launch {
-                    playlistStore.renamePlaylist(target.id, newName)
+                    val success = playlistStore.renamePlaylist(target.id, newName)
                     renameTarget = null
-                    AppNoticeBus.post(
-                        message = "已重命名歌单",
-                        icon = AppNoticeIcon.PLAYLIST,
-                    )
+                    if (success) {
+                        AppNoticeBus.post(
+                            message = "已重命名歌单为「$newName」",
+                            icon = AppNoticeIcon.PLAYLIST,
+                        )
+                    } else {
+                        AppNoticeBus.error("重命名歌单失败（名称已存在或无效）")
+                    }
                 }
             }
         )
@@ -983,6 +1010,7 @@ private fun PlaylistCategoryChipsBar(
     selectedCategory: String,
     onSelectCategory: (String) -> Unit,
     onGroupLongClick: (String) -> Unit,
+    onCreatePlaylist: () -> Unit,
     onCreateGroup: () -> Unit,
     onManageGroups: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1081,6 +1109,36 @@ private fun PlaylistCategoryChipsBar(
                     .background(colors.outline.copy(alpha = 0.20f))
             )
 
+            // 新建歌单快捷微按钮（吸顶固定常驻，点击必达）
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = colors.primary.copy(alpha = 0.16f),
+                border = BorderStroke(0.6.dp, colors.primary.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable { onCreatePlaylist() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = "新建歌单",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.primary,
+                        fontFamily = appFontFamily()
+                    )
+                }
+            }
+
             // 新建分组微按钮
             Surface(
                 shape = RoundedCornerShape(999.dp),
@@ -1165,13 +1223,15 @@ private fun PlaylistSectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onToggleCollapse() }
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(vertical = 4.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onToggleCollapse() }
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -1206,17 +1266,22 @@ private fun PlaylistSectionHeader(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             actionContent()
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = if (isCollapsed) "展开" else "折叠",
-                tint = colors.onSurface.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .size(20.dp)
-                    .rotate(rotationAngle)
-            )
+            IconButton(
+                onClick = onToggleCollapse,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (isCollapsed) "展开" else "折叠",
+                    tint = colors.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier
+                        .size(20.dp)
+                        .rotate(rotationAngle)
+                )
+            }
         }
     }
 }
@@ -1735,7 +1800,10 @@ private fun LocalPlaylistItemCard(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(colors.surface.copy(alpha = 0.45f))
-            .clickable(onClick = onClick)
+            .combinedClickable(
+            onClick = onClick,
+            onLongClick = { showMenu = true }
+        )
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2229,8 +2297,9 @@ private fun PlaylistEmptyView(
 }
 
 /**
- * 歌单名称输入弹窗 (新建 / 重命名)
+ * 歌单名称输入弹窗 (新建 / 重命名)，统一走 RawMiuixOverlayDialog 保证稳定弹出与全屏手势兼容
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistNameDialog(
     title: String,
@@ -2241,41 +2310,99 @@ private fun PlaylistNameDialog(
 ) {
     val colors = themeColors()
     var name by remember(initialName) { mutableStateOf(initialName) }
+    var dialogReady by remember { mutableStateOf(false) }
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
 
-    AlertDialog(
-        onDismissRequest = { if (!submitting) onDismiss() },
-        title = { Text(title, fontFamily = appFontFamily()) },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text(stringResource(R.string.playlist_name_hint), fontFamily = appFontFamily()) },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = colors.primary,
-                    cursorColor = colors.primary
+    LaunchedEffect(Unit) {
+        delay(120L)
+        dialogReady = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (!submitting && dialogReady) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = true,
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = { if (!submitting && dialogReady) onDismiss() }
                 )
-            )
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank() && !submitting,
-                onClick = { onConfirm(name.trim()) },
-                colors = ButtonDefaults.textButtonColors(contentColor = colors.primary)
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 380.dp)
+                    .clip(RoundedCornerShape(26.dp))
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
+                    ),
+                color = colors.surface,
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 10.dp
             ) {
-                Text(stringResource(R.string.playlist_confirm_action), fontFamily = appFontFamily())
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.playlist_cancel_action), fontFamily = appFontFamily())
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp)
+                ) {
+                    Text(
+                        text = title,
+                        color = colors.onSurface,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    MiuixTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = stringResource(R.string.playlist_name_hint),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        MiuixTextButton(
+                            text = stringResource(R.string.playlist_cancel_action),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f),
+                        )
+                        MiuixButton(
+                            onClick = { onConfirm(name.trim()) },
+                            enabled = name.isNotBlank() && !submitting,
+                            colors = MiuixButtonDefaults.buttonColorsPrimary(),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.playlist_confirm_action),
+                                fontFamily = appFontFamily(),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 /**
- * 通用确认弹窗 (删除 / 清空踩)
+ * 通用确认弹窗 (删除 / 清空踩)，基于独立系统 Window 确保必定响应且防误触穿透
  */
 @Composable
 private fun PlaylistConfirmDialog(
@@ -2285,24 +2412,96 @@ private fun PlaylistConfirmDialog(
     onConfirm: () -> Unit,
 ) {
     val colors = themeColors()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title, fontFamily = appFontFamily()) },
-        text = { Text(message, fontFamily = appFontFamily()) },
-        confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFEF4444))
+    var dialogReady by remember { mutableStateOf(false) }
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
+
+    LaunchedEffect(Unit) {
+        delay(120L)
+        dialogReady = true
+    }
+
+    Dialog(
+        onDismissRequest = { if (dialogReady) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = true,
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.42f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = { if (dialogReady) onDismiss() }
+                )
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 380.dp)
+                    .clip(RoundedCornerShape(26.dp))
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {}
+                    ),
+                color = colors.surface,
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 10.dp
             ) {
-                Text(stringResource(R.string.playlist_confirm_action), fontFamily = appFontFamily())
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.playlist_cancel_action), fontFamily = appFontFamily())
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp)
+                ) {
+                    Text(
+                        text = title,
+                        color = colors.onSurface,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    Text(
+                        text = message,
+                        color = colors.onSurface.copy(alpha = 0.75f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        MiuixTextButton(
+                            text = stringResource(R.string.playlist_cancel_action),
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f),
+                        )
+                        MiuixButton(
+                            onClick = onConfirm,
+                            colors = MiuixButtonDefaults.buttonColors(
+                                color = Color(0xFFEF4444)
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.playlist_confirm_action),
+                                fontFamily = appFontFamily(),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 private const val PLAYLIST_VIRTUAL_ITEM_PREFIX = "raws_playlist_virtual:"

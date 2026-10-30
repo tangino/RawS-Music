@@ -166,19 +166,37 @@ class PlaylistStore private constructor(private val context: Context) {
         _playlists.value.firstOrNull { it.isFavorites }?.songs?.mapTo(mutableSetOf()) { it.key }
             ?: emptySet()
 
-    fun isFavorite(song: AudioFile): Boolean = song.playlistIdentityKey() in favoriteSongKeys()
+    fun isFavorite(song: AudioFile): Boolean {
+        val favorite = _playlists.value.firstOrNull { it.isFavorites } ?: return false
+        return favoriteKeysMatching(favorite, song).isNotEmpty()
+    }
 
     suspend fun toggleFavorite(song: AudioFile): Boolean = withDatabase {
         mutationMutex.withLock {
             val favorite = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock false
-            val key = song.playlistIdentityKey()
-            val removing = favorite.songs.any { it.key == key }
+            // 收藏行可能来自旧曲库路径/旧标签：用户明明在红心歌单里看到它，重新扫描后
+            // playlistIdentityKey() 却已经变了。只按当前 key 删除会命中不到任何行，
+            // 表现就是「点取消喜欢完全没反应」。这里先按 key/路径找，找不到再按元数据兜底。
+            val matchedKeys = favoriteKeysMatching(favorite, song)
+            val removing = matchedKeys.isNotEmpty()
             val now = System.currentTimeMillis()
-            val songs = if (removing) favorite.songs.filterNot { it.key == key }
-                else favorite.songs + song.toUserPlaylistSong()
+            // 同一首歌可能存在“旧低音质文件”和“新高音质文件”两行：加入新高音质版本时
+            // 先清掉同歌名/同歌手的旧版本，避免红心歌单里永远残留一条旧文件。
+            val duplicateKeys = if (removing) {
+                emptySet()
+            } else {
+                favorite.songs.filter { sameLooseSongIdentity(it, song) }
+                    .mapTo(mutableSetOf()) { it.key }
+            }
+            val songs = if (removing) favorite.songs.filterNot { it.key in matchedKeys }
+                else favorite.songs.filterNot { it.key in duplicateKeys } + song.toUserPlaylistSong()
             MusicDatabase.getInstance(context).withTransaction {
-                if (removing) dao.deleteSong(favorite.id, key)
-                else dao.insertSongs(listOf(songs.last().toEntity(favorite.id, favorite.songs.size)))
+                if (removing) {
+                    dao.deleteSongs(favorite.id, matchedKeys.toList())
+                } else {
+                    if (duplicateKeys.isNotEmpty()) dao.deleteSongs(favorite.id, duplicateKeys.toList())
+                    dao.insertSongs(listOf(songs.last().toEntity(favorite.id, favorite.songs.size)))
+                }
                 dao.touchPlaylist(favorite.id, now)
             }
             _playlists.value = _playlists.value.map {
@@ -186,6 +204,90 @@ class PlaylistStore private constructor(private val context: Context) {
             }
             !removing
         }
+    }
+
+    /**
+     * 从红心歌单按“当前歌曲”删除，内部用 path/id/标题+歌手+时长兜底。
+     * 返回实际删掉的存储 key，供在线 attitude 同步清理。
+     */
+    suspend fun removeFavoriteSongs(songs: List<AudioFile>): Set<String> = withDatabase {
+        mutationMutex.withLock {
+            val favorite = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock emptySet()
+            val matchedKeys = songs
+                .flatMap { song ->
+                    favoriteKeysMatching(favorite, song) + favorite.songs
+                        .filter { sameLooseSongIdentity(it, song) }
+                        .map { it.key }
+                }
+                .toSet()
+            if (matchedKeys.isEmpty()) return@withLock emptySet()
+
+            val now = System.currentTimeMillis()
+            val remaining = favorite.songs.filterNot { it.key in matchedKeys }
+            MusicDatabase.getInstance(context).withTransaction {
+                dao.deleteSongs(favorite.id, matchedKeys.toList())
+                dao.touchPlaylist(favorite.id, now)
+            }
+            _playlists.value = _playlists.value.map {
+                if (it.id == favorite.id) it.copy(songs = remaining, updatedAt = now) else it
+            }
+            matchedKeys
+        }
+    }
+
+    private fun favoriteKeysMatching(favorite: UserPlaylist, song: AudioFile): Set<String> {
+        val exact = favorite.songs
+            .filter {
+                it.key == song.playlistIdentityKey() ||
+                    sameFavoritePath(it.path, song.path) ||
+                    (it.id != 0L && it.id == song.id)
+            }
+            .mapTo(mutableSetOf()) { it.key }
+        if (exact.isNotEmpty()) return exact
+
+        val meta = favorite.songs
+            .filter { stored ->
+                if (!stored.title.equals(song.title, ignoreCase = true) ||
+                    !stored.artist.equals(song.artist, ignoreCase = true)
+                ) {
+                    return@filter false
+                }
+                // 同名同歌手的多个版本靠时长区分；允许 2 秒误差覆盖不同源的取整差异。
+                if (stored.duration <= 0L || song.duration <= 0L) return@filter true
+                kotlin.math.abs(stored.duration - song.duration) <= 2_000L
+            }
+            .mapTo(mutableSetOf()) { it.key }
+        if (meta.isNotEmpty()) return meta
+
+        // 最后兜底：云端恢复/旧版本写入的孤儿行可能标题带 (Live)、版本后缀或时长完全
+        // 不同。删除红心收藏是用户明确动作，这时按“核心歌名 + 歌手包含关系”清理，
+        // 否则会出现“其他歌都能删，只有这一首怎么点都没反应”。
+        return favorite.songs
+            .filter { sameLooseSongIdentity(it, song) }
+            .mapTo(mutableSetOf()) { it.key }
+    }
+
+    private fun sameLooseSongIdentity(stored: UserPlaylistSong, song: AudioFile): Boolean {
+        val storedTitle = SongMatcher.normalizeForCompare(
+            SongMatcher.extractCoreTitle(stored.title, stored.artist)
+        )
+        val songTitle = SongMatcher.normalizeForCompare(
+            SongMatcher.extractCoreTitle(song.title, song.artist)
+        )
+        if (storedTitle.isBlank() || songTitle.isBlank() || storedTitle != songTitle) return false
+
+        val storedArtist = SongMatcher.normalizeForCompare(stored.artist)
+        val songArtist = SongMatcher.normalizeForCompare(song.artist)
+        return storedArtist.isBlank() || songArtist.isBlank() ||
+            storedArtist == songArtist ||
+            storedArtist.contains(songArtist) ||
+            songArtist.contains(storedArtist)
+    }
+
+    private fun sameFavoritePath(storedPath: String, songPath: String): Boolean {
+        if (storedPath.isBlank() || songPath.isBlank()) return false
+        return storedPath.replace('\\', '/')
+            .equals(songPath.replace('\\', '/'), ignoreCase = true)
     }
 
     suspend fun createPlaylist(name: String): UserPlaylist? = withDatabase {
@@ -289,6 +391,27 @@ class PlaylistStore private constructor(private val context: Context) {
         }
     }
 
+    suspend fun removeSongsFromPlaylist(playlistId: String, songKeys: Collection<String>): Int = withDatabase {
+        mutationMutex.withLock {
+            val playlist = _playlists.value.firstOrNull { it.id == playlistId } ?: return@withLock 0
+            val keySet = songKeys.toSet()
+            val remaining = playlist.songs.filterNot { it.key in keySet }
+            val removedCount = playlist.songs.size - remaining.size
+            if (removedCount == 0) return@withLock 0
+            val now = System.currentTimeMillis()
+            dao.deleteSongs(playlistId, keySet.toList())
+            dao.touchPlaylist(playlistId, now)
+            _playlists.value = _playlists.value.map { current ->
+                if (current.id == playlistId) {
+                    current.copy(songs = remaining, updatedAt = now)
+                } else {
+                    current
+                }
+            }
+            removedCount
+        }
+    }
+
     /** Resolves stored identities against the live library so edited tags and artwork stay current. */
     fun resolveSongs(playlist: UserPlaylist?, librarySongs: List<AudioFile>): List<AudioFile> {
         playlist ?: return emptyList()
@@ -339,26 +462,54 @@ class PlaylistStore private constructor(private val context: Context) {
         return playlist.songs.mapNotNull { stored ->
             if (stored.isOnlineEntry()) {
                 val cacheKey = stored.key
+                val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
+                val cleanedArtPath = stored.albumArtPath.takeIf {
+                    it.startsWith("http://", true) || it.startsWith("https://", true)
+                }.orEmpty().ifBlank { cachedCover }
+
+                // 若当前在线条目仍无有效网络封面，触发后台异步寻源自愈
+                if (cleanedArtPath.isBlank() && stored.title.isNotBlank()) {
+                    artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                }
+
+                fun buildOnlineAudio(): AudioFile {
+                    return stored.toAudioFile().let { song ->
+                        if (song.albumArtPath.isBlank() && cleanedArtPath.isNotBlank()) {
+                            song.copy(albumArtPath = cleanedArtPath)
+                        } else {
+                            song
+                        }
+                    }
+                }
+
+                fun inheritCoverIfNeeded(audio: AudioFile): AudioFile {
+                    return if (audio.albumArtPath.isBlank() && cleanedArtPath.isNotBlank()) {
+                        audio.copy(albumArtPath = cleanedArtPath)
+                    } else {
+                        audio
+                    }
+                }
+
                 val cached = onlineToLocalMatchCache.get(cacheKey)
                 if (cached != null) {
                     if (cached.path.startsWith("online://")) {
-                        // 负缓存命中：此前已确认无本地匹配，直接返回在线音频，0ms 秒开
-                        cached
+                        // 负缓存命中：此前已确认无本地匹配，直接返回在线音频，0ms 秒开（补齐最新封面）
+                        inheritCoverIfNeeded(cached)
                     } else if (File(cached.path).exists()) {
-                        // 正缓存命中：本地匹配文件依然存在，直接返回
-                        cached
+                        // 正缓存命中：本地匹配文件依然存在，直接返回（若本地无封面则继承在线封面）
+                        inheritCoverIfNeeded(cached)
                     } else {
                         // 文件已被移动或删除，重新尝试匹配
-                        val onlineAudioFile = stored.toAudioFile()
+                        val onlineAudioFile = buildOnlineAudio()
                         val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
-                        val result = matchedLocal ?: onlineAudioFile
+                        val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
                         onlineToLocalMatchCache.put(cacheKey, result)
                         result
                     }
                 } else {
-                    val onlineAudioFile = stored.toAudioFile()
+                    val onlineAudioFile = buildOnlineAudio()
                     val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
-                    val result = matchedLocal ?: onlineAudioFile
+                    val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
                     // 无论命中与否均写入缓存（未命中则缓存 onlineAudioFile 本身作为负缓存），阻断重复扫描
                     onlineToLocalMatchCache.put(cacheKey, result)
                     result
@@ -369,7 +520,18 @@ class PlaylistStore private constructor(private val context: Context) {
                     ?: stored.toAudioFile().takeIf { File(it.path).exists() }
                     ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
                 if (matched != null) {
-                    matched
+                    // 若本地物理文件存在但无内嵌封面，尝试利用在线缓存或在线寻源补齐封面
+                    if (matched.albumArtPath.isBlank() && stored.title.isNotBlank()) {
+                        val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
+                        if (cachedCover.isNotBlank()) {
+                            matched.copy(albumArtPath = cachedCover)
+                        } else {
+                            artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                            matched
+                        }
+                    } else {
+                        matched
+                    }
                 } else {
                     // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频）：
                     // 具备混合歌单特征：不丢弃歌曲条目，平滑降级为可在线寻源试听的网络虚拟歌曲（保留完整元数据）
