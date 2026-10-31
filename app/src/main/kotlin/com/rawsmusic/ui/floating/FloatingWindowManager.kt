@@ -595,10 +595,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val (baseCapsuleW, baseCapsuleH) = baseCapsuleSizeDp()
         val baseW = if (isCollapsed) baseCapsuleH else baseCapsuleW
         val baseH = baseCapsuleH
+        val curScale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
         val expectedWidth = if (expectedWidthPx > 0) expectedWidthPx
-        else (baseW * userScaleFactor * density).toInt()
+        else (baseW * curScale * density).roundToInt()
         val expectedHeight = if (expectedHeightPx > 0) expectedHeightPx
-        else (baseH * userScaleFactor * density).toInt()
+        else (baseH * curScale * density).roundToInt()
 
         val vWidth = targetView?.width?.takeIf { it > 0 }
             ?: capsuleContainer?.width?.takeIf { it > 0 }
@@ -883,7 +884,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
         }
     }
 
-    private fun applyAdaptiveDimensions(root: View) {
+    private fun applyAdaptiveDimensions(root: View, updateLayout: Boolean = true) {
         val tier = getDeviceTier()
         val density = context.resources.displayMetrics.density
         val scale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
@@ -1051,7 +1052,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             wp.width = capsuleW + padPx
             wp.height = capsuleH + padPx
             clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
-            if (root.isAttachedToWindow) {
+            if (updateLayout && root.isAttachedToWindow) {
                 try {
                     windowManager.updateViewLayout(root, wp)
                 } catch (_: Exception) {}
@@ -1235,24 +1236,24 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val padPx = (2 * density).toInt() * 2
         if (isCollapsed) {
             collapsedScaleFactor = newScale
-            val newH = baseH * density * newScale
+            val newH = (baseH * density * newScale).roundToInt()
             val newW = newH
-            applyAdaptiveDimensions(view)
-            params.x = (resizeStartCenterX - padPx / 2f - newW / 2f).toInt()
-            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).toInt()
-            params.width = (newW + padPx).toInt()
-            params.height = (newH + padPx).toInt()
-            clampCoordinates(params, view, newW.toInt(), newH.toInt())
+            applyAdaptiveDimensions(view, updateLayout = false)
+            params.x = (resizeStartCenterX - padPx / 2f - newW / 2f).roundToInt()
+            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).roundToInt()
+            params.width = newW + padPx
+            params.height = newH + padPx
+            clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
         } else {
             userScaleFactor = newScale
-            val newW = baseW * density * newScale
-            val newH = baseH * density * newScale
-            applyAdaptiveDimensions(view)
-            params.x = (resizeStartCenterX - padPx / 2f - newH / 2f).toInt()
-            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).toInt()
-            params.width = (newW + padPx).toInt()
-            params.height = (newH + padPx).toInt()
-            clampCoordinates(params, view, newW.toInt(), newH.toInt())
+            val newW = (baseW * density * newScale).roundToInt()
+            val newH = (baseH * density * newScale).roundToInt()
+            applyAdaptiveDimensions(view, updateLayout = false)
+            params.x = (resizeStartCenterX - padPx / 2f - newW / 2f).roundToInt()
+            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).roundToInt()
+            params.width = newW + padPx
+            params.height = newH + padPx
+            clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
         }
 
         try {
@@ -1283,10 +1284,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
                         resizeStartRawX = event.rawX
                         resizeStartRawY = event.rawY
                         val curScale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
+                        val curW = (if (isCollapsed) baseH else baseW) * density * curScale
                         val curH = baseH * density * curScale
                         val padPx = (2 * density).toInt() * 2
                         windowParams?.let { p ->
-                            resizeStartCenterX = p.x + padPx / 2f + curH / 2f
+                            resizeStartCenterX = p.x + padPx / 2f + curW / 2f
                             resizeStartCenterY = p.y + padPx / 2f + curH / 2f
                         }
                         handle.view.animate().scaleX(1.35f).scaleY(1.35f).setDuration(90).start()
@@ -1580,22 +1582,44 @@ class FloatingWindowManager private constructor(private val context: Context) {
             coverSize = startCoverVisualPx,
         )
 
-        // 圆心锚点（屏幕坐标），必须在改 padding/layout 之前取
-        val anchorCenterX = anchorLocation[0] + cover.width * startScale / 2f
-        val anchorCenterY = anchorLocation[1] + cover.height * startScale / 2f
+        val rootPadL = root.paddingLeft
+        val rootPadT = root.paddingTop
+        val wp = windowParams ?: return
 
-        // 统一使用展开态内边距 + 固定封面 layout；视觉由 scale/translation 无缝接续
-        if (capsule.paddingLeft != expandedPadL || capsule.paddingTop != expandedPadT ||
-            capsule.paddingRight != expandedPadR || capsule.paddingBottom != expandedPadB
-        ) {
-            capsule.setPadding(expandedPadL, expandedPadT, expandedPadR, expandedPadB)
-        }
+        // 统一使用展开态横向内边距，垂直内边距过渡期间设为 0 以确保封面完全垂直居中于胶囊
+        capsule.setPadding(expandedPadL, 0, expandedPadR, 0)
+
         val coverParams = cover.layoutParams
         if (coverParams.width != coverLayoutSize || coverParams.height != coverLayoutSize) {
             coverParams.width = coverLayoutSize
             coverParams.height = coverLayoutSize
             cover.layoutParams = coverParams
         }
+        cover.pivotX = coverLayoutSize / 2f
+        cover.pivotY = coverLayoutSize / 2f
+
+        // 严格基于当前真实窗口坐标反推屏幕圆心锚点，避开 View 未完成 layout 或旋转变换的干扰
+        val anchorCenterX: Float
+        val anchorCenterY: Float
+        if (capsule.width > 0 && capsule.height > 0) {
+            if (collapsed) {
+                // 当前是展开态，即将折叠：封面位于胶囊左侧
+                val oldPadL = capsule.paddingLeft
+                val oldCoverLayout = cover.width.takeIf { it > 0 } ?: expanded.coverSize
+                anchorCenterX = wp.x + rootPadL + oldPadL + oldCoverLayout / 2f + cover.translationX
+                anchorCenterY = wp.y + rootPadT + capsule.height / 2f
+            } else {
+                // 当前是折叠态，即将展开：正圆悬浮球中心即是封面圆心
+                anchorCenterX = wp.x + rootPadL + capsule.width / 2f
+                anchorCenterY = wp.y + rootPadT + capsule.height / 2f
+            }
+        } else {
+            val anchorLocation = IntArray(2)
+            cover.getLocationOnScreen(anchorLocation)
+            anchorCenterX = anchorLocation[0] + cover.width * startScale / 2f
+            anchorCenterY = anchorLocation[1] + cover.height * startScale / 2f
+        }
+
         val startTranslationX = oldCoverCenterX - coverLayoutCenterX
         cover.scaleX = startCoverVisualPx.toFloat() / coverLayoutSize
         cover.scaleY = cover.scaleX
@@ -1700,17 +1724,41 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 override fun onAnimationEnd(animation: Animator) {
                     collapseTransitionAnimator = null
                     if (cancelled) return
-                    // 先复位浮点变换，再对齐正式布局：两者视觉等价，不会有跳变
                     cover.scaleX = 1f
                     cover.scaleY = 1f
                     cover.translationX = 0f
-                    applyAdaptiveDimensions(root)
+                    cover.pivotX = cover.width / 2f
+                    cover.pivotY = cover.height / 2f
+                    applyAdaptiveDimensions(root, updateLayout = false)
                     applyTheme(root)
                     rightViews.forEach { view ->
                         view.visibility = if (collapsed) View.GONE else View.VISIBLE
                         view.alpha = 1f
                     }
                     windowParams?.let { wp ->
+                        val finalPadL = root.paddingLeft
+                        val finalPadT = root.paddingTop
+                        val (finalBaseW, finalBaseH) = baseCapsuleSizeDp(tier)
+                        val finalScale = if (collapsed) collapsedScaleFactor else userScaleFactor
+                        val finalH = (finalBaseH * finalScale * density).roundToInt()
+                        val finalW = if (collapsed) finalH else (finalBaseW * finalScale * density).roundToInt()
+                        wp.width = finalW + root.paddingLeft + root.paddingRight
+                        wp.height = finalH + root.paddingTop + root.paddingBottom
+                        if (collapsed) {
+                            wp.x = (anchorCenterX - finalPadL - finalH / 2f).roundToInt()
+                            wp.y = (anchorCenterY - finalPadT - finalH / 2f).roundToInt()
+                        } else {
+                            val finalPadStart = (padStartDp * finalScale * density).roundToInt()
+                            val finalCoverSize = (coverDp * finalScale * density).roundToInt()
+                            wp.x = (anchorCenterX - finalPadL - finalPadStart - finalCoverSize / 2f).roundToInt()
+                            wp.y = (anchorCenterY - finalPadT - finalH / 2f).roundToInt()
+                        }
+                        clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
+                        if (root.isAttachedToWindow) {
+                            try {
+                                windowManager.updateViewLayout(root, wp)
+                            } catch (_: Exception) {}
+                        }
                         AppPreferences.FloatingWindow.posX = wp.x
                         AppPreferences.FloatingWindow.posY = wp.y
                     }
