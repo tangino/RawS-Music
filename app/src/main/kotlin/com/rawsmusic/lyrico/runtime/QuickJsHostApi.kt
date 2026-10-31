@@ -656,7 +656,7 @@ class QuickJsHostApi(
 
 data class HostAppInfo(
     val name: String = "Lyrico",
-    val packageName: String = "com.rawsmusic",
+    val packageName: String = "com.rawsmusic.extension",
     val versionName: String = "0.0.0",
     val versionCode: Long = 0,
     val buildType: String = "unknown",

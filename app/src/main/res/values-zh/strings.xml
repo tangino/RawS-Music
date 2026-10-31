@@ -82,7 +82,7 @@
     <string name="lyrico_preview_cancel">取消</string>
     <string name="lyrico_preview_apply">应用</string>
     <string name="lyrico_preview_cover_only">仅写入专辑图</string>
-    <string name="app_name">RawSMusic</string>
+    <string name="app_name">玹音</string>
     <string name="songs">歌曲</string>
     <string name="albums">专辑</string>
     <string name="artists">歌手</string>
@@ -229,7 +229,7 @@
     <string name="settings_webdav_backup_title">备份与恢复</string>
     <string name="settings_webdav_backup_summary">通过本地文件或 WebDAV 导出、恢复设置与用户数据</string>
     <string name="settings_webdav_backup_keywords">备份 恢复 云同步 backup restore</string>
-    <string name="settings_about_raws_music_title">关于 RawS Music</string>
+    <string name="settings_about_raws_music_title">关于 玹音</string>
     <string name="settings_about_raws_music_summary">版本、核心功能、项目主页与开源组件</string>
     <string name="settings_about_keywords">关于 版本 项目 开源 about version</string>
     <string name="settings_scan_settings_title">扫描与媒体库</string>
@@ -1155,13 +1155,13 @@
     <string name="settings_play_count_summary">达到统计阈值后计入歌曲播放次数</string>
     <string name="settings_play_count_threshold_title">播放次数统计阈值</string>
     <string name="settings_play_count_threshold_summary">播放超过此比例后才计入一次播放</string>
-    <string name="widget_name">RawS Music 播放器</string>
+    <string name="widget_name">玹音 播放器</string>
     <string name="widget_description">在桌面显示专辑图、歌曲信息与播放控制</string>
-    <string name="widget_compact_name">RawS Music 播放器 2×2</string>
+    <string name="widget_compact_name">玹音 播放器 2×2</string>
     <string name="widget_compact_description">紧凑的 2×2 专辑图播放器</string>
-    <string name="widget_flow_name">RawS Music 流光歌词 4×2</string>
+    <string name="widget_flow_name">玹音 流光歌词 4×2</string>
     <string name="widget_flow_description">显示动态流光、歌词动画、专辑图与紧凑播放控制</string>
-    <string name="widget_nothing_playing">RawS Music</string>
+    <string name="widget_nothing_playing">玹音</string>
     <string name="widget_unknown_artist">未知艺术家</string>
     <string name="widget_tap_to_open">点击打开播放器</string>
     <string name="widget_open_player">打开播放器</string>
@@ -1608,7 +1608,7 @@
     <string name="desktop_lyric_opacity">歌词透明度</string>
     <string name="desktop_lyric_reset_position">重置歌词位置</string>
     <string name="desktop_lyric_reset_position_desc">将桌面歌词移回默认位置。</string>
-    <string name="desktop_lyric_waiting">RawS Music</string>
+    <string name="desktop_lyric_waiting">玹音</string>
     <string name="desktop_lyric_previous">上一首</string>
     <string name="desktop_lyric_play_pause">播放或暂停</string>
     <string name="desktop_lyric_next">下一首</string>

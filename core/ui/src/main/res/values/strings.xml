@@ -637,7 +637,7 @@
     <string name="playlist_action_import">Import playlist</string>
     <string name="songs_locate_now_playing">Locate currently playing song</string>
     <string name="about_title">关于</string>
-    <string name="about_app_name">RawS Music</string>
+    <string name="about_app_name">玹音</string>
     <string name="about_version_format">v%1$s</string>
     <string name="about_tagline">本地音乐播放器</string>
     <string name="about_project_section">项目</string>

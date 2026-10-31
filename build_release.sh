@@ -250,11 +250,28 @@ fi
 
 # ---------------------------------------------------------------- 产物
 
-# 不硬编码 APK 文件名（上游可能改名），取该变体目录下最新的 .apk。
+# 提取应用中文名与版本号，将产物重命名为「名称-版本号.apk」
+APP_NAME="玹音"
+VERSION_NAME=$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/app/build.gradle.kts" | head -n 1)
+if [ -z "$VERSION_NAME" ]; then
+    VERSION_NAME="release"
+fi
+TARGET_APK_NAME="${APP_NAME}-${VERSION_NAME}.apk"
+
+# 取该变体目录下最新的 .apk
 APK_DIR="app/build/outputs/apk/$VARIANT"
 APK=""
 if [ -d "$APK_DIR" ]; then
     APK=$(ls -t "$APK_DIR"/*.apk 2>/dev/null | head -n 1 || true)
+fi
+
+# 重命名为「名称-版本号.apk」
+if [ -n "$APK" ]; then
+    TARGET_APK_PATH="$APK_DIR/$TARGET_APK_NAME"
+    if [ "$APK" != "$TARGET_APK_PATH" ]; then
+        mv -f "$APK" "$TARGET_APK_PATH"
+        APK="$TARGET_APK_PATH"
+    fi
 fi
 
 echo

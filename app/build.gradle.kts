@@ -11,7 +11,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.rawsmusic"
+        applicationId = "com.rawsmusic.extension"
         minSdk = 24
         targetSdk = 37
         versionCode = 115

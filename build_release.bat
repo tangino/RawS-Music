@@ -168,9 +168,27 @@ if not "%STATUS%"=="0" (
 )
 
 rem -------------------------------------------------------------------- 产物
-rem 不硬编码 APK 文件名（上游可能改名），取该变体目录下最新的 .apk。
+set "APP_NAME=玹音"
+set "VERSION_NAME="
+for /f "tokens=2 delims=^"" %%v in ('findstr /i "versionName" "app\build.gradle.kts" 2^>nul') do (
+    if not defined VERSION_NAME set "VERSION_NAME=%%v"
+)
+if not defined VERSION_NAME set "VERSION_NAME=release"
+set "TARGET_APK_NAME=%APP_NAME%-%VERSION_NAME%.apk"
+
+rem 取该变体目录下最新的 .apk。
 set "APK="
 for /f "delims=" %%f in ('dir /b /o-d /s "app\build\outputs\apk\%VARIANT%\*.apk" 2^>nul') do if not defined APK set "APK=%%f"
+
+rem 重命名为「名称-版本号.apk」
+if defined APK (
+    set "TARGET_APK_PATH=%SCRIPT_DIR%\app\build\outputs\apk\%VARIANT%\%TARGET_APK_NAME%"
+    if /i not "!APK!"=="!TARGET_APK_PATH!" (
+        if exist "!TARGET_APK_PATH!" del /f /q "!TARGET_APK_PATH!" 2>nul
+        ren "!APK!" "%TARGET_APK_NAME%"
+        if exist "!TARGET_APK_PATH!" set "APK=!TARGET_APK_PATH!"
+    )
+)
 
 echo.
 echo ============================================================

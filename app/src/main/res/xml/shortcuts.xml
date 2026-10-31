@@ -8,7 +8,7 @@
         android:shortcutLongLabel="@string/shortcut_play_long">
         <intent
             android:action="com.rawsmusic.shortcut.PLAY"
-            android:targetPackage="com.rawsmusic"
+            android:targetPackage="com.rawsmusic.extension"
             android:targetClass="com.rawsmusic.MainActivity" />
     </shortcut>
 
@@ -20,7 +20,7 @@
         android:shortcutLongLabel="@string/shortcut_search_long">
         <intent
             android:action="com.rawsmusic.shortcut.SEARCH"
-            android:targetPackage="com.rawsmusic"
+            android:targetPackage="com.rawsmusic.extension"
             android:targetClass="com.rawsmusic.MainActivity" />
     </shortcut>
 
@@ -32,7 +32,7 @@
         android:shortcutLongLabel="@string/shortcut_shuffle_long">
         <intent
             android:action="com.rawsmusic.shortcut.SHUFFLE"
-            android:targetPackage="com.rawsmusic"
+            android:targetPackage="com.rawsmusic.extension"
             android:targetClass="com.rawsmusic.MainActivity" />
     </shortcut>
 </shortcuts>

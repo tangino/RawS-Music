@@ -42,7 +42,7 @@ object LyricGetterBridge {
             val values = android.content.ContentValues().apply {
                 put("lyric", text)
                 put("translation", translation)
-                put("package", "com.rawsmusic")
+                put("package", context.packageName)
             }
             context.contentResolver.update(uri, values, null, null)
         } catch (e: Exception) {
@@ -57,7 +57,7 @@ object LyricGetterBridge {
             val uri = Uri.parse("content://$AUTHORITY/$PATH_STATE")
             val values = android.content.ContentValues().apply {
                 put("playing", if (isPlaying) 1 else 0)
-                put("package", "com.rawsmusic")
+                put("package", context.packageName)
             }
             context.contentResolver.update(uri, values, null, null)
         } catch (_: Exception) {
@@ -87,7 +87,7 @@ object LyricGetterBridge {
             val intent = Intent("com.mirai.lyricgetter.action.UPDATE_LYRIC").apply {
                 putExtra("lyric", text)
                 putExtra("translation", translation)
-                putExtra("package", "com.rawsmusic")
+                putExtra("package", context.packageName)
                 setPackage("com.mirai.lyricgetter")
             }
             context.sendBroadcast(intent)
@@ -98,7 +98,7 @@ object LyricGetterBridge {
         try {
             val intent = Intent("com.mirai.lyricgetter.action.UPDATE_STATE").apply {
                 putExtra("playing", isPlaying)
-                putExtra("package", "com.rawsmusic")
+                putExtra("package", context.packageName)
                 setPackage("com.mirai.lyricgetter")
             }
             context.sendBroadcast(intent)
