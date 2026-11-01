@@ -483,7 +483,10 @@ class PlaylistStore private constructor(private val context: Context) {
                 }
 
                 fun inheritCoverIfNeeded(audio: AudioFile): AudioFile {
-                    return if (audio.albumArtPath.isBlank() && cleanedArtPath.isNotBlank()) {
+                    // 规则：如果匹配到本地歌曲，本地歌曲有封面优先使用本地；无封面才使用网络封面
+                    val hasLocalCover = audio.coverKey.isNotBlank() ||
+                        (audio.albumArtPath.isNotBlank() && !audio.albumArtPath.startsWith("http://", true) && !audio.albumArtPath.startsWith("https://", true))
+                    return if (!hasLocalCover && cleanedArtPath.isNotBlank()) {
                         audio.copy(albumArtPath = cleanedArtPath)
                     } else {
                         audio
@@ -521,7 +524,9 @@ class PlaylistStore private constructor(private val context: Context) {
                     ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
                 if (matched != null) {
                     // 若本地物理文件存在但无内嵌封面，尝试利用在线缓存或在线寻源补齐封面
-                    if (matched.albumArtPath.isBlank() && stored.title.isNotBlank()) {
+                    val hasLocalCover = matched.coverKey.isNotBlank() ||
+                        (matched.albumArtPath.isNotBlank() && !matched.albumArtPath.startsWith("http://", true) && !matched.albumArtPath.startsWith("https://", true))
+                    if (!hasLocalCover && stored.title.isNotBlank()) {
                         val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                         if (cachedCover.isNotBlank()) {
                             matched.copy(albumArtPath = cachedCover)

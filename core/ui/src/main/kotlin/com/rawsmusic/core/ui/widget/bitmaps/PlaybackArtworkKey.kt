@@ -13,29 +13,39 @@ import com.rawsmusic.core.common.model.resolveAudioFirstArtworkKey
  * mixing albumArtPath/content-uri keys with audio-file keys.
  */
 fun AudioFile?.resolvePlaybackArtworkKey(fallback: String? = null): String? {
-    val song = this
-    if (song != null) {
-        val rawExternal = song.albumArtPath.trim().ifBlank { fallback?.trim().orEmpty() }
-        val external = if (RemoteArtworkDownloader.isPlaceholderUrl(rawExternal)) "" else rawExternal
-        if (external.startsWith("http://", ignoreCase = true) || external.startsWith("https://", ignoreCase = true)) {
-            return if (external.startsWith("http://", ignoreCase = true)) {
-                "https://" + external.substring(7)
-            } else {
-                external
-            }
+    val song = this ?: return fallback?.takeIf { it.isNotBlank() && !RemoteArtworkDownloader.isPlaceholderUrl(it) }
+
+    val isLocalSource = song.path.isFileBackedArtworkSource()
+    val fileKey = song.fileArtworkKeyOrNull()
+
+    // 规则：如果匹配到本地歌曲，或者歌曲本身是通过本地添加进歌单的，如果本地歌曲有封面，优先使用本地封面
+    if (isLocalSource && !fileKey.isNullOrBlank()) {
+        return fileKey
+    }
+
+    // 本地无封面，或非本地音源：检查是否存在有效的网络封面
+    val rawExternal = song.albumArtPath.trim().ifBlank { fallback?.trim().orEmpty() }
+    val external = if (RemoteArtworkDownloader.isPlaceholderUrl(rawExternal)) "" else rawExternal
+    if (external.startsWith("http://", ignoreCase = true) || external.startsWith("https://", ignoreCase = true)) {
+        return if (external.startsWith("http://", ignoreCase = true)) {
+            "https://" + external.substring(7)
+        } else {
+            external
         }
     }
-    val fileKey = song?.fileArtworkKeyOrNull()
-    if (!fileKey.isNullOrBlank()) return fileKey
-    if (song == null) return fallback?.takeIf { it.isNotBlank() && !RemoteArtworkDownloader.isPlaceholderUrl(it) }
-    val rawFallback = fallback?.takeIf { it.isNotBlank() } ?: song.albumArtPath
-    val external = if (RemoteArtworkDownloader.isPlaceholderUrl(rawFallback)) "" else rawFallback
-    return resolveAudioFirstArtworkKey(
-        audioPath = song.path,
-        fileSize = song.fileSize,
-        dateModified = song.dateModified,
-        externalArtworkPath = external,
-    ).takeIf { it.isNotBlank() }
+
+    // 网络也无封面时，若为本地音源，尝试探测本地物理文件内嵌封面兜底
+    if (isLocalSource) {
+        val audioFirstKey = resolveAudioFirstArtworkKey(
+            audioPath = song.path,
+            fileSize = song.fileSize,
+            dateModified = song.dateModified,
+            externalArtworkPath = external,
+        )
+        if (audioFirstKey.isNotBlank()) return audioFirstKey
+    }
+
+    return external.takeIf { it.isNotBlank() }
 }
 
 fun AudioFile.fileArtworkKeyOrNull(): String? {

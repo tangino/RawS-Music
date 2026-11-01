@@ -5957,24 +5957,10 @@ class PlayerController private constructor(context: Context) {
             if (!isResolved) {
                 // 本地曲库优先秒开探活：
                 // 如果本地曲库中存在匹配的本地音频文件，无缝切换为本地播放，0ms 延迟秒开，避免任何线上寻源开销与超时。
-                // 但纯网络歌单（在线广场/歌手/搜索产生的队列）必须只走网络源：
-                // 只有本地混合歌单（用户歌单、含本地条的在线收藏歌单）才允许命中本地文件。
-                val sourceQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
-                val allowLocalMatch = !isPureOnlineQueue(sourceQueue)
-                if (!allowLocalMatch) {
-                    AppLogger.i(
-                        TAG,
-                        "playInternal: pure online queue, skip local library match for '${song.title}'",
-                    )
-                }
-                val localMatch = if (allowLocalMatch) {
-                    try {
-                        val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
-                        com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
-                    } catch (_: Throwable) {
-                        null
-                    }
-                } else {
+                val localMatch = try {
+                    val lib = com.rawsmusic.module.data.repository.MusicRepository.getAllSongs()
+                    com.rawsmusic.core.common.utils.SongMatcher.findBestLocalMatch(song, lib)
+                } catch (_: Throwable) {
                     null
                 }
                 if (localMatch != null && java.io.File(localMatch.path).exists()) {
@@ -6121,13 +6107,17 @@ class PlayerController private constructor(context: Context) {
                 _playbackSourceOverride.value = null
             }
         }
-        if (song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER &&
-            !com.rawsmusic.core.common.model.isOnlineSongKey(song.path)
+        val rendererSong = PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
+        val playbackPath = rendererSong.path
+        val isPhysicalLocalPlayback = !playbackPath.startsWith("http://", ignoreCase = true) &&
+            !playbackPath.startsWith("https://", ignoreCase = true) &&
+            !playbackPath.startsWith("online://", ignoreCase = true) &&
+            java.io.File(playbackPath).exists()
+        if (isPhysicalLocalPlayback || (song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER &&
+            !com.rawsmusic.core.common.model.isOnlineSongKey(song.path))
         ) {
             MusicSourcePlaybackController.resetForLocalPlayback()
         }
-        val rendererSong = PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
-        val playbackPath = rendererSong.path
         if (_usbExclusiveActive.value) {
             invalidateUsbSelfTest("play_request:${song.path}", clearSessionKey = true)
         }
@@ -6188,8 +6178,8 @@ class PlayerController private constructor(context: Context) {
 
         val isOnlineTrack = com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
             song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
-        val playbackIsRemoteUrl = playbackPath.startsWith("http://") || playbackPath.startsWith("https://") || isOnlineTrack
-        val semanticIsRemoteUrl = song.path.startsWith("http://") || song.path.startsWith("https://") || isOnlineTrack
+        val playbackIsRemoteUrl = !isPhysicalLocalPlayback && (playbackPath.startsWith("http://") || playbackPath.startsWith("https://") || isOnlineTrack)
+        val semanticIsRemoteUrl = !isPhysicalLocalPlayback && (song.path.startsWith("http://") || song.path.startsWith("https://") || isOnlineTrack)
         if (playbackPath.isBlank() || (!playbackIsRemoteUrl && !java.io.File(playbackPath).exists())) {
             // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频或跨设备迁移）：
             // 具备混合歌单特征：不直接静默跳过导致旧歌曲卡住播放，立即停止旧播放并平滑降级为在线全网寻源试听

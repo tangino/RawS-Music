@@ -47,7 +47,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.UserPlaylist
+import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.widget.ActivityOverlayBackOwner
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
+import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.foundation.layout.widthIn
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
 import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
@@ -374,12 +378,12 @@ internal fun OnlinePlaylistActionsDialog(
     onMoveToGroup: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val colors = themeColors()
-    RawMiuixOverlayDialog(
+    ActivityOverlayBackOwner(active = true)
+    WindowDialog(
         show = true,
         title = stringResource(R.string.playlist_group_playlist_actions),
         summary = playlistName,
-        backgroundColor = colors.surface,
+        modifier = Modifier.widthIn(max = LocalRawWindowLayoutProfile.current.dialogMaxWidth),
         onDismissRequest = onDismiss,
     ) {
         Column(
@@ -602,12 +606,12 @@ internal fun PlaylistActionsDialog(
     onExport: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val colors = themeColors()
-    RawMiuixOverlayDialog(
+    ActivityOverlayBackOwner(active = true)
+    WindowDialog(
         show = true,
         title = stringResource(R.string.playlist_group_playlist_actions),
         summary = playlistName,
-        backgroundColor = colors.surface,
+        modifier = Modifier.widthIn(max = LocalRawWindowLayoutProfile.current.dialogMaxWidth),
         onDismissRequest = onDismiss,
     ) {
         Column(

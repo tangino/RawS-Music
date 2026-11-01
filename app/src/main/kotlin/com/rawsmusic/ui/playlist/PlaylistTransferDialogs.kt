@@ -42,7 +42,11 @@ import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.utils.AppLogger
+import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.widget.ActivityOverlayBackOwner
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
+import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.foundation.layout.widthIn
 import com.rawsmusic.module.data.playlist.PlaylistM3u8Codec
 import com.rawsmusic.module.data.playlist.PlaylistTransferStore
 import com.rawsmusic.module.online.transfer.OnlineImportOutcome
@@ -99,11 +103,12 @@ fun ExportPlaylistDialog(
     var fileName by remember(selectedFormat) { mutableStateOf(initialFileName) }
     var isExporting by remember { mutableStateOf(false) }
 
-    RawMiuixOverlayDialog(
+    ActivityOverlayBackOwner(active = true)
+    WindowDialog(
         show = true,
         title = stringResource(R.string.playlist_export_title),
         summary = playlist.name,
-        backgroundColor = colors.surface,
+        modifier = Modifier.widthIn(max = LocalRawWindowLayoutProfile.current.dialogMaxWidth),
         onDismissRequest = { if (!isExporting) onDismiss() },
     ) {
         Column(

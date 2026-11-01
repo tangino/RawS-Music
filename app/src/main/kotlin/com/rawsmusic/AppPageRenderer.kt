@@ -175,7 +175,7 @@ class AppPageRendererImpl(
                                 .orEmpty()
                                 .map { it.toAudioFile() }
                         } else {
-                            playlist.songs.map { it.toAudioFile() }
+                            playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
                         }
                         if (songs.isNotEmpty()) {
                             val first = songs.first()
