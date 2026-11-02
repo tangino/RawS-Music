@@ -71,14 +71,14 @@ object OnlineAudioSourceResolver {
     )
 
     /**
-     * 经典多源轮询候选平台轮询顺序：网易云 -> 酷狗 -> 酷我 -> QQ -> 咪咕。
+     * 经典多源轮询候选平台轮询顺序：网易云 -> 酷狗 -> 酷我 -> 咪咕 -> QQ（网易云永远首位，QQ音乐永远放最后）。
      */
     val CLASSIC_POLLING_PLATFORMS = listOf(
         OnlinePlatform.NETEASE,
         OnlinePlatform.KUGOU,
         OnlinePlatform.KUWO,
-        OnlinePlatform.QQ,
         OnlinePlatform.MIGU,
+        OnlinePlatform.QQ,
     )
 
     // 内存 LRU 缓存：Key = "$platform:$songId", Value = CachedUrl(url, expireAtMs)
@@ -611,8 +611,21 @@ object OnlineAudioSourceResolver {
 
         val qualityTryList = OnlineQualityLadder.qualityTryList(explicitQuality)
 
-        // 2. 候选平台列表：当前平台优先，其余平台按经典顺序轮询（网易云 -> 酷狗 -> 酷我 -> QQ -> 咪咕）
-        val candidatePlatforms = (listOf(platform) + CLASSIC_POLLING_PLATFORMS).distinct()
+        // 2. 候选平台列表：无论歌曲来自哪个平台，网易平台永远优先作为第一个寻源平台，QQ音乐平台永远放到最后
+        val candidatePlatforms = buildList {
+            add(OnlinePlatform.NETEASE)
+            if (platform != OnlinePlatform.NETEASE && platform != OnlinePlatform.QQ) {
+                add(platform)
+            }
+            listOf(
+                OnlinePlatform.KUGOU,
+                OnlinePlatform.KUWO,
+                OnlinePlatform.MIGU,
+            ).forEach { p ->
+                if (p !in this) add(p)
+            }
+            add(OnlinePlatform.QQ)
+        }
 
         // 3. 所有可用音源列表：主音源优先，备用音源依次轮询
         val primarySource = LxSourcePluginStore.primarySource()
@@ -926,23 +939,36 @@ object OnlineAudioSourceResolver {
 
         val qualityTryList = OnlineQualityLadder.qualityTryList(explicitQuality)
 
-        // 3. 第一阶段：主音源原平台优先通道
+        // 3. 第一阶段：网易平台永远优先寻源通道（无论原始平台为何，均首选网易云）
+        val firstPlatform = OnlinePlatform.NETEASE
         var resolvedResult = resolveSinglePlatformSource(
             context = context,
-            targetPlatform = platform,
+            targetPlatform = firstPlatform,
             songId = songId,
             title = title,
             artist = artist,
             album = album,
             expectedDurationMs = expectedDurationMs,
-            isOriginal = true,
+            isOriginal = (firstPlatform == platform),
             lxSource = primarySource,
             qualityTryList = qualityTryList,
         )
 
-        // 4. 第二阶段：主音源跨平台并发搜救寻源 (原平台无源时，对其余平台发起精准匹配与并发解析)
+        // 4. 第二阶段：主音源跨平台并发搜救寻源 (网易云未命中时，对酷狗、酷我、咪咕及原平台发起搜救，QQ音乐最后兜底)
         if (resolvedResult == null) {
-            val fallbackPlatforms = CLASSIC_POLLING_PLATFORMS.filter { it != platform }
+            val fallbackPlatforms = buildList {
+                if (platform != OnlinePlatform.NETEASE && platform != OnlinePlatform.QQ) {
+                    add(platform)
+                }
+                listOf(
+                    OnlinePlatform.KUGOU,
+                    OnlinePlatform.KUWO,
+                    OnlinePlatform.MIGU,
+                ).forEach { p ->
+                    if (p !in this) add(p)
+                }
+                add(OnlinePlatform.QQ)
+            }
             val channel = Channel<ResolvedAudioSource?>(fallbackPlatforms.size)
             val isFound = java.util.concurrent.atomic.AtomicBoolean(false)
 

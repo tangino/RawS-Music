@@ -3,6 +3,7 @@ package com.rawsmusic.module.player.control
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.PlayQueue
 import com.rawsmusic.core.common.model.PlayState
+import com.rawsmusic.core.common.model.PlayMode
 import com.rawsmusic.core.common.model.RepeatMode
 
 /**
@@ -44,6 +45,7 @@ class PlayerBackendStateControlCoordinator(
         val currentQueue: () -> PlayQueue,
         val currentSong: () -> AudioFile?,
         val currentRepeatMode: () -> RepeatMode,
+        val currentPlayMode: () -> PlayMode = { PlayMode.SEQUENTIAL },
         /** Whether the active traversal has an item after the current one without wrapping. */
         val hasAutomaticContinuation: () -> Boolean = { false },
         val consumePlaybackCompletion: () -> Boolean,
@@ -191,16 +193,19 @@ class PlayerBackendStateControlCoordinator(
             return false
         }
 
-        val continuation = when (callbacks.currentRepeatMode()) {
-            RepeatMode.ONE -> callbacks.automaticReplayTransport
-            RepeatMode.ALL -> callbacks.automaticAdvanceTransport
-            RepeatMode.OFF -> {
+        val isShuffleAll = callbacks.currentPlayMode() == PlayMode.SHUFFLE_ALL
+        val continuation = when {
+            isShuffleAll -> callbacks.automaticAdvanceTransport
+            callbacks.currentRepeatMode() == RepeatMode.ONE -> callbacks.automaticReplayTransport
+            callbacks.currentRepeatMode() == RepeatMode.ALL -> callbacks.automaticAdvanceTransport
+            callbacks.currentRepeatMode() == RepeatMode.OFF -> {
                 if (callbacks.hasAutomaticContinuation()) {
                     callbacks.automaticAdvanceTransport
                 } else {
                     null
                 }
             }
+            else -> null
         }
         if (continuation == null) return false
 

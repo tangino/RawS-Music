@@ -73,7 +73,10 @@ data class MusicSourcePlaybackSnapshot(
         get() {
             if (queue.isEmpty()) return false
             val playMode = com.rawsmusic.module.data.prefs.AppPreferences.Player.playMode
-            val isLoopMode = playMode.repeatMode != com.rawsmusic.core.common.model.RepeatMode.OFF
+            val isShuffle = com.rawsmusic.module.data.prefs.AppPreferences.Player.isShuffle
+            val isLoopMode = playMode.repeatMode != com.rawsmusic.core.common.model.RepeatMode.OFF ||
+                playMode == com.rawsmusic.core.common.model.PlayMode.SHUFFLE_ALL ||
+                isShuffle
             return queue.size > 1 || isLoopMode || status == MusicSourcePlaybackStatus.Playing || status == MusicSourcePlaybackStatus.Completed
         }
 

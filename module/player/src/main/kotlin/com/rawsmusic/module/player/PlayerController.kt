@@ -283,6 +283,15 @@ class PlayerController private constructor(context: Context) {
         private const val ONLINE_FAILURE_RETRY_DELAY_MS = 650L
         /** Prevent an all-dead online queue from cycling notices forever. */
         private const val ONLINE_FAILURE_MAX_CONSECUTIVE_SKIPS = 5
+        /**
+         * 网络曲目换源前：暂停之后、拆迁之前的停顿，复刻“手动暂停 → 再切歌”之间的真实间隔。
+         */
+        private const val ONLINE_SWITCH_SETTLE_MS = 250L
+        /**
+         * 输出音量归零之后、拆迁之前，留给音频框架音量斜坡生效的时间（必须很短，
+         * 否则别的路径可能把音量还原成满幅，旧音频会“突然响一声”）。
+         */
+        private const val ONLINE_SWITCH_MUTE_SETTLE_MS = 20L
         @Volatile
         private var instance: PlayerController? = null
 
@@ -950,6 +959,9 @@ class PlayerController private constructor(context: Context) {
             automaticSwitchFromStart = { song, songs, index ->
                 transportControlCoordinator.automaticAdvance(song, songs, index)
             },
+            failureSwitchFromStart = { song, songs, index ->
+                playFailureSwitchFromStart(song, songs, index)
+            },
             stop = { stop() },
         ),
     )
@@ -1126,7 +1138,7 @@ class PlayerController private constructor(context: Context) {
             context.getString(R.string.player_notice_online_skipped, song.title),
             AppNoticeIcon.WARNING,
         )
-        if (queueControlCoordinator.next() == null) {
+        if (queueControlCoordinator.advanceOnFailure() == null) {
             AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
             stop()
         }
@@ -1271,6 +1283,7 @@ class PlayerController private constructor(context: Context) {
             currentQueue = { visibleQueue.value },
             currentSong = { _currentSong.value },
             currentRepeatMode = { playbackModeController.currentRepeatMode },
+            currentPlayMode = { playbackModeController.currentPlayMode },
             hasAutomaticContinuation = { queueControlCoordinator.hasAutomaticContinuation() },
             consumePlaybackCompletion = {
                 musicSourcePlaybackBackend.consumePlaybackCompletion() ||
@@ -5955,10 +5968,10 @@ class PlayerController private constructor(context: Context) {
         // （PlayerPlayRequestResolver.shouldUseManualSwitch 对在线曲目直接返回 false）。
         // 而 ffmpegPlayer.play() 第一步就 stop+flush 掉旧输出：只要那一刻硬件还在渲染波形，
         // 被硬截断就会爆音（叠加混响尾音听起来像一声闷响/残响）。
-        // 实测“先暂停再切歌”不会有爆音，所以换源前先按正常暂停路径把当前输出停下来。
-        // 这里只打标记，真正的暂停放在 ffmpegPlayer.play() 之前，
-        // 避免中途任何 early return 把当前歌曲暂停了却不起播新曲目。
-        var pauseBeforeOnlineSwitch = false
+        // 换源前先让旧输出真正静音（淡出 + 输出音量归零），再拆迁。
+        // 这里只打标记，真正的静音放在 ffmpegPlayer.play() 之前，
+        // 避免中途任何 early return 把当前歌曲静音了却不起播新曲目。
+        var silenceBeforeOnlineSwitch = false
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
             val activeOverride = _playbackSourceOverride.value
             val isResolved = activeOverride != null && activeOverride.matches(song) && activeOverride.sourceExists()
@@ -6102,8 +6115,8 @@ class PlayerController private constructor(context: Context) {
                 MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
                 return
             }
-            // 直链已就绪，马上要 ffmpegPlayer.play() 换源；旧渲染器仍在发声时才需要先暂停。
-            pauseBeforeOnlineSwitch =
+            // 直链已就绪，马上要 ffmpegPlayer.play() 换源；旧渲染器仍在发声时才需要先静音。
+            silenceBeforeOnlineSwitch =
                 ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING
         }
         _playbackSourceOverride.value?.let { activeOverride ->
@@ -6352,22 +6365,33 @@ class PlayerController private constructor(context: Context) {
                 if (!deferPublicCommitToRenderer) _position.value = restoredPosition
                 verifyRestoreStartSeek(song, restoredPosition)
             }
-            // 网络曲目换源前：先按正常暂停路径（淡出 + pause）把当前输出停下来，再让
-            // ffmpegPlayer.play() 拆迁换源。只做淡出不够——play() 会 stop+flush 掉尚未播出的缓冲，
-            // 真正在发声的那一刻仍是满幅波形，硬件 FIFO 被硬截断就爆音；暂停后 AudioTrack 已停止
-            // 渲染，随后的 stop+flush 不再是在波形中途开刀（实测“先暂停再切歌”没有爆音）。
-            // 淡出长度沿用「传输淡变」设置（默认 400ms，收敛到 60..400ms），与手动暂停完全同一条路径；
-            // 新曲目起播仍由 playInternal 的默认起始淡入接管，不在这里另设。
-            if (pauseBeforeOnlineSwitch) {
-                val pauseFadeMs = TransitionPreferences.transportDurationOrZero().coerceIn(60, 400)
+            // 网络曲目换源前，完整复刻“用户手动按暂停 → 再切歌”的时序：
+            // 1) 淡出 + 真正 pause（与暂停按钮同一个 ffmpegPlayer.pauseWithFadeBlocking）；
+            // 2) 停顿 [ONLINE_SWITCH_SETTLE_MS]：手动操作时暂停与切歌之间天然有这样一段时间，
+            //    期间输出通路、音量斜坡、在途缓冲都能落地；
+            // 3) 输出音量归零做最后兜底（与 stop() 的防爆音同款），再立刻拆迁，
+            //    避免像上一版那样先静音再长时间等待，导致旧音频在别处被还原成满音量而“突然响一声”；
+            // 4) 才调用 ffmpegPlayer.play()。
+            if (silenceBeforeOnlineSwitch) {
+                val fadeMs = TransitionPreferences.transportDurationOrZero().coerceIn(60, 200)
+                val stateBefore = ffmpegPlayer.state
                 runCatching {
-                    ffmpegPlayer.pauseWithFadeBlocking(pauseFadeMs, "online_switch_out")
+                    ffmpegPlayer.pauseWithFadeBlocking(fadeMs, "online_switch_out")
                 }.onFailure { error ->
                     AppLogger.w(TAG, "online_switch pause failed", error)
                 }
                 AppLogger.i(
                     TAG,
-                    "online_switch pause-before-swap: fadeMs=$pauseFadeMs title=${song.title} " +
+                    "online_switch pause-done: fadeMs=$fadeMs stateBefore=$stateBefore " +
+                        "stateAfter=${ffmpegPlayer.state} title=${song.title}",
+                )
+                runCatching { Thread.sleep(ONLINE_SWITCH_SETTLE_MS) }
+                ffmpegPlayer.silenceOutputForSwitch("online_switch_mute")
+                runCatching { Thread.sleep(ONLINE_SWITCH_MUTE_SETTLE_MS) }
+                AppLogger.i(
+                    TAG,
+                    "online_switch silence-before-swap: fadeMs=$fadeMs settleMs=$ONLINE_SWITCH_SETTLE_MS " +
+                        "muteMs=$ONLINE_SWITCH_MUTE_SETTLE_MS title=${song.title} " +
                         "source=${playbackPath.substringAfterLast('/')}",
                 )
             }
@@ -7427,6 +7451,48 @@ class PlayerController private constructor(context: Context) {
                         ) {
                             requestToken == latestPlayRequestToken.get()
                         }
+                    }
+                },
+            )
+        )
+    }
+
+    private fun playFailureSwitchFromStart(
+        song: AudioFile,
+        queue: List<AudioFile>,
+        index: Int,
+    ) {
+        val requestToken = latestPlayRequestToken.incrementAndGet()
+        // 关键：系统自动故障跳歌时立即把新歌的 UI 选择状态提交，让 Compose 页面上的标题、歌手、封面状态立即切换到新歌
+        primeSongSelectionForUi(song)
+        pendingRendererUiCommit = null
+        _currentSong.value = song
+        _position.value = 0L
+        _duration.value = song.duration.coerceAtLeast(0L)
+        _queue.value = _queue.value.copy(
+            songs = queue,
+            currentIndex = index.coerceIn(0, queue.lastIndex.coerceAtLeast(0)),
+        )
+        clearPlaybackSourceOverrideIfOwnerChanged(song, "failure_switch")
+        clearRequestedSongIfCommitted(song)
+        queueControlCoordinator.onManualTargetCommitted(song)
+        smForceTransition(PlayState.PREPARING, "online_failure_advance")
+
+        eventQueue.submit(
+            PlaybackEventQueue.PlaybackEvent.PlayEvent(
+                song = song,
+                queue = queue,
+                index = index,
+                handler = failureEvent@{ queuedSong, queuedQueue, queuedIndex ->
+                    if (requestToken != latestPlayRequestToken.get()) return@failureEvent
+                    transportMutex.withLock {
+                        if (requestToken != latestPlayRequestToken.get()) return@withLock
+                        playInternal(
+                            song = queuedSong,
+                            queue = queuedQueue,
+                            index = queuedIndex,
+                            deferPublicCommitToRenderer = false,
+                        )
                     }
                 },
             )

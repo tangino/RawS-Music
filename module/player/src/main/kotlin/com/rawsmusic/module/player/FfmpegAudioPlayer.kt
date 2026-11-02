@@ -2994,6 +2994,22 @@ class FfmpegAudioPlayer(private val context: Context) {
         )
     }
 
+    /**
+     * 换源前把输出拉到静音（与 [stop] 的防爆音同款）：
+     * 音频框架会对音量变化做一小段斜坡，因此不会在波形中途产生阶跃。
+     *
+     * 用于“旧输出还在发声、但接下来必须立刻 stop+flush 换源”的场景：
+     * 只做 Pcm 淡出是不够的，淡出样本可能还压在缓冲里没播到，
+     * 而 play() 的 stop+flush 会直接丢弃这段缓冲。
+     */
+    fun silenceOutputForSwitch(reason: String) {
+        if (_state == State.PLAYING || isPlaying.get()) {
+            runCatching { audioTrack?.setVolume(0f) }
+            runCatching { nativeAudioEngineLifecycle.setVolumeCurrent(0f, reason) }
+            AppLogger.i(TAG, "silenceOutputForSwitch: reason=$reason state=$_state usbExclusive=$usbExclusiveMode")
+        }
+    }
+
     fun stop() {
         AppLogger.w(TAG, "=== stop() called")
         // 防爆音：若当前处于发声状态，立即将硬件输出音量置零，防止硬件 FIFO 队列截断激发出高频脉冲爆音

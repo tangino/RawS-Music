@@ -63,6 +63,7 @@ internal class PlayerQueueControlCoordinator(
         /** Artwork swipe path: transport is queued without publishing requested-song/queue UI state on the pointer frame. */
         val manualArtworkGestureSwitchFromStart: (AudioFile, List<AudioFile>, Int, String) -> Unit,
         val automaticSwitchFromStart: (AudioFile, List<AudioFile>, Int) -> Boolean,
+        val failureSwitchFromStart: (AudioFile, List<AudioFile>, Int) -> Unit = { _, _, _ -> },
         val stop: () -> Unit,
     )
 
@@ -321,7 +322,16 @@ internal class PlayerQueueControlCoordinator(
         if (callbacks.isReleased()) return null
         val queue = visibleQueue()
         if (queue.songs.isEmpty()) return null
-        val targetIndex = nextIndex(queue, automatic = true)
+        var targetIndex = nextIndex(queue, automatic = true)
+        if (targetIndex !in queue.songs.indices && (queue.isShuffle || mode.currentPlayMode() == PlayMode.SHUFFLE_ALL)) {
+            mode.rebuildShuffleForCurrentQueue()
+            val reloadedQueue = visibleQueue()
+            targetIndex = nextIndex(reloadedQueue, automatic = true)
+        }
+        if (targetIndex !in queue.songs.indices && (queue.isShuffle || mode.currentPlayMode() == PlayMode.SHUFFLE_ALL)) {
+            val candidates = queue.songs.indices.filter { it != queue.currentIndex }
+            targetIndex = if (candidates.isNotEmpty()) candidates.random() else queue.currentIndex
+        }
         val target = queue.songs.getOrNull(targetIndex) ?: return null
         if (!callbacks.automaticSwitchFromStart(target, queue.songs, targetIndex)) return null
 
@@ -332,6 +342,38 @@ internal class PlayerQueueControlCoordinator(
             consumePrioritySong(target)
             publishPriorityQueue()
         }
+        return target
+    }
+
+    /**
+     * Advances to the next track when the current track fails playback or online resolution.
+     * Unlike manual gesture switching, failure skip is an automatic system recovery:
+     * 1. It must never defer public UI queue/currentSong updates (no touch/drag animation to wait for).
+     * 2. It immediately commits the target song to the visible queue and UI so artwork, title and
+     *    artist update immediately to the new target.
+     * 3. For single-repeat mode, it advances to the next track rather than repeating the failed song.
+     */
+    fun advanceOnFailure(): AudioFile? {
+        clearManualProjection()
+        if (callbacks.isReleased()) return null
+        val queue = visibleQueue()
+        if (queue.songs.isEmpty()) return null
+        var targetIndex = nextIndex(queue, automatic = false)
+        if (targetIndex !in queue.songs.indices && queue.isShuffle) {
+            mode.rebuildShuffleForCurrentQueue()
+            val reloadedQueue = visibleQueue()
+            targetIndex = nextIndex(reloadedQueue, automatic = false)
+        }
+        val target = queue.songs.getOrNull(targetIndex) ?: return null
+
+        callbacks.savePosition()
+        val committedQueue = queue.copy(currentIndex = targetIndex)
+        commitVisibleQueue {
+            callbacks.updateQueue(committedQueue)
+            consumePrioritySong(target)
+            publishPriorityQueue()
+        }
+        callbacks.failureSwitchFromStart(target, queue.songs, targetIndex)
         return target
     }
 
@@ -442,7 +484,7 @@ internal class PlayerQueueControlCoordinator(
         if (priorityQueue.isNotEmpty()) return true
         return when (mode.currentPlayMode()) {
             PlayMode.SEQUENTIAL -> queue.currentIndex < queue.songs.lastIndex
-            PlayMode.SHUFFLE_ALL -> mode.peekNextShuffleIndex(queue) in queue.songs.indices
+            PlayMode.SHUFFLE_ALL -> true
             PlayMode.SHUFFLE_ONCE -> mode.peekNextShuffleIndex(queue) in queue.songs.indices
             PlayMode.REPEAT_ONE -> false
         }
