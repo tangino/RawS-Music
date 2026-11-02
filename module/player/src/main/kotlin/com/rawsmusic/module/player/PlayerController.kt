@@ -5951,6 +5951,14 @@ class PlayerController private constructor(context: Context) {
             Log.w(TAG, "play() skip: isReleased")
             return
         }
+        // 已解析的网络曲目走“换源直启”，不经过 manual switch 的淡出包络
+        // （PlayerPlayRequestResolver.shouldUseManualSwitch 对在线曲目直接返回 false）。
+        // 而 ffmpegPlayer.play() 第一步就 stop+flush 掉旧输出：只要那一刻硬件还在渲染波形，
+        // 被硬截断就会爆音（叠加混响尾音听起来像一声闷响/残响）。
+        // 实测“先暂停再切歌”不会有爆音，所以换源前先按正常暂停路径把当前输出停下来。
+        // 这里只打标记，真正的暂停放在 ffmpegPlayer.play() 之前，
+        // 避免中途任何 early return 把当前歌曲暂停了却不起播新曲目。
+        var pauseBeforeOnlineSwitch = false
         if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
             val activeOverride = _playbackSourceOverride.value
             val isResolved = activeOverride != null && activeOverride.matches(song) && activeOverride.sourceExists()
@@ -6006,9 +6014,12 @@ class PlayerController private constructor(context: Context) {
                     ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING
                 if (isRendererBusy) {
                     if (ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING) {
-                        // 极速 25ms 微淡出：平滑将上一首声波衰减到零轴，彻底消除切歌瞬间因硬截断引发的爆音尾音
+                        // 极速微淡出：平滑将上一首声波衰减到零轴，彻底消除切歌瞬间因硬截断引发的爆音尾音。
+                        // 时长沿用传输淡变设置的一半（0 时退回 25ms 兜底），比原先固定的 25ms 更稳。
+                        val prepFadeMs = ((TransitionPreferences.transportDurationOrZero().coerceIn(0, 160) + 1) / 2)
+                            .coerceAtLeast(25)
                         runCatching {
-                            ffmpegPlayer.pauseWithFadeBlocking(25, "online_switch_prep")
+                            ffmpegPlayer.pauseWithFadeBlocking(prepFadeMs, "online_switch_prep")
                         }
                     }
                     ffmpegPlayer.stop()
@@ -6091,6 +6102,9 @@ class PlayerController private constructor(context: Context) {
                 MusicSourcePlaybackController.play(context, mediaItems, resolvedIndex)
                 return
             }
+            // 直链已就绪，马上要 ffmpegPlayer.play() 换源；旧渲染器仍在发声时才需要先暂停。
+            pauseBeforeOnlineSwitch =
+                ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING
         }
         _playbackSourceOverride.value?.let { activeOverride ->
             if (!activeOverride.matches(song)) {
@@ -6337,6 +6351,25 @@ class PlayerController private constructor(context: Context) {
                 queueRendererRestartSeek(song, restoredPosition, "cold_restore_before_play")
                 if (!deferPublicCommitToRenderer) _position.value = restoredPosition
                 verifyRestoreStartSeek(song, restoredPosition)
+            }
+            // 网络曲目换源前：先按正常暂停路径（淡出 + pause）把当前输出停下来，再让
+            // ffmpegPlayer.play() 拆迁换源。只做淡出不够——play() 会 stop+flush 掉尚未播出的缓冲，
+            // 真正在发声的那一刻仍是满幅波形，硬件 FIFO 被硬截断就爆音；暂停后 AudioTrack 已停止
+            // 渲染，随后的 stop+flush 不再是在波形中途开刀（实测“先暂停再切歌”没有爆音）。
+            // 淡出长度沿用「传输淡变」设置（默认 400ms，收敛到 60..400ms），与手动暂停完全同一条路径；
+            // 新曲目起播仍由 playInternal 的默认起始淡入接管，不在这里另设。
+            if (pauseBeforeOnlineSwitch) {
+                val pauseFadeMs = TransitionPreferences.transportDurationOrZero().coerceIn(60, 400)
+                runCatching {
+                    ffmpegPlayer.pauseWithFadeBlocking(pauseFadeMs, "online_switch_out")
+                }.onFailure { error ->
+                    AppLogger.w(TAG, "online_switch pause failed", error)
+                }
+                AppLogger.i(
+                    TAG,
+                    "online_switch pause-before-swap: fadeMs=$pauseFadeMs title=${song.title} " +
+                        "source=${playbackPath.substringAfterLast('/')}",
+                )
             }
             ffmpegPlayer.play(playbackPath)
 

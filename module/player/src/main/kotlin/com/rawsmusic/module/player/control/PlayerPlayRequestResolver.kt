@@ -110,7 +110,10 @@ internal class PlayerPlayRequestResolver(
         usbExclusiveActive: Boolean,
         configuredManualFadeMs: Int,
     ): Boolean {
-        // 网络音源解析交付的音频载荷已由控制器在寻源前完成过渡，直接起播，绝不能再次作为切歌动作触发二次淡出或 crossfade 产生残响回响
+        // 网络曲目的音频载荷是“解析完直链后换源起播”，不能按普通切歌再走一遍
+        // manual switch 的淡出/crossfade（会和播放器内部的换源过渡叠加成残响回响）。
+        // 换源前的防爆音淡出由 PlayerController.playInternal() 在 ffmpegPlayer.play() 之前
+        // 单独完成（online_switch_out / online_switch_in），这里只要拒绝二次过渡。
         if (requestedSong.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER) {
             return false
         }
