@@ -49,6 +49,14 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import com.rawsmusic.core.common.source.RawSourceQuality
+import com.rawsmusic.core.common.ui.AppNoticeIcon
+import com.rawsmusic.module.data.prefs.AppPreferences
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadStatus
+import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
+
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -190,6 +198,33 @@ internal fun OnlineSearchTab(modifier: Modifier = Modifier) {
                 }
             }
         }
+    }
+
+    val downloadTasks by MusicSourceDownloadController.tasks.collectAsState()
+
+    LaunchedEffect(Unit) {
+        MusicSourceDownloadController.initialize(context)
+    }
+
+    fun downloadSong(song: OnlineSongItem) {
+        val rawItem = OnlineSourceMediaMapper.toRawSourceMediaItem(song)
+        val quality = runCatching {
+            RawSourceQuality.valueOf(AppPreferences.Download.defaultQuality)
+        }.getOrDefault(RawSourceQuality.HiRes)
+
+        MusicSourceDownloadController.enqueue(context, rawItem, quality)
+        AppNoticeBus.post(
+            message = context.getString(R.string.download_queued_notice, 1) + " · ${song.title}",
+            icon = AppNoticeIcon.DOWNLOAD,
+        )
+    }
+
+    fun getDownloadStatus(song: OnlineSongItem): MusicSourceDownloadStatus? {
+        return downloadTasks.firstOrNull { task ->
+            (task.item.sourceId == song.platform.id && task.item.remoteId == song.id) ||
+            (task.item.title.equals(song.title, ignoreCase = true) &&
+             task.item.artists.any { it.contains(song.artist, ignoreCase = true) || song.artist.contains(it, ignoreCase = true) })
+        }?.status
     }
 
     var titleInput by rememberSaveable { mutableStateOf("") }
@@ -433,6 +468,8 @@ internal fun OnlineSearchTab(modifier: Modifier = Modifier) {
                     onAddToPlaylist = { song ->
                         addToPlaylistSong = song
                     },
+                    getDownloadStatus = { song -> getDownloadStatus(song) },
+                    onDownloadSong = { song -> downloadSong(song) },
                 )
             }
         }
@@ -677,6 +714,8 @@ private fun OnlineSearchResultList(
     isSongLoading: (OnlineSongItem) -> Boolean = { false },
     onSongClick: (songs: List<OnlineSongItem>, song: OnlineSongItem, index: Int) -> Unit,
     onAddToPlaylist: (OnlineSongItem) -> Unit = {},
+    getDownloadStatus: (OnlineSongItem) -> MusicSourceDownloadStatus? = { null },
+    onDownloadSong: (OnlineSongItem) -> Unit = {},
 ) {
     val colors = themeColors()
     LazyColumn(
@@ -702,8 +741,10 @@ private fun OnlineSearchResultList(
                     OnlineSearchSongRow(
                         song = song,
                         isLoading = isSongLoading(song),
+                        downloadStatus = getDownloadStatus(song),
                         onClick = { onSongClick(group.songs, song, index) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
+                        onDownload = { onDownloadSong(song) },
                     )
                 }
             }
@@ -723,7 +764,9 @@ private fun OnlineSearchResultList(
 private fun OnlineSearchSongRow(
     song: OnlineSongItem,
     isLoading: Boolean = false,
+    downloadStatus: MusicSourceDownloadStatus? = null,
     onAddToPlaylist: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val colors = themeColors()
@@ -836,8 +879,52 @@ private fun OnlineSearchSongRow(
                 Text(text = duration, color = colors.secondaryText, fontSize = 11.sp, maxLines = 1)
             }
         }
+        if (onDownload != null) {
+            val isDownloading = downloadStatus == MusicSourceDownloadStatus.Resolving ||
+                downloadStatus == MusicSourceDownloadStatus.Queued ||
+                downloadStatus == MusicSourceDownloadStatus.Downloading
+            val isCompleted = downloadStatus == MusicSourceDownloadStatus.Completed
+
+            Spacer(Modifier.width(4.dp))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        if (isCompleted) {
+                            AppNoticeBus.post(
+                                message = "歌曲已下载在本地",
+                                icon = AppNoticeIcon.DOWNLOAD,
+                            )
+                        } else if (isDownloading) {
+                            AppNoticeBus.post(
+                                message = "正在下载中",
+                                icon = AppNoticeIcon.DOWNLOAD,
+                            )
+                        } else {
+                            onDownload()
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isDownloading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.primary,
+                    )
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_source_download),
+                        contentDescription = stringResource(R.string.source_online_download),
+                        tint = if (isCompleted) colors.primary else colors.secondaryText,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
         if (onAddToPlaylist != null) {
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             Box(
                 modifier = Modifier
                     .size(36.dp)

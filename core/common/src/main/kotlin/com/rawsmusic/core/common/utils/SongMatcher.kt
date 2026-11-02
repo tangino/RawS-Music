@@ -135,7 +135,7 @@ object SongMatcher {
 
         // 4. 容错剥离：若其中一个标题包含另一个标题且多出部分正是歌手名（如“离开我的依赖王艳薇”与“离开我的依赖”）
         val possibleArtists = listOfNotNull(targetArtist, candidateArtist)
-            .map { normalizeForCompare(it) }
+            .map { normalizeArtistAlias(it) }
             .filter { it.isNotBlank() && it !in listOf("未知歌手", "群星", "variousartists", "unknown") }
 
         for (art in possibleArtists) {
@@ -155,6 +155,12 @@ object SongMatcher {
     /**
      * 解析歌手列表（支持 / , 、 & 等多歌手分割）
      */
+    fun normalizeArtistAlias(artist: String): String {
+        return normalizeForCompare(artist)
+            .replace("桐", "潼")
+            .replace("琪", "淇")
+    }
+
     fun splitArtists(artistStr: String): List<String> {
         val cleaned = cleanText(artistStr)
             .replace("（", "(")
@@ -163,7 +169,7 @@ object SongMatcher {
         val base = if (withoutBracket.isNotBlank()) withoutBracket else cleaned
 
         return base.split('/', '\\', ',', '，', '、', '&', '|', '+')
-            .map { normalizeForCompare(it) }
+            .map { normalizeArtistAlias(it) }
             .filter { it.isNotBlank() }
     }
 
@@ -171,8 +177,8 @@ object SongMatcher {
      * 判断歌手名称是否一致
      */
     fun isArtistMatched(targetArtist: String, candidateArtist: String): Boolean {
-        val normTarget = normalizeForCompare(targetArtist)
-        val normCandidate = normalizeForCompare(candidateArtist)
+        val normTarget = normalizeArtistAlias(targetArtist)
+        val normCandidate = normalizeArtistAlias(candidateArtist)
 
         if (normTarget.isEmpty() || normCandidate.isEmpty()) return true
         if (normTarget == normCandidate) return true

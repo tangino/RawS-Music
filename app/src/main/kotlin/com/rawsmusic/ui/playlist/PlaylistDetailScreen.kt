@@ -9,6 +9,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,10 @@ import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.player.shareSelectedAudio
 import com.rawsmusic.core.ui.widget.selection.SongMultiSelectActionBar
 import com.rawsmusic.core.ui.widget.selection.rememberSongMultiSelectState
+import com.rawsmusic.core.common.source.RawSourceQuality
+import com.rawsmusic.module.data.prefs.AppPreferences
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualListFull
 import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
 import com.rawsmusic.module.data.prefs.PlaylistStore
@@ -52,8 +57,9 @@ fun PlaylistDetailScreen(
     onRemoveSongs: ((List<AudioFile>) -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    // 使用 remember(playlist, librarySongs) 缓存解析结果，避免每次重组在主线程重复计算
-    val songs = remember(playlist, librarySongs) {
+    val matchVersion by playlistStore.matchCacheVersion.collectAsState()
+    // 监听本地匹配缓存版本（离线下载完成时自动自愈并刷新）
+    val songs = remember(playlist, librarySongs, matchVersion) {
         playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
     }
     val onlineCount = remember(songs) { songs.count { it.path.startsWith("online://") } }
@@ -61,6 +67,7 @@ fun PlaylistDetailScreen(
     val state = rememberComposeVirtualListState("playlist-${playlist?.id.orEmpty()}")
     val multiSelectState = rememberSongMultiSelectState()
     var exportDialog by remember { mutableStateOf(false) }
+    var offlineSaveDialog by remember { mutableStateOf(false) }
     val colors = themeColors()
 
     // 处于多选模式时，按系统返回键优先退出多选
@@ -98,6 +105,21 @@ fun PlaylistDetailScreen(
                                 modifier = Modifier.size(22.dp),
                             )
                         }
+                    }
+                }
+
+                // 离线保存入口（非多选且存在网络歌曲时显示）
+                if (!multiSelectState.isActive && onlineCount > 0 && playlist != null) {
+                    IconButton(
+                        onClick = { offlineSaveDialog = true },
+                        modifier = Modifier.size(42.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(com.rawsmusic.core.ui.R.drawable.ic_source_download),
+                            contentDescription = stringResource(R.string.download_action_offline_save),
+                            tint = colors.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                 }
 
@@ -225,10 +247,40 @@ fun PlaylistDetailScreen(
                 multiSelectState.exit()
             }
         } else null,
+        onDownloadSongs = if (onlineCount > 0) {
+            { selected ->
+                val onlineSelected = selected.filter { it.path.startsWith("online://") }
+                if (onlineSelected.isNotEmpty()) {
+                    val quality = RawSourceQuality.fromKey(AppPreferences.Download.defaultQuality)
+                    var queuedCount = 0
+                    onlineSelected.forEach { song ->
+                        val onlineItem = OnlineSourceMediaMapper.toOnlineSongItem(song) ?: return@forEach
+                        val rawItem = OnlineSourceMediaMapper.toRawSourceMediaItem(onlineItem)
+                        MusicSourceDownloadController.enqueue(context, rawItem, quality)
+                        queuedCount++
+                    }
+                    if (queuedCount > 0) {
+                        AppNoticeBus.post(
+                            message = context.getString(R.string.download_queued_notice, queuedCount),
+                            icon = AppNoticeIcon.DOWNLOAD,
+                        )
+                    }
+                }
+                multiSelectState.exit()
+            }
+        } else null,
         onShare = { selected ->
             shareSelectedAudio(context, selected)
         },
     )
+
+    if (offlineSaveDialog && playlist != null) {
+        OfflineSavePlaylistDialog(
+            songs = songs,
+            playlist = playlist,
+            onDismiss = { offlineSaveDialog = false },
+        )
+    }
 
     if (exportDialog && playlist != null) {
         ExportPlaylistDialog(

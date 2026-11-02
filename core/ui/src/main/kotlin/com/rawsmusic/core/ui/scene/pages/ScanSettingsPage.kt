@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.R
+import java.io.File
 import com.rawsmusic.module.data.prefs.AppPreferences
 import top.yukonga.miuix.kmp.basic.SliderDefaults
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -179,6 +180,39 @@ fun ScanSettingsPage(
     }
 
     val folderPickerContract = remember { SystemDocumentsOpenTreeContract() }
+    var customDownloadDir by remember { mutableStateOf(AppPreferences.Download.customDirectory) }
+    val defaultDownloadDir = remember {
+        File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+            "RawSMusic"
+        ).absolutePath
+    }
+
+    val downloadFolderPicker = rememberLauncherForActivityResult(
+        contract = folderPickerContract
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+            .recoverCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+
+        val path = parseTreeUriToPath(uri) ?: uri.toString()
+        AppPreferences.Download.customDirectory = path
+        customDownloadDir = path
+
+        if (path.startsWith("/")) {
+            val selected = AppPreferences.UI.scanPaths.toMutableList()
+            if (!selected.contains(path)) {
+                selected.add(path)
+                AppPreferences.UI.scanPaths = selected
+            }
+        }
+        AppNoticeBus.post(
+            message = context.getString(R.string.download_settings_dir_updated, path),
+            icon = AppNoticeIcon.DOWNLOAD,
+        )
+    }
+
     val folderPicker = rememberLauncherForActivityResult(
         contract = folderPickerContract
     ) { uri ->
@@ -337,6 +371,41 @@ fun ScanSettingsPage(
                             MiuixDivider()
                         }
                     }
+                }
+            }
+
+            // ── 网络歌曲离线保存目录 ──
+            SmallTitle(text = stringResource(R.string.download_settings_section))
+            CardGroup {
+                val currentPathDisplay = customDownloadDir.ifBlank {
+                    stringResource(R.string.download_settings_dir_default, defaultDownloadDir)
+                }
+                ArrowPreference(
+                    title = stringResource(R.string.download_settings_dir_title),
+                    summary = currentPathDisplay,
+                    onClick = {
+                        downloadFolderPicker.launch(null)
+                    }
+                )
+                if (customDownloadDir.isNotBlank()) {
+                    MiuixDivider()
+                    Text(
+                        text = stringResource(R.string.download_settings_dir_reset),
+                        color = MiuixTheme.colorScheme.primary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                AppPreferences.Download.customDirectory = ""
+                                customDownloadDir = ""
+                                AppNoticeBus.post(
+                                    message = context.getString(R.string.download_settings_dir_updated, defaultDownloadDir),
+                                    icon = AppNoticeIcon.DOWNLOAD,
+                                )
+                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
                 }
             }
 
@@ -630,5 +699,23 @@ private fun FolderRow(
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
+    }
+}
+
+
+private fun parseTreeUriToPath(uri: Uri): String {
+    return runCatching {
+        val docId = DocumentsContract.getTreeDocumentId(uri)
+        if (docId.startsWith("primary:")) {
+            val rel = docId.removePrefix("primary:")
+            "${Environment.getExternalStorageDirectory().absolutePath}/$rel"
+        } else if (docId.contains(":")) {
+            val parts = docId.split(":", limit = 2)
+            "/storage/${parts[0]}/${parts[1]}"
+        } else {
+            uri.path ?: uri.toString()
+        }
+    }.getOrElse {
+        uri.path ?: uri.toString()
     }
 }

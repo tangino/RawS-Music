@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.scanner.ScanScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,7 @@ class OnlineSourceDownloadReceiver : BroadcastReceiver() {
             MusicSourceDownloadController.ACTION_DOWNLOAD_MEDIA_READY -> {
                 val path = intent.getStringExtra(MusicSourceDownloadController.EXTRA_DOWNLOAD_PATH).orEmpty()
                 AppLogger.i(TAG, "online download ready, request incremental scan path=$path")
+                PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
                 ScanScheduler.requestDirScan(context.applicationContext, "在线下载完成")
             }
         }

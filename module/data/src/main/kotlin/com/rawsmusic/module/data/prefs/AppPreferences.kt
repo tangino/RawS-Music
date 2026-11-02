@@ -2324,5 +2324,17 @@ object AppPreferences {
             get() = kv.decodeBool("floating_window_collapsed", false)
             set(value) { kv.encode("floating_window_collapsed", value) }
     }
+
+    object Download {
+        /** 自定义网络歌曲下载保存目录路径，为空时回退默认系统公共音乐目录/RawSMusic */
+        var customDirectory: String
+            get() = kv.decodeString("music_download_custom_directory", "").orEmpty()
+            set(value) { kv.encode("music_download_custom_directory", value) }
+
+        /** 默认下载音质 (Standard, High, Lossless, HiRes) */
+        var defaultQuality: String
+            get() = kv.decodeString("music_download_default_quality", "Lossless").orEmpty()
+            set(value) { kv.encode("music_download_default_quality", value) }
+    }
 }
 

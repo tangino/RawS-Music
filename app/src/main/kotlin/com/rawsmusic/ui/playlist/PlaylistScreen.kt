@@ -554,24 +554,6 @@ fun PlaylistScreen(
                                 onToggleCollapse = {
                                     collapsedGroups = if (item.isCollapsed) collapsedGroups - "LOCAL" else collapsedGroups + "LOCAL"
                                 },
-                                actionContent = {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(colors.primary.copy(alpha = 0.12f))
-                                            .border(BorderStroke(0.6.dp, colors.primary.copy(alpha = 0.28f)), RoundedCornerShape(999.dp))
-                                            .clickable { createDialog = true }
-                                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                        ) {
-                                            Icon(Icons.Default.Add, contentDescription = null, tint = colors.primary, modifier = Modifier.size(13.dp))
-                                            Text("新建歌单", fontSize = 11.5.sp, color = colors.primary, fontWeight = FontWeight.SemiBold, fontFamily = appFontFamily())
-                                        }
-                                    }
-                                }
                             )
                         }
                         is PlaylistVirtualItem.AttitudeRow -> {
@@ -822,6 +804,7 @@ fun PlaylistScreen(
                     onSelectCategory = { selectedPlaylistGroup = it },
                     onGroupLongClick = { grpName -> groupChrome.groupMenuTarget = grpName },
                     onCreateGroup = { groupChrome.createGroupDialog = true },
+                    onCreatePlaylist = { createDialog = true },
                     onManageGroups = { groupChrome.manageGroupsDialog = true },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -973,6 +956,7 @@ private fun PlaylistCategoryChipsBar(
     onSelectCategory: (String) -> Unit,
     onGroupLongClick: (String) -> Unit,
     onCreateGroup: () -> Unit,
+    onCreatePlaylist: () -> Unit,
     onManageGroups: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1100,6 +1084,36 @@ private fun PlaylistCategoryChipsBar(
                 }
             }
 
+            // 新建歌单微按钮（移动至“新建分组”右边）
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = colors.primary.copy(alpha = 0.12f),
+                border = BorderStroke(0.5.dp, colors.primary.copy(alpha = 0.25f)),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable { onCreatePlaylist() }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.playlist_create),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.primary,
+                        fontFamily = appFontFamily()
+                    )
+                }
+            }
+
             // 分组管理微按钮
             Surface(
                 shape = RoundedCornerShape(999.dp),
@@ -1142,7 +1156,7 @@ private fun PlaylistSectionHeader(
     accentColor: Color,
     isCollapsed: Boolean,
     onToggleCollapse: () -> Unit,
-    actionContent: @Composable () -> Unit,
+    actionContent: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = themeColors()
@@ -1199,7 +1213,7 @@ private fun PlaylistSectionHeader(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            actionContent()
+            actionContent?.invoke()
             IconButton(
                 onClick = onToggleCollapse,
                 modifier = Modifier.size(32.dp)

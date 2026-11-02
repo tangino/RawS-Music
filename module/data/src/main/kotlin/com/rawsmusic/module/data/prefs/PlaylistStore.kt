@@ -20,7 +20,11 @@ import com.rawsmusic.module.data.db.entity.UserPlaylistSongEntity
 import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.Charset
+import java.util.Locale
 import java.util.UUID
+import com.rawsmusic.core.common.source.RawSourceQuality
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadStatus
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -133,8 +137,12 @@ class PlaylistStore private constructor(private val context: Context) {
         }
     }
 
+    private val _matchCacheVersion = MutableStateFlow(0L)
+    val matchCacheVersion: StateFlow<Long> = _matchCacheVersion.asStateFlow()
+
     fun invalidateMatchCache() {
         onlineToLocalMatchCache.evictAll()
+        _matchCacheVersion.value++
     }
 
     private val _playlists = MutableStateFlow(
@@ -494,26 +502,20 @@ class PlaylistStore private constructor(private val context: Context) {
                 }
 
                 val cached = onlineToLocalMatchCache.get(cacheKey)
-                if (cached != null) {
-                    if (cached.path.startsWith("online://")) {
-                        // 负缓存命中：此前已确认无本地匹配，直接返回在线音频，0ms 秒开（补齐最新封面）
-                        inheritCoverIfNeeded(cached)
-                    } else if (File(cached.path).exists()) {
-                        // 正缓存命中：本地匹配文件依然存在，直接返回（若本地无封面则继承在线封面）
-                        inheritCoverIfNeeded(cached)
-                    } else {
-                        // 文件已被移动或删除，重新尝试匹配
-                        val onlineAudioFile = buildOnlineAudio()
-                        val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
-                        val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
-                        onlineToLocalMatchCache.put(cacheKey, result)
-                        result
-                    }
+                if (cached != null && !cached.path.startsWith("online://") && File(cached.path).exists()) {
+                    // 正缓存命中：本地匹配文件依然存在，直接返回（若本地无封面则继承在线封面）
+                    inheritCoverIfNeeded(cached)
                 } else {
+                    // 未命中本地或之前为在线音频：每次重新尝试寻找本地最新匹配（如新完成的离线下载文件）
                     val onlineAudioFile = buildOnlineAudio()
-                    val matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                    var matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                    if (matchedLocal == null) {
+                        matchedLocal = findDownloadedTaskMatch(onlineAudioFile)
+                    }
+                    if (matchedLocal == null) {
+                        matchedLocal = probeDownloadedFile(onlineAudioFile)
+                    }
                     val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
-                    // 无论命中与否均写入缓存（未命中则缓存 onlineAudioFile 本身作为负缓存），阻断重复扫描
                     onlineToLocalMatchCache.put(cacheKey, result)
                     result
                 }
@@ -926,6 +928,115 @@ class PlaylistStore private constructor(private val context: Context) {
                 }
             }
         }
+
+    /**
+     * 检查当前在线歌曲是否命中了下载管理器中已完成的物理文件任务。
+     */
+    private fun findDownloadedTaskMatch(onlineAudioFile: AudioFile): AudioFile? {
+        val completedTasks = MusicSourceDownloadController.tasks.value.filter {
+            it.status == MusicSourceDownloadStatus.Completed && it.localUri.isNotBlank()
+        }
+        if (completedTasks.isEmpty()) return null
+
+        val targetTitle = onlineAudioFile.title
+        val targetArtist = onlineAudioFile.artist
+        val targetRemoteId = onlineAudioFile.path.removePrefix("online://")
+
+        for (task in completedTasks) {
+            val file = runCatching { Uri.parse(task.localUri) }.getOrNull()
+                ?.path?.let(::File)
+                ?: File(MusicSourceDownloadController.publicDownloadDirectory(), task.fileName)
+            if (!file.exists() || file.length() == 0L) continue
+
+            val taskTitle = task.item.title
+            val taskArtist = task.item.artists.joinToString(" & ")
+            val isIdentityMatch = task.item.remoteId == targetRemoteId || task.item.stableIdentity == targetRemoteId
+            val isNameMatch = SongMatcher.isMatched(
+                targetTitle = targetTitle,
+                targetArtist = targetArtist,
+                candidateTitle = taskTitle,
+                candidateArtist = taskArtist,
+                targetDurationMs = onlineAudioFile.duration,
+                candidateDurationMs = 0L,
+                toleranceMs = 30000L
+            )
+
+            if (isIdentityMatch || isNameMatch) {
+                val ext = file.extension.uppercase(Locale.ROOT)
+                val formatStr = when (ext) {
+                    "FLAC" -> "FLAC"
+                    "WAV" -> "WAV"
+                    "MP3" -> "MP3"
+                    "M4A", "AAC" -> "AAC"
+                    else -> ext
+                }
+                val (bitrate, sampleRate, bits) = when (task.resolvedQuality) {
+                    RawSourceQuality.HiRes -> Triple(9216, 192000, 24)
+                    RawSourceQuality.Lossless -> Triple(1411, 44100, 16)
+                    RawSourceQuality.High -> Triple(320, 44100, 16)
+                    else -> Triple(128, 44100, 16)
+                }
+                return onlineAudioFile.copy(
+                    id = file.absolutePath.hashCode().toLong(),
+                    path = file.absolutePath,
+                    title = if (onlineAudioFile.title.isNotBlank()) onlineAudioFile.title else taskTitle,
+                    artist = if (onlineAudioFile.artist.isNotBlank()) onlineAudioFile.artist else taskArtist,
+                    format = formatStr,
+                    encodingFormat = formatStr,
+                    fileSize = file.length(),
+                    dateModified = file.lastModified(),
+                    bitRate = bitrate,
+                    sampleRate = sampleRate,
+                    bitsPerSample = bits,
+                )
+            }
+        }
+        return null
+    }
+
+    /**
+     * 在公共离线保存目录中探活匹配的音频文件（覆盖常见格式与艺名改名容错）。
+     */
+    private fun probeDownloadedFile(onlineAudioFile: AudioFile): AudioFile? {
+        val dir = MusicSourceDownloadController.publicDownloadDirectory()
+        if (!dir.exists() || !dir.isDirectory) return null
+
+        val cleanT = SongMatcher.cleanText(onlineAudioFile.title)
+        if (cleanT.isBlank()) return null
+        val cleanA = SongMatcher.cleanText(onlineAudioFile.artist)
+        val normA = SongMatcher.normalizeArtistAlias(cleanA)
+
+        val extensions = listOf("flac", "wav", "mp3", "m4a", "aac", "ogg")
+        val candidatePrefixes = buildList {
+            if (cleanA.isNotBlank()) {
+                add("$cleanA - $cleanT")
+                if (normA != cleanA) add("$normA - $cleanT")
+            }
+            add(cleanT)
+        }
+
+        for (prefix in candidatePrefixes) {
+            val sanitized = MusicSourceDownloadController.sanitizeFileName(prefix)
+            for (ext in extensions) {
+                val candidateFile = File(dir, "$sanitized.$ext")
+                if (candidateFile.exists() && candidateFile.length() > 0L) {
+                    val formatStr = ext.uppercase(Locale.ROOT)
+                    return onlineAudioFile.copy(
+                        id = candidateFile.absolutePath.hashCode().toLong(),
+                        path = candidateFile.absolutePath,
+                        format = formatStr,
+                        encodingFormat = formatStr,
+                        fileSize = candidateFile.length(),
+                        dateModified = candidateFile.lastModified(),
+                        bitRate = if (ext == "flac" || ext == "wav") 1411 else 320,
+                        sampleRate = 44100,
+                        bitsPerSample = if (ext == "flac" || ext == "wav") 16 else 0,
+                    )
+                }
+            }
+        }
+        return null
+    }
 
     private fun UserPlaylist?.orEmptySongs(): List<UserPlaylistSong> = this?.songs.orEmpty()
 

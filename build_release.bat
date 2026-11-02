@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul 2>&1
 setlocal EnableExtensions EnableDelayedExpansion
 
 rem ============================================================================
@@ -14,7 +13,7 @@ set "DO_INSTALL=0"
 set "DO_FRESH=0"
 set "NO_DAEMON=0"
 
-rem ------------------------------------------------------------------ å‚æ•°
+rem ------------------------------------------------------------------ ²ÎÊý
 :parse_args
 if "%~1"=="" goto :args_done
 set "ARG=%~1"
@@ -28,52 +27,52 @@ if /i "!ARG!"=="--no-daemon" set "NO_DAEMON=1"
 if /i "!ARG!"=="--no-daemon" goto :next_arg
 if /i "!ARG!"=="-h"          goto :usage
 if /i "!ARG!"=="--help"      goto :usage
-echo æœªçŸ¥å‚æ•°ï¼š!ARG!ï¼ˆç”¨ -h çœ‹ç”¨æ³•ï¼‰
+echo Î´Öª²ÎÊý£º!ARG!£¨ÓÃ -h ¿´ÓÃ·¨£©
 exit /b 2
 :next_arg
 shift
 goto :parse_args
 
 :usage
-echo RawS-Music ä¸€é”®æž„å»ºï¼ˆReleaseï¼‰
+echo RawS-Music Ò»¼ü¹¹½¨£¨Release£©
 echo.
-echo   build_release.bat                æž„å»º Release APK
-echo   build_release.bat --clean        å…ˆ clean å†æž„å»º
-echo   build_release.bat --fresh        å…ˆåœå®ˆæŠ¤è¿›ç¨‹ + æ¸…è¿‡æœŸ Kotlin ç¼–è¯‘è¾“å‡ºï¼Œå†æž„å»º
-echo                                     ï¼ˆæž„å»ºæŠ¥ 'Unable to delete directory
-echo                                      ... kotlin-classes' æ—¶ç”¨è¿™ä¸ªï¼‰
-echo   build_release.bat --install      æž„å»ºå®Œç”¨ adb å®‰è£…åˆ°å·²è¿žæŽ¥è®¾å¤‡
-echo   build_release.bat --no-daemon    ä¸ä½¿ç”¨ Gradle å®ˆæŠ¤è¿›ç¨‹
-echo   build_release.bat -h             æ˜¾ç¤ºå¸®åŠ©
+echo   build_release.bat                ¹¹½¨ Release APK
+echo   build_release.bat --clean        ÏÈ clean ÔÙ¹¹½¨
+echo   build_release.bat --fresh        ÏÈÍ£ÊØ»¤½ø³Ì + Çå¹ýÆÚ Kotlin ±àÒëÊä³ö£¬ÔÙ¹¹½¨
+echo                                     £¨¹¹½¨±¨ 'Unable to delete directory
+echo                                      ... kotlin-classes' Ê±ÓÃÕâ¸ö£©
+echo   build_release.bat --install      ¹¹½¨ÍêÓÃ adb °²×°µ½ÒÑÁ¬½ÓÉè±¸
+echo   build_release.bat --no-daemon    ²»Ê¹ÓÃ Gradle ÊØ»¤½ø³Ì
+echo   build_release.bat -h             ÏÔÊ¾°ïÖú
 echo.
-echo çŽ¯å¢ƒå˜é‡ï¼š
-echo   RAWS_JDK_HOME  æŒ‡å®š JDK 21 è·¯å¾„ï¼ˆä¼˜å…ˆäºŽ JAVA_HOMEï¼‰
-echo   ANDROID_HOME   Android SDK è·¯å¾„ï¼ˆæœªè®¾åˆ™ç”± local.properties çš„ sdk.dir æä¾›ï¼‰
+echo »·¾³±äÁ¿£º
+echo   RAWS_JDK_HOME  Ö¸¶¨ JDK 21 Â·¾¶£¨ÓÅÏÈÓÚ JAVA_HOME£©
+echo   ANDROID_HOME   Android SDK Â·¾¶£¨Î´ÉèÔòÓÉ local.properties µÄ sdk.dir Ìá¹©£©
 echo.
-echo æ³¨æ„ï¼šæœ¬å·¥ç¨‹çš„ Release ä½¿ç”¨æ­£å¼ release è¯ä¹¦ç­¾åï¼ˆapp/release.keystoreï¼‰ã€‚
+echo ×¢Òâ£º±¾¹¤³ÌµÄ Release Ê¹ÓÃÕýÊ½ release Ö¤ÊéÇ©Ãû£¨app/release.keystore£©¡£
 exit /b 0
 
 :args_done
 
-rem --------------------------------------------------------------- å®šä½å·¥ç¨‹
-rem æ— è®ºä»Žå“ªé‡ŒåŒå‡»/è°ƒç”¨ï¼Œéƒ½åˆ‡åˆ°è„šæœ¬æ‰€åœ¨ç›®å½•ï¼ˆå³å·¥ç¨‹æ ¹ï¼‰ã€‚
+rem --------------------------------------------------------------- ¶¨Î»¹¤³Ì
+rem ÎÞÂÛ´ÓÄÄÀïË«»÷/µ÷ÓÃ£¬¶¼ÇÐµ½½Å±¾ËùÔÚÄ¿Â¼£¨¼´¹¤³Ì¸ù£©¡£
 cd /d "%~dp0"
 set "SCRIPT_DIR=%CD%"
 
 if not exist "gradlew.bat" (
-    echo é”™è¯¯ï¼šæ‰¾ä¸åˆ° gradlew.bat
-    echo       è¿™ä¸ªè„šæœ¬å¿…é¡»æ”¾åœ¨ RawS-Music å·¥ç¨‹æ ¹ç›®å½•ã€‚
-    echo       å½“å‰ç›®å½•ï¼š%SCRIPT_DIR%
+    echo ´íÎó£ºÕÒ²»µ½ gradlew.bat
+    echo       Õâ¸ö½Å±¾±ØÐë·ÅÔÚ RawS-Music ¹¤³Ì¸ùÄ¿Â¼¡£
+    echo       µ±Ç°Ä¿Â¼£º%SCRIPT_DIR%
     exit /b 1
 )
 
 rem ------------------------------------------------------------------ JDK 21
-rem ä¾æ¬¡å°è¯•ï¼šRAWS_JDK_HOME â†’ JAVA_HOME â†’ å¸¸è§å®‰è£…ä½ç½®ã€‚
-rem åªæœ‰ç¡®å®žæ˜¯ 21 æ‰é‡‡çº³ï¼Œé¿å…æŠŠ Android Studio è‡ªå¸¦çš„ JDK 25 ç”¨è¿›æ¥ã€‚
+rem ÒÀ´Î³¢ÊÔ£ºRAWS_JDK_HOME ¡ú JAVA_HOME ¡ú ³£¼û°²×°Î»ÖÃ¡£
+rem Ö»ÓÐÈ·ÊµÊÇ 21 ²Å²ÉÄÉ£¬±ÜÃâ°Ñ Android Studio ×Ô´øµÄ JDK 25 ÓÃ½øÀ´¡£
 if defined RAWS_JDK_HOME call :try_jdk "%RAWS_JDK_HOME%" && goto :jdk_done
 if defined JAVA_HOME     call :try_jdk "%JAVA_HOME%"     && goto :jdk_done
 
-rem æœ¬æœºå·²çŸ¥è·¯å¾„ï¼ˆè§ AGENTS.MD Â§2.1ï¼‰
+rem ±¾»úÒÑÖªÂ·¾¶£¨¼û AGENTS.MD ¡ì2.1£©
 call :try_jdk "D:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot" && goto :jdk_done
 call :try_jdk "D:\Program Files\Eclipse Adoptium\jdk-21.0.4.101-hotspot" && goto :jdk_done
 
@@ -89,59 +88,59 @@ for /d %%d in ("%LOCALAPPDATA%\Programs\Eclipse Adoptium\jdk-21*") do (
 
 :jdk_done
 
-rem è¯»å‡ºå®žé™…ä¼šç”¨åˆ°çš„ Java ç‰ˆæœ¬ï¼Œä¾¿äºŽå¤±è´¥æ—¶å®šä½ã€‚
-set "JV=æœªçŸ¥"
+rem ¶Á³öÊµ¼Ê»áÓÃµ½µÄ Java °æ±¾£¬±ãÓÚÊ§°ÜÊ±¶¨Î»¡£
+set "JV=Î´Öª"
 if defined JAVA_HOME if exist "%JAVA_HOME%\release" (
     for /f "tokens=2 delims==" %%v in ('findstr /b "JAVA_VERSION=" "%JAVA_HOME%\release" 2^>nul') do set "JV=%%~v"
 )
 
 if not "%JV:~0,2%"=="21" (
-    echo [!]  æ²¡èƒ½å®šä½ JDK 21ï¼ˆå½“å‰ JAVA_HOME=%JAVA_HOME%ï¼Œç‰ˆæœ¬=%JV%ï¼‰ã€‚
-    echo     Gradle 8.11.1 éœ€è¦ JDK 21ï¼ŒJDK 25 ä¼šç›´æŽ¥å¤±è´¥ã€‚
-    echo     è§£å†³ï¼šset RAWS_JDK_HOME=D:\ä½ çš„\jdk-21 è·¯å¾„
-    echo     è‹¥ç”¨æˆ·çº§ %%USERPROFILE%%\.gradle\gradle.properties å·²é…ç½® org.gradle.java.homeï¼Œå¯å¿½ç•¥æœ¬æç¤ºã€‚
+    echo [!]  Ã»ÄÜ¶¨Î» JDK 21£¨µ±Ç° JAVA_HOME=%JAVA_HOME%£¬°æ±¾=%JV%£©¡£
+    echo     Gradle 8.11.1 ÐèÒª JDK 21£¬JDK 25 »áÖ±½ÓÊ§°Ü¡£
+    echo     ½â¾ö£ºset RAWS_JDK_HOME=D:\ÄãµÄ\jdk-21 Â·¾¶
+    echo     ÈôÓÃ»§¼¶ %%USERPROFILE%%\.gradle\gradle.properties ÒÑÅäÖÃ org.gradle.java.home£¬¿ÉºöÂÔ±¾ÌáÊ¾¡£
     echo.
 )
 
 rem ------------------------------------------------------------- Android SDK
-rem AGP çœŸæ­£è¯»çš„æ˜¯ local.properties é‡Œçš„ sdk.dirï¼›è¿™é‡Œåªæ˜¯ç»™ adb ç­‰å·¥å…·å…œåº•ã€‚
+rem AGP ÕæÕý¶ÁµÄÊÇ local.properties ÀïµÄ sdk.dir£»ÕâÀïÖ»ÊÇ¸ø adb µÈ¹¤¾ß¶µµ×¡£
 if not defined ANDROID_HOME if exist "%LOCALAPPDATA%\Android\Sdk" set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
 if not defined ANDROID_HOME if exist "E:\softwares\Android\sdk" set "ANDROID_HOME=E:\softwares\Android\sdk"
 if defined ANDROID_HOME set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
 
-rem -------------------------------------------------------------------- æž„å»º
+rem -------------------------------------------------------------------- ¹¹½¨
 set "GRADLE_ARGS=%TASK% --console=plain"
 if "%NO_DAEMON%"=="1" set "GRADLE_ARGS=--no-daemon %GRADLE_ARGS%"
 
 echo ============================================================
-echo  RawS-Music æž„å»ºï¼ˆ%VARIANT_LABEL%ï¼‰
-echo   å·¥ç¨‹ç›®å½• : %SCRIPT_DIR%
+echo  RawS-Music ¹¹½¨£¨%VARIANT_LABEL%£©
+echo   ¹¤³ÌÄ¿Â¼ : %SCRIPT_DIR%
 echo   JAVA_HOME: %JAVA_HOME%
-echo   Java ç‰ˆæœ¬: %JV%
+echo   Java °æ±¾: %JV%
 echo   SDK      : %ANDROID_HOME%
-echo   ä»»åŠ¡     : %GRADLE_ARGS%
-if "%DO_CLEAN%"=="1" echo   clean    : æ˜¯
-if "%DO_FRESH%"=="1" echo   fresh    : æ˜¯ï¼ˆå…ˆåœå®ˆæŠ¤è¿›ç¨‹ + æ¸…è¿‡æœŸç¼–è¯‘è¾“å‡ºï¼‰
-echo   æç¤º     : Release ä½¿ç”¨æ­£å¼ release ç­¾å + å¼€å¯æ··æ·†åŽ‹ç¼©ï¼Œé¦–æ¬¡è¾ƒæ…¢
+echo   ÈÎÎñ     : %GRADLE_ARGS%
+if "%DO_CLEAN%"=="1" echo   clean    : ÊÇ
+if "%DO_FRESH%"=="1" echo   fresh    : ÊÇ£¨ÏÈÍ£ÊØ»¤½ø³Ì + Çå¹ýÆÚ±àÒëÊä³ö£©
+echo   ÌáÊ¾     : Release Ê¹ÓÃÕýÊ½ release Ç©Ãû + ¿ªÆô»ìÏýÑ¹Ëõ£¬Ê×´Î½ÏÂý
 echo ============================================================
 echo.
 
-rem --freshï¼šå¤„ç†ã€Œæž„å»ºæŠ¥ Unable to delete directory ... kotlin-classesã€è¿™ç±»é—®é¢˜ã€‚
-rem æ ¹å› æ˜¯**ä¸Šä¸€æ¬¡çš„ Kotlin ç¼–è¯‘å®ˆæŠ¤è¿›ç¨‹æ²¡é€€å¹²å‡€**ï¼Œä»å ç€ app\build\tmp\kotlin-classes\<å˜ä½“>ï¼Œ
-rem äºŽæ˜¯è¿™æ¬¡ç¼–è¯‘æ¸…ç†è¾“å‡ºç›®å½•æ—¶å¤±è´¥ã€‚`gradlew --stop` **ä¸ä¼š**åœ Kotlin å®ˆæŠ¤è¿›ç¨‹ï¼Œå¾—å•ç‹¬æ€ã€‚
+rem --fresh£º´¦Àí¡¸¹¹½¨±¨ Unable to delete directory ... kotlin-classes¡¹ÕâÀàÎÊÌâ¡£
+rem ¸ùÒòÊÇ**ÉÏÒ»´ÎµÄ Kotlin ±àÒëÊØ»¤½ø³ÌÃ»ÍË¸É¾»**£¬ÈÔÕ¼×Å app\build\tmp\kotlin-classes\<±äÌå>£¬
+rem ÓÚÊÇÕâ´Î±àÒëÇåÀíÊä³öÄ¿Â¼Ê±Ê§°Ü¡£`gradlew --stop` **²»»á**Í£ Kotlin ÊØ»¤½ø³Ì£¬µÃµ¥¶ÀÉ±¡£
 if "%DO_FRESH%"=="1" (
-    echo æ­£åœ¨åœæ­¢ Gradle å®ˆæŠ¤è¿›ç¨‹...
+    echo ÕýÔÚÍ£Ö¹ Gradle ÊØ»¤½ø³Ì...
     call gradlew.bat --stop --console=plain
-    echo æ­£åœ¨åœæ­¢ Kotlin ç¼–è¯‘å®ˆæŠ¤è¿›ç¨‹...
+    echo ÕýÔÚÍ£Ö¹ Kotlin ±àÒëÊØ»¤½ø³Ì...
     powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' | Where-Object { $_.CommandLine -like '*KotlinCompileDaemon*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-    rem ç”¨ ping è€Œä¸æ˜¯ timeout æ¥ç­‰å¾…ï¼štimeout åœ¨è¾“å‡ºè¢«é‡å®šå‘æ—¶ä¼šç›´æŽ¥æŠ¥é”™ã€‚
+    rem ÓÃ ping ¶ø²»ÊÇ timeout À´µÈ´ý£ºtimeout ÔÚÊä³ö±»ÖØ¶¨ÏòÊ±»áÖ±½Ó±¨´í¡£
     ping -n 4 127.0.0.1 >nul 2>&1
-    echo æ­£åœ¨æ¸…ç†è¿‡æœŸçš„ Kotlin ç¼–è¯‘è¾“å‡º...
+    echo ÕýÔÚÇåÀí¹ýÆÚµÄ Kotlin ±àÒëÊä³ö...
     if exist "app\build\tmp\kotlin-classes\%VARIANT%" rd /s /q "app\build\tmp\kotlin-classes\%VARIANT%" 2>nul
     if exist "app\build\tmp\kotlin-classes\%VARIANT%" (
         echo.
-        echo [X] ç›®å½•ä»è¢«å ç”¨ï¼Œåˆ ä¸æŽ‰ï¼šapp\build\tmp\kotlin-classes\%VARIANT%
-        echo     è¯·å…³é—­ Android Studio åŽé‡è¯•ï¼Œæˆ–é‡å¯ç³»ç»Ÿã€‚
+        echo [X] Ä¿Â¼ÈÔ±»Õ¼ÓÃ£¬É¾²»µô£ºapp\build\tmp\kotlin-classes\%VARIANT%
+        echo     Çë¹Ø±Õ Android Studio ºóÖØÊÔ£¬»òÖØÆôÏµÍ³¡£
         exit /b 1
     )
     echo.
@@ -151,7 +150,7 @@ if "%DO_CLEAN%"=="1" (
     call gradlew.bat clean --console=plain
     if errorlevel 1 (
         echo.
-        echo [X] clean å¤±è´¥
+        echo [X] clean Ê§°Ü
         exit /b 1
     )
 )
@@ -161,75 +160,80 @@ set "STATUS=%ERRORLEVEL%"
 
 if not "%STATUS%"=="0" (
     echo.
-    echo [X] æž„å»ºå¤±è´¥ï¼ˆGradle é€€å‡ºç  %STATUS%ï¼‰
-    echo     è‹¥æ˜¯ 'Unable to delete directory ... kotlin-classes'ï¼Œé‚£æ˜¯ Kotlin ç¼–è¯‘å®ˆæŠ¤è¿›ç¨‹
-    echo     æ®‹ç•™å ç”¨å¯¼è‡´çš„ï¼Œæ‰§è¡Œï¼š build_release.bat --fresh
+    echo [X] ¹¹½¨Ê§°Ü£¨Gradle ÍË³öÂë %STATUS%£©
+    echo     ÈôÊÇ 'Unable to delete directory ... kotlin-classes'£¬ÄÇÊÇ Kotlin ±àÒëÊØ»¤½ø³Ì
+    echo     ²ÐÁôÕ¼ÓÃµ¼ÖÂµÄ£¬Ö´ÐÐ£º build_release.bat --fresh
     exit /b %STATUS%
 )
 
-rem -------------------------------------------------------------------- äº§ç‰©
-set "APP_NAME=çŽ¹éŸ³"
+rem -------------------------------------------------------------------- ²úÎï
+set "APP_NAME=«tÒô"
 set "VERSION_NAME="
-for /f "tokens=2 delims=^"" %%v in ('findstr /i "versionName" "app\build.gradle.kts" 2^>nul') do (
-    if not defined VERSION_NAME set "VERSION_NAME=%%v"
+for /f "tokens=2 delims==" %%v in ('findstr /i "versionName" "app\build.gradle.kts" 2^>nul') do (
+    set "V=%%v"
+    set "V=!V: =!"
+    set "V=!V:"=!"
+    set "V=!V:,=!"
+    if not defined VERSION_NAME set "VERSION_NAME=!V!"
 )
 if not defined VERSION_NAME set "VERSION_NAME=release"
-set "TARGET_APK_NAME=%APP_NAME%-%VERSION_NAME%.apk"
+set "TARGET_APK_NAME=!APP_NAME!-!VERSION_NAME!.apk"
 
-rem å–è¯¥å˜ä½“ç›®å½•ä¸‹æœ€æ–°çš„ .apkã€‚
+rem È¡¸Ã±äÌåÄ¿Â¼ÏÂ×îÐÂµÄ .apk¡£
 set "APK="
 for /f "delims=" %%f in ('dir /b /o-d /s "app\build\outputs\apk\%VARIANT%\*.apk" 2^>nul') do if not defined APK set "APK=%%f"
 
-rem é‡å‘½åä¸ºã€Œåç§°-ç‰ˆæœ¬å·.apkã€
+rem ÖØÃüÃûÎª¡¸Ãû³Æ-°æ±¾ºÅ.apk¡¹
 if defined APK (
-    set "TARGET_APK_PATH=%SCRIPT_DIR%\app\build\outputs\apk\%VARIANT%\%TARGET_APK_NAME%"
+    set "TARGET_APK_PATH=!SCRIPT_DIR!\app\build\outputs\apk\%VARIANT%\!TARGET_APK_NAME!"
     if /i not "!APK!"=="!TARGET_APK_PATH!" (
         if exist "!TARGET_APK_PATH!" del /f /q "!TARGET_APK_PATH!" 2>nul
-        ren "!APK!" "%TARGET_APK_NAME%"
+        ren "!APK!" "!TARGET_APK_NAME!"
         if exist "!TARGET_APK_PATH!" set "APK=!TARGET_APK_PATH!"
     )
 )
 
 echo.
 echo ============================================================
-echo [OK] æž„å»ºæˆåŠŸï¼ˆ%VARIANT_LABEL%ï¼‰
+echo [OK] ¹¹½¨³É¹¦£¨%VARIANT_LABEL%£©
 if defined APK (
     for %%s in ("!APK!") do set "APK_BYTES=%%~zs"
+    if not defined APK_BYTES set "APK_BYTES=0"
     set /a "APK_MB=!APK_BYTES!/1048576"
     echo   APK  : !APK!
-    echo   å¤§å° : !APK_MB! MB
-    echo   ç­¾å : æ­£å¼ release ç­¾åï¼ˆapp/release.keystoreï¼‰
+    echo   ´óÐ¡ : !APK_MB! MB
+    echo   Ç©Ãû : ÕýÊ½ release Ç©Ãû£¨app/release.keystore£©
 ) else (
-    echo   [!] æœªåœ¨ app\build\outputs\apk\%VARIANT% æ‰¾åˆ° .apkï¼Œè¯·æ£€æŸ¥ä¸Šé¢çš„æž„å»ºè¾“å‡ºã€‚
+    echo   [!] Î´ÔÚ app\build\outputs\apk\%VARIANT% ÕÒµ½ .apk£¬Çë¼ì²éÉÏÃæµÄ¹¹½¨Êä³ö¡£
 )
 echo ============================================================
 
-rem -------------------------------------------------------------------- å®‰è£…
+rem -------------------------------------------------------------------- °²×°
 if "%DO_INSTALL%"=="1" (
     set "ADB=adb"
     if defined ANDROID_HOME if exist "!ANDROID_HOME!\platform-tools\adb.exe" set "ADB=!ANDROID_HOME!\platform-tools\adb.exe"
 
     if not defined APK (
         echo.
-        echo [!]  è·³è¿‡å®‰è£…ï¼šæ²¡æœ‰æ‰¾åˆ° APKã€‚
+        echo [!]  Ìø¹ý°²×°£ºÃ»ÓÐÕÒµ½ APK¡£
         exit /b 0
     )
 
     echo.
-    echo æ­£åœ¨å®‰è£…åˆ°å·²è¿žæŽ¥è®¾å¤‡...
+    echo ÕýÔÚ°²×°µ½ÒÑÁ¬½ÓÉè±¸...
     "!ADB!" install -r "!APK!"
     if errorlevel 1 (
-        echo [X] å®‰è£…å¤±è´¥ï¼ˆè®¾å¤‡æ˜¯å¦å·²è¿žæŽ¥å¹¶æŽˆæƒ USB è°ƒè¯•ï¼Ÿï¼‰
+        echo [X] °²×°Ê§°Ü£¨Éè±¸ÊÇ·ñÒÑÁ¬½Ó²¢ÊÚÈ¨ USB µ÷ÊÔ£¿£©
         exit /b 1
     )
-    echo [OK] å®‰è£…å®Œæˆ
+    echo [OK] °²×°Íê³É
 )
 
 exit /b 0
 
 rem ============================================================================
-rem  å­è¿‡ç¨‹ï¼š%1 = å€™é€‰ JDK ç›®å½•ã€‚æ˜¯ JDK 21 å°±è®¾ JAVA_HOME å¹¶è¿”å›ž 0ï¼Œå¦åˆ™è¿”å›ž 1ã€‚
-rem  åˆ¤æ–­ä¾æ®æ˜¯ JDK è‡ªå¸¦çš„ release æ–‡ä»¶é‡Œçš„ JAVA_VERSIONï¼Œæ¯”è§£æž java -version å¯é ã€‚
+rem  ×Ó¹ý³Ì£º%1 = ºòÑ¡ JDK Ä¿Â¼¡£ÊÇ JDK 21 ¾ÍÉè JAVA_HOME ²¢·µ»Ø 0£¬·ñÔò·µ»Ø 1¡£
+rem  ÅÐ¶ÏÒÀ¾ÝÊÇ JDK ×Ô´øµÄ release ÎÄ¼þÀïµÄ JAVA_VERSION£¬±È½âÎö java -version ¿É¿¿¡£
 rem ============================================================================
 :try_jdk
 if "%~1"=="" exit /b 1

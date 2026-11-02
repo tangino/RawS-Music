@@ -16,7 +16,13 @@ import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceMediaType
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.taglib.TagLibBridge
+import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.AppPreferences
+import com.rawsmusic.module.data.prefs.PlaylistStore
+import com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -80,6 +86,13 @@ data class MusicSourceDownloadTask(
  * to Android DownloadManager so the task can continue after the Compose page leaves the screen.
  */
 object MusicSourceDownloadController {
+    private val directDownloadClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
     private const val STORAGE_KEY = "music_source_download_tasks_v1"
     private const val MAX_TASKS = 80
     private const val MAX_PAYLOAD_CHARS = 64 * 1024
@@ -213,6 +226,22 @@ object MusicSourceDownloadController {
             try {
                 val context = applicationContext ?: error("下载服务尚未初始化")
                 val task = mutableTasks.value.firstOrNull { it.id == taskId } ?: return@launch
+
+                // 1. 优先尝试【酷我车载母带引擎】（192kHz/24bit母带或FLAC无损直链 + QMC流式解密）
+                val kuwoSuccess = runCatching {
+                    tryDownloadViaKuwoEngine(context, task)
+                }.getOrElse { error ->
+                    AppLogger.w("MusicSourceDownload", "Kuwo car engine download failed, fallback to default resolver: ${error.message}")
+                    false
+                }
+
+                if (kuwoSuccess) {
+                    AppLogger.i("MusicSourceDownload", "Kuwo car engine download completed successfully for taskId=$taskId")
+                    return@launch
+                }
+
+                // 2. 酷我匹配失败或异常，降级唤起【洛雪源 / 网易源 / 咪咕源】等默认解析通道兜底
+                AppLogger.i("MusicSourceDownload", "Falling back to default MusicSourceAudioResolver for taskId=$taskId")
                 val resolved = MusicSourceAudioResolver.resolve(
                     context = context,
                     item = task.item,
@@ -249,6 +278,173 @@ object MusicSourceDownloadController {
                 }
             }
         }
+    }
+
+    /**
+     * 优先通过酷我车载母带引擎匹配高规格音源并进行流式解密下载。
+     */
+    private suspend fun tryDownloadViaKuwoEngine(context: Context, task: MusicSourceDownloadTask): Boolean {
+        val title = task.item.title
+        val artist = task.item.artists.joinToString(" & ")
+        val durationMs = task.item.durationMs
+
+        AppLogger.i("MusicSourceDownload", "KW_ENGINE: Matching best song for '$title' - '$artist' (duration=${durationMs}ms)")
+        val match = KuwoCarAudioEngine.matchBestSong(title, artist, durationMs) ?: run {
+            AppLogger.w("MusicSourceDownload", "KW_ENGINE: No match found for '$title' - '$artist'")
+            return false
+        }
+
+        val preferLossless = task.requestedQuality in setOf(
+            RawSourceQuality.HiRes,
+            RawSourceQuality.Lossless,
+            RawSourceQuality.Super,
+        )
+
+        val resource = KuwoCarAudioEngine.resolveDownloadResource(match, preferLossless = preferLossless) ?: run {
+            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Failed to resolve download resource for rid=${match.rid}")
+            return false
+        }
+
+        AppLogger.i("MusicSourceDownload", "KW_ENGINE: Matched rid=${match.rid}, targetExt=${resource.targetExtension}, bitrate=${resource.bitrate}k, encrypted=${resource.isEncrypted}")
+
+        val publicDir = publicDownloadDirectory().apply { mkdirs() }
+        ensurePublicDownloadFolderSelected(publicDir)
+
+        val ext = resource.targetExtension
+        val mimeType = when (ext.lowercase(Locale.ROOT)) {
+            "flac" -> "audio/flac"
+            "wav" -> "audio/wav"
+            "m4a", "aac" -> "audio/mp4"
+            else -> "audio/mpeg"
+        }
+
+        val rawBase = if (artist.isNotBlank()) "$artist - $title" else title
+        val base = sanitizeFileName(rawBase)
+        var candidateName = "$base.$ext"
+        if (File(publicDir, candidateName).exists()) {
+            var index = 1
+            while (File(publicDir, "$base ($index).$ext").exists()) {
+                index++
+            }
+            candidateName = "$base ($index).$ext"
+        }
+
+        val outputFile = File(publicDir, candidateName)
+        val tempFile = File(publicDir, "$candidateName.downloading")
+
+        val resolvedQuality = when {
+            resource.bitrate >= 10000 -> RawSourceQuality.HiRes
+            resource.bitrate >= 2000 -> RawSourceQuality.Lossless
+            resource.bitrate >= 320 -> RawSourceQuality.High
+            else -> RawSourceQuality.Standard
+        }
+
+        updateTask(task.id) {
+            it.copy(
+                resolvedQuality = resolvedQuality,
+                status = MusicSourceDownloadStatus.Downloading,
+                fileName = candidateName,
+                mimeType = mimeType,
+                localUri = Uri.fromFile(outputFile).toString(),
+                error = "",
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        }
+
+        // 发起流式下载，若为加密格式（.mflac/.mgg）则实时流式解密
+        val req = Request.Builder()
+            .url(resource.downloadUrl)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .build()
+
+        directDownloadClient.newCall(req).execute().use { response ->
+            if (!response.isSuccessful) {
+                AppLogger.w("MusicSourceDownload", "KW_ENGINE: Direct download HTTP ${response.code}")
+                return false
+            }
+            val body = response.body ?: return false
+            val contentLength = body.contentLength()
+            updateTask(task.id) {
+                it.copy(totalBytes = contentLength, updatedAtMs = System.currentTimeMillis())
+            }
+
+            val cipher = if (resource.isEncrypted) resource.qmcCipher else null
+            var totalRead = 0L
+            var lastUpdate = System.currentTimeMillis()
+
+            body.byteStream().use { input ->
+                tempFile.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        cipher?.decrypt(buffer, totalRead, bytesRead)
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastUpdate > 500L) {
+                            lastUpdate = now
+                            updateTask(task.id) {
+                                it.copy(bytesDownloaded = totalRead, updatedAtMs = now)
+                            }
+                        }
+                    }
+                    output.flush()
+                }
+            }
+
+            if (tempFile.exists()) {
+                if (outputFile.exists()) outputFile.delete()
+                tempFile.renameTo(outputFile)
+            }
+        }
+
+        if (!outputFile.exists() || outputFile.length() == 0L) {
+            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Output file not created or empty")
+            return false
+        }
+
+        // 写入正确的 ID3/FLAC 歌曲标签与内嵌高清封面
+        val completedTask = mutableTasks.value.firstOrNull { it.id == task.id } ?: task.copy(
+            fileName = candidateName,
+            mimeType = mimeType,
+            localUri = Uri.fromFile(outputFile).toString(),
+            resolvedQuality = resolvedQuality,
+        )
+        val warnings = runCatching {
+            finalizeDownloadedMetadata(context, completedTask, outputFile)
+        }.getOrElse { err ->
+            listOf("标签处理异常: ${err.message}")
+        }
+
+        updateTask(task.id) {
+            it.copy(
+                status = MusicSourceDownloadStatus.Completed,
+                bytesDownloaded = outputFile.length(),
+                totalBytes = outputFile.length(),
+                mediaMetadataFinalized = true,
+                libraryScanRequested = true,
+                error = warnings.joinToString("；").take(1_024),
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        }
+        PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
+
+        // 触发 Android 媒体扫描并广播完成事件
+        MediaScannerConnection.scanFile(
+            context,
+            arrayOf(outputFile.absolutePath),
+            arrayOf(mimeType),
+        ) { path, _ ->
+            context.sendBroadcast(
+                Intent(ACTION_DOWNLOAD_MEDIA_READY)
+                    .setPackage(context.packageName)
+                    .putExtra(EXTRA_DOWNLOAD_PATH, path ?: outputFile.absolutePath)
+                    .putExtra(EXTRA_DOWNLOAD_ID, -1L)
+            )
+        }
+
+        return true
     }
 
     private fun enqueueSystemDownload(
@@ -291,10 +487,16 @@ object MusicSourceDownloadController {
         val publicDirectory = publicDownloadDirectory()
         runCatching { publicDirectory.mkdirs() }
         ensurePublicDownloadFolderSelected(publicDirectory)
-        request.setDestinationInExternalPublicDir(
-            Environment.DIRECTORY_MUSIC,
-            "$PUBLIC_DOWNLOAD_DIRECTORY/${descriptor.fileName}",
-        )
+        val defaultMusicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+        if (publicDirectory.absolutePath.startsWith(defaultMusicDir.absolutePath)) {
+            val subPath = publicDirectory.absolutePath.removePrefix(defaultMusicDir.absolutePath).trimStart('/', '\\')
+            request.setDestinationInExternalPublicDir(
+                Environment.DIRECTORY_MUSIC,
+                if (subPath.isNotBlank()) "$subPath/${descriptor.fileName}" else descriptor.fileName,
+            )
+        } else {
+            request.setDestinationUri(Uri.fromFile(File(publicDirectory, descriptor.fileName)))
+        }
         return (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
     }
 
@@ -507,10 +709,19 @@ object MusicSourceDownloadController {
             }
     }
 
-    fun publicDownloadDirectory(): File = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-        PUBLIC_DOWNLOAD_DIRECTORY,
-    )
+    fun publicDownloadDirectory(): File {
+        val custom = AppPreferences.Download.customDirectory.trim()
+        if (custom.isNotBlank()) {
+            val dir = File(custom)
+            if (dir.exists() || dir.mkdirs()) {
+                return dir
+            }
+        }
+        return File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+            PUBLIC_DOWNLOAD_DIRECTORY,
+        )
+    }
 
     private fun migrateDownloadFile(source: File, destination: File): Boolean = runCatching {
         destination.parentFile?.mkdirs()
@@ -584,10 +795,20 @@ object MusicSourceDownloadController {
             "wav" -> "audio/wav"
             else -> "audio/mpeg"
         }
-        val artist = item.artists.joinToString(" & ").ifBlank { "未知歌手" }
-        val shortId = item.stableIdentity.hashCode().toUInt().toString(16).padStart(8, '0').takeLast(8)
-        val base = sanitizeFileName("${item.title} - $artist [${qualityFileLabel(source.quality)}]_$shortId")
-        return FileDescriptor("$base.$extension", mime, source.quality)
+        val artist = item.artists.joinToString(" & ").ifBlank { "" }
+        val title = item.title.ifBlank { "未知曲目" }
+        val rawBase = if (artist.isNotBlank()) "$artist - $title" else title
+        val base = sanitizeFileName(rawBase)
+        val dir = publicDownloadDirectory()
+        var candidateName = "$base.$extension"
+        if (File(dir, candidateName).exists()) {
+            var index = 1
+            while (File(dir, "$base ($index).$extension").exists()) {
+                index++
+            }
+            candidateName = "$base ($index).$extension"
+        }
+        return FileDescriptor(candidateName, mime, source.quality)
     }
 
     private fun inferExtension(url: String, quality: RawSourceQuality): String {
@@ -604,7 +825,7 @@ object MusicSourceDownloadController {
         }
     }
 
-    private fun sanitizeFileName(value: String): String = value
+    internal fun sanitizeFileName(value: String): String = value
         .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
         .replace(Regex("\\s+"), " ")
         .trim(' ', '.')

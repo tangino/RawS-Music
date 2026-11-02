@@ -92,6 +92,7 @@ fun SongMultiSelectActionBar(
     onAddToQueue: ((List<AudioFile>) -> Unit)? = null,
     onPlayNext: ((List<AudioFile>) -> Unit)? = null,
     onShare: ((List<AudioFile>) -> Unit)? = null,
+    onDownloadSongs: ((List<AudioFile>) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     if (!state.isActive) return
@@ -312,7 +313,19 @@ fun SongMultiSelectActionBar(
                         )
                     }
 
-                    // 6. 分享
+                    // 6. 离线保存（网络歌曲下载）
+                    if (onDownloadSongs != null) {
+                        ActionBarActionButton(
+                            title = stringResource(R.string.download_action_offline_save),
+                            drawableRes = R.drawable.ic_source_download,
+                            enabled = hasSelection,
+                            onClick = {
+                                if (hasSelection) onDownloadSongs(selectedSongs)
+                            },
+                        )
+                    }
+
+                    // 7. 分享
                     if (onShare != null) {
                         ActionBarActionButton(
                             title = stringResource(R.string.songs_action_share),

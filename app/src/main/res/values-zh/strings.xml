@@ -2693,4 +2693,22 @@
     <string name="ui_scale_200">超大 (2.0x)</string>
     <string name="ui_scale_225">巨大 (2.25x 推荐 4K 车机)</string>
     <string name="ui_scale_status_format">原始: %1$d DPI (%2$.1fx) · 生效: %3$d DPI (%4$.2fx) · %5$d × %6$d dp</string>
+
+    <string name="download_settings_section">网络歌曲离线保存</string>
+    <string name="download_settings_dir_title">保存目录</string>
+    <string name="download_settings_dir_summary">选择网络歌曲离线保存的本地文件夹</string>
+    <string name="download_settings_dir_default">默认目录 (%1$s)</string>
+    <string name="download_settings_dir_reset">恢复默认目录</string>
+    <string name="download_settings_dir_updated">保存目录已更新为：%1$s</string>
+    <string name="download_settings_quality_title">默认下载音质</string>
+    <string name="download_action_offline_save">离线保存</string>
+    <string name="download_dialog_title">离线保存网络歌曲</string>
+    <string name="download_dialog_summary">共 %1$d 首网络歌曲，%2$d 首已存在本地，已勾选 %3$d 首待下载</string>
+    <string name="download_dialog_quality">下载音质</string>
+    <string name="download_dialog_save_path">保存至：%1$s</string>
+    <string name="download_dialog_change_path">更改</string>
+    <string name="download_dialog_confirm">开始保存 (%1$d 首)</string>
+    <string name="download_dialog_all_cached">当前歌单中所有网络歌曲均已在本地存在，无需重复下载</string>
+    <string name="download_queued_notice">已将 %1$d 首歌曲加入下载队列</string>
+    <string name="download_already_local">本地已存在</string>
 </resources>

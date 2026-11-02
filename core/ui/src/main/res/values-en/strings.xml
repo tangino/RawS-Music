@@ -544,4 +544,22 @@
     <string name="player_middle_disliked">Disliked</string>
     <string name="player_middle_song_count">%1$d songs</string>
     <string name="player_middle_online_tag">Online · %1$s</string>
+
+    <string name="download_settings_section">Offline Song Downloads</string>
+    <string name="download_settings_dir_title">Save Directory</string>
+    <string name="download_settings_dir_summary">Choose a local folder for offline songs</string>
+    <string name="download_settings_dir_default">Default directory (%1$s)</string>
+    <string name="download_settings_dir_reset">Reset to default directory</string>
+    <string name="download_settings_dir_updated">Save directory updated to: %1$s</string>
+    <string name="download_settings_quality_title">Default Download Quality</string>
+    <string name="download_action_offline_save">Save Offline</string>
+    <string name="download_dialog_title">Save Songs Offline</string>
+    <string name="download_dialog_summary">%1$d online songs, %2$d already local, %3$d selected</string>
+    <string name="download_dialog_quality">Audio Quality</string>
+    <string name="download_dialog_save_path">Save to: %1$s</string>
+    <string name="download_dialog_change_path">Change</string>
+    <string name="download_dialog_confirm">Start Saving (%1$d)</string>
+    <string name="download_dialog_all_cached">All online songs in this playlist already exist locally</string>
+    <string name="download_queued_notice">Added %1$d songs to download queue</string>
+    <string name="download_already_local">Already Local</string>
 </resources>
