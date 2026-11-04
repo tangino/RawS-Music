@@ -31,6 +31,6 @@ enum class LibraryBottomButtonsSurface(val prefValue: String) {
 
     companion object {
         fun fromPref(value: String?): LibraryBottomButtonsSurface =
-            entries.firstOrNull { it.prefValue == value } ?: SOLID
+            entries.firstOrNull { it.prefValue == value } ?: LIQUID_GLASS
     }
 }

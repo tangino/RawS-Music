@@ -10,6 +10,7 @@ object PersonalizationPreferences {
     private const val KEY_PREDICTIVE_BACK_ANIMATION = "personalization_predictive_back_animation"
     private const val KEY_PERFORMANCE_MODE = "personalization_performance_mode"
     private const val KEY_PERFORMANCE_MODE_DEFAULT_V2 = "personalization_performance_mode_default_v2"
+    private const val KEY_MATERIAL_DEFAULT_V2 = "personalization_material_default_v2"
     private const val KEY_BOTTOM_NAVIGATION_SCENES = "personalization_bottom_navigation_scenes_v1"
     private const val KEY_BOTTOM_BAR_STYLE = "personalization_bottom_bar_style_v1"
     private const val KEY_BOTTOM_BAR_MATERIAL = "personalization_bottom_bar_material_v1"
@@ -124,14 +125,7 @@ object PersonalizationPreferences {
             AppPreferences.storage.encode(KEY_BOTTOM_BAR_STYLE, value.prefValue)
         }
 
-    private val _bottomBarMaterial = MutableStateFlow(
-        BottomBarMaterial.fromPref(
-            AppPreferences.storage.decodeString(
-                KEY_BOTTOM_BAR_MATERIAL,
-                BottomBarMaterial.fromLegacyStylePref(persistedBottomBarStyle).prefValue,
-            )
-        )
-    )
+    private val _bottomBarMaterial = MutableStateFlow(initialBottomBarMaterial())
     val bottomBarMaterial = _bottomBarMaterial.asStateFlow()
 
     var bottomBarMaterialValue: BottomBarMaterial
@@ -438,14 +432,7 @@ object PersonalizationPreferences {
             AppPreferences.storage.encode(KEY_LIBRARY_BOTTOM_BUTTONS_LAYOUT, value.prefValue)
         }
 
-    private val _libraryBottomButtonsSurface = MutableStateFlow(
-        LibraryBottomButtonsSurface.fromPref(
-            AppPreferences.storage.decodeString(
-                KEY_LIBRARY_BOTTOM_BUTTONS_SURFACE,
-                LibraryBottomButtonsSurface.SOLID.prefValue,
-            )
-        )
-    )
+    private val _libraryBottomButtonsSurface = MutableStateFlow(initialLibraryBottomButtonsSurface())
     val libraryBottomButtonsSurface = _libraryBottomButtonsSurface.asStateFlow()
 
     var libraryBottomButtonsSurfaceValue: LibraryBottomButtonsSurface
@@ -570,6 +557,33 @@ object PersonalizationPreferences {
             highlightStrength = AppPreferences.storage.decodeFloat(KEY_GLASS_HIGHLIGHT, 1f),
             shadowStrength = AppPreferences.storage.decodeFloat(KEY_GLASS_SHADOW, 1f),
         ).normalized()
+
+    private fun initialBottomBarMaterial(): BottomBarMaterial {
+        if (!AppPreferences.storage.decodeBool(KEY_MATERIAL_DEFAULT_V2, false)) {
+            AppPreferences.storage.encode(KEY_BOTTOM_BAR_MATERIAL, BottomBarMaterial.LIQUID_GLASS.prefValue)
+            return BottomBarMaterial.LIQUID_GLASS
+        }
+        return BottomBarMaterial.fromPref(
+            AppPreferences.storage.decodeString(
+                KEY_BOTTOM_BAR_MATERIAL,
+                BottomBarMaterial.LIQUID_GLASS.prefValue,
+            )
+        )
+    }
+
+    private fun initialLibraryBottomButtonsSurface(): LibraryBottomButtonsSurface {
+        if (!AppPreferences.storage.decodeBool(KEY_MATERIAL_DEFAULT_V2, false)) {
+            AppPreferences.storage.encode(KEY_LIBRARY_BOTTOM_BUTTONS_SURFACE, LibraryBottomButtonsSurface.LIQUID_GLASS.prefValue)
+            AppPreferences.storage.encode(KEY_MATERIAL_DEFAULT_V2, true)
+            return LibraryBottomButtonsSurface.LIQUID_GLASS
+        }
+        return LibraryBottomButtonsSurface.fromPref(
+            AppPreferences.storage.decodeString(
+                KEY_LIBRARY_BOTTOM_BUTTONS_SURFACE,
+                LibraryBottomButtonsSurface.LIQUID_GLASS.prefValue,
+            )
+        )
+    }
 
     private fun initialPerformanceMode(): Boolean {
         if (!AppPreferences.storage.decodeBool(KEY_PERFORMANCE_MODE_DEFAULT_V2, false)) {

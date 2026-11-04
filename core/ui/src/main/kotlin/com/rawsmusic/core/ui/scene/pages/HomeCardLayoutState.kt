@@ -16,29 +16,32 @@ private const val HOME_LIBRARY_ORDER_KEY = "library_order"
 private const val HOME_TOOL_ORDER_KEY = "tool_order"
 private const val HOME_HIDDEN_KEY = "hidden_scenes"
 private const val HOME_CARD_SEPARATOR = "|"
+private const val HOME_LAYOUT_VERSION_KEY = "home_card_layout_version_v3"
+private const val CURRENT_LAYOUT_VERSION = 3
 
 /** Categories shown in the Music Library section of HOME. */
 val HomeLibraryCardScenes: List<NavScene> = listOf(
-    // 在线音乐放在首位：它是本次移植的主打入口，且此前**默认配置下完全不可达**
-    // （唯一入口是侧栏，而侧栏要求关掉底部导航，见 AppMainLayout 的 sideRailEnabled）。
-    // 位置可由用户在「主界面卡片」编辑器里随意拖动，所以这里取「最显眼」而不是「最保守」。
+    // 默认排序（严格对应 1~16）：
+    // 1 在线音乐，2 猜你喜欢，3 歌单，4 当前播放歌单，5 上次播放歌单，6 播放队列，
+    // 7 历史播放，8 文件夹，9 文件夹层次结构，10 专辑，11 艺术家，12 最近添加，
+    // 13 流派，14 年份，15 作曲家，16 音源导入
     NavScene.ONLINE_MUSIC,
     NavScene.GUESS_YOU_LIKE,
-    NavScene.SONGS,
+    NavScene.PLAYLISTS,
+    NavScene.CURRENT_PLAYLIST,
+    NavScene.PREVIOUS_PLAYLIST,
+    NavScene.QUEUE,
+    NavScene.PLAY_HISTORY,
     NavScene.FOLDERS,
     NavScene.FOLDER_HIERARCHY,
     NavScene.ALBUMS,
     NavScene.ARTISTS,
-    NavScene.PLAYLISTS,
-    NavScene.CURRENT_PLAYLIST,
-    NavScene.PREVIOUS_PLAYLIST,
-    NavScene.PLAY_HISTORY,
-    NavScene.QUEUE,
     NavScene.RECENTLY_ADDED,
     NavScene.GENRE,
     NavScene.YEAR,
     NavScene.COMPOSER,
     NavScene.SOURCE_IMPORT,
+    NavScene.SONGS,
 )
 
 /** Utility cards are editable too, but never mix into the library category order. */
@@ -76,6 +79,16 @@ class HomeCardLayoutState(context: Context) {
     }
 
     init {
+        val savedVersion = preferences.getInt(HOME_LAYOUT_VERSION_KEY, 0)
+        if (savedVersion < CURRENT_LAYOUT_VERSION) {
+            libraryOrder = HomeLibraryCardScenes
+            hiddenScenes = setOf(NavScene.SONGS.tag)
+            preferences.edit()
+                .putInt(HOME_LAYOUT_VERSION_KEY, CURRENT_LAYOUT_VERSION)
+                .putString(HOME_LIBRARY_ORDER_KEY, encode(HomeLibraryCardScenes))
+                .putString(HOME_HIDDEN_KEY, NavScene.SONGS.tag)
+                .apply()
+        }
         preferences.registerOnSharedPreferenceChangeListener(listener)
     }
 
@@ -156,13 +169,14 @@ class HomeCardLayoutState(context: Context) {
     }
 
     fun reset() {
-        hiddenScenes = emptySet()
+        hiddenScenes = setOf(NavScene.SONGS.tag)
         libraryOrder = HomeLibraryCardScenes
         toolOrder = HomeToolCardScenes
         preferences.edit()
+            .putInt(HOME_LAYOUT_VERSION_KEY, CURRENT_LAYOUT_VERSION)
             .putString(HOME_LIBRARY_ORDER_KEY, encode(HomeLibraryCardScenes))
             .putString(HOME_TOOL_ORDER_KEY, encode(HomeToolCardScenes))
-            .putString(HOME_HIDDEN_KEY, "")
+            .putString(HOME_HIDDEN_KEY, NavScene.SONGS.tag)
             .apply()
     }
 
@@ -204,8 +218,8 @@ class HomeCardLayoutState(context: Context) {
 
     private fun loadHidden(): Set<String> {
         val allowed = (HomeLibraryCardScenes + HomeToolCardScenes).map { it.tag }.toSet()
-        return preferences.getString(HOME_HIDDEN_KEY, "").orEmpty()
-            .split(HOME_CARD_SEPARATOR)
+        val raw = preferences.getString(HOME_HIDDEN_KEY, null) ?: return setOf(NavScene.SONGS.tag)
+        return raw.split(HOME_CARD_SEPARATOR)
             .filter { it.isNotBlank() && it in allowed }
             .toSet()
     }
