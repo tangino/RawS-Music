@@ -350,7 +350,7 @@ fun AppMainLayout(
     var listMarqueeSceneVisible by remember { mutableStateOf(true) }
     LaunchedEffect(playerSceneProgressState, bottomChromeScrollState) {
         snapshotFlow {
-            (playerSceneProgressState?.value?.coerceIn(0f, 1f) ?: 0f) > 0f
+            (playerSceneProgressState?.value?.coerceIn(0f, 1f) ?: 0f) > 0.001f
         }
             .distinctUntilChanged()
             .collect { ownsSheet ->

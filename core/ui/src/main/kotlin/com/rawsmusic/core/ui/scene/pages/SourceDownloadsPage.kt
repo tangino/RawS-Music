@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
 import com.rawsmusic.module.data.source.playback.MusicSourceDownloadStatus
 import com.rawsmusic.module.data.source.playback.MusicSourceDownloadTask
@@ -69,7 +70,7 @@ internal fun SourceDownloadsPage(onBack: () -> Unit) {
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 174.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {

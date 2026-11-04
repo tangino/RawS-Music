@@ -96,6 +96,7 @@ import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import com.rawsmusic.core.ui.scene.NavScene
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.virtuallist.ComposeVirtualList
@@ -735,7 +736,8 @@ fun PlaylistScreen(
         onImportPlaylist = { importDialog = true },
         headerTrailingContent = headerTrailingAction,
         virtualListState = listState,
-        contentOverlap = 0.dp
+        contentOverlap = 0.dp,
+        modifier = Modifier.bottomChromeNestedScroll()
     ) { topPadding, backdropSource ->
         val chipsBarHeight = 44.dp
 

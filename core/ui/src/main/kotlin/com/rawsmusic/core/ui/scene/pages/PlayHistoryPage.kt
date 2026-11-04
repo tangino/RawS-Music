@@ -60,6 +60,7 @@ import com.rawsmusic.core.common.prefs.PlayHistoryManager
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.flow.usesReferenceStaticForeground
 import top.yukonga.miuix.kmp.basic.Text
@@ -286,7 +287,7 @@ fun PlayHistoryPage(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                     contentPadding = PaddingValues(top = 4.dp, bottom = 180.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {

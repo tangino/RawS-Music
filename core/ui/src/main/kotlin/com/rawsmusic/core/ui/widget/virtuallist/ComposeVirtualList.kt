@@ -950,10 +950,9 @@ fun ComposeVirtualList(
 
                 val old = state.viewportScrollY
                 val newValue = (old - remaining).coerceIn(0f, maxScrollY)
-                if (newValue != old) {
-                    if (bottomChromeEnvironment.layoutClass == BottomChromeLayoutClass.Compact) {
-                        bottomChromeScrollState?.onContentScroll(newValue - old)
-                    }
+                if (bottomChromeEnvironment.layoutClass == BottomChromeLayoutClass.Compact) {
+                    val scrollDelta = if (newValue != old) newValue - old else -delta
+                    bottomChromeScrollState?.onContentScroll(scrollDelta)
                 }
                 state.viewportScrollY = newValue
                 updateSettledBaseScroll(newValue.toInt())
@@ -1021,9 +1020,18 @@ fun ComposeVirtualList(
             virtualListMaxOvershootPx,
             virtualListHeaderMaxStretchPx,
             minimumFlingVelocity,
+            bottomChromeScrollState,
+            bottomChromeEnvironment,
         ) {
             object : FlingBehavior {
                 override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+                    if (bottomChromeEnvironment.layoutClass == BottomChromeLayoutClass.Compact) {
+                        if (initialVelocity < -300f) {
+                            bottomChromeScrollState?.settleTo(com.rawsmusic.core.ui.scene.BottomChromeStableMode.Minimized)
+                        } else if (initialVelocity > 300f) {
+                            bottomChromeScrollState?.settleTo(com.rawsmusic.core.ui.scene.BottomChromeStableMode.Expanded)
+                        }
+                    }
                     if (detailVirtualListEdgeEnabled && state.isVirtualListEdgeActive) {
                         // mo1258(): an UP while the edge is displaced goes straight to the rebound.
                         state.animateVirtualListEdgeBack()

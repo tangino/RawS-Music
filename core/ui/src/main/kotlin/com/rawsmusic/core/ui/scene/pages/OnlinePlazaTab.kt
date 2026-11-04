@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineLeaderboard
 import com.rawsmusic.module.online.model.OnlinePlatform
@@ -348,7 +349,7 @@ internal fun OnlinePlazaTab(
                     activeSearchKeyword.isBlank() -> EmptyState(stringResource(R.string.online_plaza_search_initial))
                     searchResults.isEmpty() -> EmptyState(stringResource(R.string.online_plaza_search_empty))
                     else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
                         ),
@@ -393,7 +394,7 @@ internal fun OnlinePlazaTab(
                     section != OnlinePlazaSection.Leaderboards && playlists.isEmpty() ->
                         EmptyState(stringResource(R.string.online_plaza_empty))
                     section == OnlinePlazaSection.Leaderboards -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
                         ),
@@ -407,7 +408,7 @@ internal fun OnlinePlazaTab(
                         }
                     }
                     else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp,
                         ),

@@ -66,6 +66,7 @@ import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.ui.widget.bitmaps.resolvePlaybackArtworkKey
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.flow.referenceStaticForeground
@@ -451,7 +452,7 @@ internal fun GuessYouLikePage(
             ) {
                 // 歌曲列表
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                     contentPadding = PaddingValues(bottom = 180.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -507,7 +508,7 @@ internal fun GuessYouLikePage(
             // 1. 页面内容可滚动列表（封面大图作为首个 Item，跟随手势平滑向上滚动）
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                 contentPadding = PaddingValues(bottom = 180.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {

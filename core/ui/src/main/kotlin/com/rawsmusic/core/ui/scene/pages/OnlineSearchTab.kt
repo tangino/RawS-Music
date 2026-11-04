@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus
@@ -644,7 +645,7 @@ private fun OnlineSearchInitialState(
 ) {
     val colors = themeColors()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -719,7 +720,7 @@ private fun OnlineSearchResultList(
 ) {
     val colors = themeColors()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

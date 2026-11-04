@@ -213,11 +213,13 @@ class BottomChromeScrollState {
         lockedVisibilityProgress = 0f
         topInRootPx = 0f
         restingTopInRootPx = 0f
+        interactionLocked = false
     }
 
     fun resetGeometryAnchor() {
         topInRootPx = 0f
         restingTopInRootPx = 0f
+        interactionLocked = false
     }
 
     private fun flushPendingProgress() {
@@ -243,8 +245,8 @@ class BottomChromeScrollState {
 val LocalBottomChromeScrollState = compositionLocalOf<BottomChromeScrollState?> { null }
 
 /**
- * 通用嵌套滚动连接器：使用户滑动任何 LazyColumn 或容器时，底部导航栏（包括 MiniPlayer 与 TabBar）
- * 都能跟随手指移动并平滑收缩/展开，且自动遵从全局设置（BottomChromeScrollBehavior）。
+ * 閫氱敤宓屽婊氬姩杩炴帴鍣細浣跨敤鎴锋粦鍔ㄤ换浣?LazyColumn 鎴栧鍣ㄦ椂锛屽簳閮ㄥ鑸爮锛堝寘鎷?MiniPlayer 涓?TabBar锛?
+ * 閮借兘璺熼殢鎵嬫寚绉诲姩骞跺钩婊戞敹缂?灞曞紑锛屼笖鑷姩閬典粠鍏ㄥ眬璁剧疆锛圔ottomChromeScrollBehavior锛夈€?
  */
 @Composable
 fun rememberBottomChromeNestedScrollConnection(
@@ -256,8 +258,8 @@ fun rememberBottomChromeNestedScrollConnection(
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (scrollState != null && available.y != 0f) {
-                    // available.y < 0 为手指向上滑动（内容向下滚动），底栏应收缩 (deltaY > 0)
-                    // available.y > 0 为手指向下滑动（内容向上滚动），底栏应展开 (deltaY < 0)
+                    // available.y < 0 涓烘墜鎸囧悜涓婃粦鍔紙鍐呭鍚戜笅婊氬姩锛夛紝搴曟爮搴旀敹缂?(deltaY > 0)
+                    // available.y > 0 涓烘墜鎸囧悜涓嬫粦鍔紙鍐呭鍚戜笂婊氬姩锛夛紝搴曟爮搴斿睍寮€ (deltaY < 0)
                     scrollState.onContentScroll(-available.y)
                     settleJob?.cancel()
                     settleJob = coroutineScope.launch {
@@ -284,10 +286,10 @@ fun rememberBottomChromeNestedScrollConnection(
                 if (scrollState != null) {
                     settleJob?.cancel()
                     if (available.y < -300f) {
-                        // 向上甩动快速收缩底栏
+                        // 鍚戜笂鐢╁姩蹇€熸敹缂╁簳鏍?
                         scrollState.settleTo(BottomChromeStableMode.Minimized)
                     } else if (available.y > 300f) {
-                        // 向下甩动快速展开底栏
+                        // 鍚戜笅鐢╁姩蹇€熷睍寮€搴曟爮
                         scrollState.settleTo(BottomChromeStableMode.Expanded)
                     }
                 }
@@ -307,7 +309,7 @@ fun rememberBottomChromeNestedScrollConnection(
 }
 
 /**
- * 方便页面直接绑定的 Modifier 扩展方法。
+ * 鏂逛究椤甸潰鐩存帴缁戝畾鐨?Modifier 鎵╁睍鏂规硶銆?
  */
 @Composable
 fun Modifier.bottomChromeNestedScroll(

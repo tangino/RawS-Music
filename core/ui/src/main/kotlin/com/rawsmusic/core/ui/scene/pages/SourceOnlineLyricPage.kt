@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.module.data.source.playback.MusicSourceLyricSnapshot
 import com.rawsmusic.module.data.source.playback.MusicSourceLyricStatus
 import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackSnapshot
@@ -186,7 +187,7 @@ internal fun SourceOnlineLyricPage(
                     )
                 }
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                     state = listState,
                     contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 160.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

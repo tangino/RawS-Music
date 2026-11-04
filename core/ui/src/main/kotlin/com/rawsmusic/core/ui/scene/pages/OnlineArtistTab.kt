@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import com.rawsmusic.core.ui.scene.RawWindowWidthClass
@@ -248,7 +249,7 @@ internal fun OnlineArtistTab(
                     activeSearchKeyword.isBlank() -> ArtistEmptyState(stringResource(R.string.online_artist_search_initial))
                     searchResults.isEmpty() -> ArtistEmptyState(stringResource(R.string.online_artist_search_empty))
                     else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
@@ -287,7 +288,7 @@ internal fun OnlineArtistTab(
                     )
                     artists.isEmpty() -> ArtistEmptyState(stringResource(R.string.online_artist_empty))
                     else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 180.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {

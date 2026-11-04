@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.source.RawSourceMediaItem
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.InstalledMusicSource
 import com.rawsmusic.module.data.source.runtime.AggregatedMusicSourceSearch
@@ -119,7 +120,7 @@ internal fun SourceSearchPage(
         )
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 174.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

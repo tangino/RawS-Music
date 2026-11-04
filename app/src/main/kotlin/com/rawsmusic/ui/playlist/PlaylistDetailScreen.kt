@@ -29,6 +29,7 @@ import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.scene.NavScene
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
 import com.rawsmusic.core.ui.widget.player.shareSelectedAudio
 import com.rawsmusic.core.ui.widget.selection.SongMultiSelectActionBar
@@ -171,7 +172,7 @@ fun PlaylistDetailScreen(
         onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
         headerTrailingContent = headerTrailingContent,
         contentOverlap = 0.dp,
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll()
     ) { topPadding, backdropSource ->
         if (songs.isEmpty()) {
             Box(

@@ -95,6 +95,7 @@ import com.rawsmusic.core.ui.theme.FontScaleLayoutReporter
 import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.scene.LocalSceneBackgroundFrozen
 import com.rawsmusic.core.ui.scene.LocalReferenceLibraryFullScenePreflight
 import com.rawsmusic.core.ui.scene.LocalRetainedSceneItemTransform
@@ -543,7 +544,8 @@ private fun HomePageContent(
             .fillMaxSize()
             .rawStableStatusBarsPadding()
             .padding(horizontal = 16.dp)
-            .verticalScroll(listState),
+            .verticalScroll(listState)
+            .bottomChromeNestedScroll(),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         Column(
@@ -710,7 +712,7 @@ fun Daily20Page(
     val dailySongs = remember(songs, todayKey) { daily20Songs(songs, todayKey) }
     val coverSong = dailySongs.firstOrNull()
     LazyColumn(
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize().bottomChromeNestedScroll()
     ) {
         item {
             Box(
