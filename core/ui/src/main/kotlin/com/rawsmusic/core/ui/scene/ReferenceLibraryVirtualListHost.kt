@@ -114,6 +114,7 @@ internal val PersistentLibraryRailSupportedScenes: Set<NavScene> = ReferenceLibr
     NavScene.ONLINE_PLAYLIST_DETAIL,
     NavScene.ONLINE_ARTIST_DETAIL,
     NavScene.PLAY_HISTORY,
+    NavScene.GUESS_YOU_LIKE,
 )
 
 internal fun supportsPersistentLibraryRailScene(scene: NavScene): Boolean =

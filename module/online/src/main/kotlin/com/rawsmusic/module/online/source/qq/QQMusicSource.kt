@@ -602,7 +602,7 @@ class QQMusicSource(
             description = desc
         )
 
-        val songInfoList = dataData.optJSONArray("songInfoList")
+        val songInfoList = dataObj.optJSONArray("songInfoList") ?: dataData.optJSONArray("songInfoList")
             ?: dataData.optJSONArray("song_list")
             ?: dataData.optJSONArray("songList")
             ?: dataData.optJSONArray("list")
@@ -621,7 +621,7 @@ class QQMusicSource(
 
             val albumObj = songObj.optJSONObject("album")
             val albumMid = songObj.optString("albumMid")
-                .ifEmpty { albumObj?.optString("mid") ?: "" }
+                .ifEmpty { albumObj?.optString("mid") ?: "" }.ifEmpty { albumObj?.optString("albumMid") ?: "" }.ifEmpty { songObj.optString("albummid") }
             val albumName = songObj.optString("albumName")
                 .ifEmpty { albumObj?.optString("name") ?: "" }
 

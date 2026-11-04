@@ -256,6 +256,40 @@ object OnlinePlaybackLauncher {
     private var radioPlatform: com.rawsmusic.module.online.model.OnlinePlatform = com.rawsmusic.module.online.model.OnlinePlatform.QQ
     private var radioMonitorJob: Job? = null
     private val radioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val refillMutex = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * 在「猜你喜欢」/ 个性电台场景中播放单曲，并将其关联的猜你喜欢队列纳为电台无限流。
+     * 无论点击哪一首歌，均激活电台模式；若点击接近列表末尾（低水位），立即预拉取下一批曲目追加。
+     */
+    suspend fun playRadioTrack(
+        context: Context,
+        item: OnlineSongItem,
+        queue: List<OnlineSongItem>,
+        index: Int,
+        platform: com.rawsmusic.module.online.model.OnlinePlatform = com.rawsmusic.module.online.model.OnlinePlatform.QQ,
+        currentPage: Int = 1,
+    ): OnlinePlayResult {
+        isRadioMode = true
+        radioPlatform = platform
+        radioPage = maxOf(radioPage, currentPage)
+        _currentRadioSongs.value = queue
+
+        // 记录播放偏好与行为
+        com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongPlayedInRadio(item.id)
+
+        val playResult = play(context = context, item = item, queue = queue, index = index)
+        if (playResult is OnlinePlayResult.Started) {
+            startRadioWatermarkMonitor(context.applicationContext)
+            // 若用户点击的正好是队列后三首（低水位），立刻静默拉取下一批曲目进行无缝续杯追加
+            if (queue.isNotEmpty() && index >= queue.size - 3) {
+                radioScope.launch {
+                    triggerRadioRefill(context.applicationContext, seedMid = item.id)
+                }
+            }
+        }
+        return playResult
+    }
 
     /**
      * 一键开启猜你喜欢 / 私人雷达电台
@@ -326,12 +360,41 @@ object OnlinePlaybackLauncher {
     }
 
     /**
+     * 触发电台续杯追加下一批个性化推荐歌曲
+     */
+    suspend fun triggerRadioRefill(appContext: Context, seedMid: String = "") {
+        if (!refillMutex.tryLock()) return
+        try {
+            val nextPage = radioPage + 1
+            AppLogger.d(TAG, "[OnlineRadio] 电台触发自动续杯，拉取第 $nextPage 页 (种子: $seedMid)...")
+            val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
+            val moreResult = repo.getRecommendSongs(
+                page = nextPage,
+                pageSize = 20,
+                platform = radioPlatform,
+                seedSongMids = if (seedMid.isNotBlank()) listOf(seedMid) else emptyList(),
+            )
+            val moreSongs = moreResult.getOrNull().orEmpty()
+            if (moreSongs.isNotEmpty()) {
+                val rawItems = moreSongs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+                MusicSourcePlaybackController.appendQueue(rawItems)
+                _currentRadioSongs.value = _currentRadioSongs.value + moreSongs
+                radioPage = nextPage
+                AppLogger.i(TAG, "[OnlineRadio] 电台第 $nextPage 页续杯成功，已追加 ${rawItems.size} 首歌曲，当前总数: ${_currentRadioSongs.value.size}")
+            }
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "[OnlineRadio] 电台静默续杯异常: ${e.message}")
+        } finally {
+            refillMutex.unlock()
+        }
+    }
+
+    /**
      * 电台队列低水位线监控：队列剩余不足 3 首时，自动静默获取下一批追加入队
      */
     private fun startRadioWatermarkMonitor(appContext: Context) {
         radioMonitorJob?.cancel()
         radioMonitorJob = radioScope.launch {
-            var isLoadingMore = false
             var lastTrackId: String? = null
             var lastTrackArtist: String? = null
             var trackStartTimeMs: Long = System.currentTimeMillis()
@@ -361,32 +424,9 @@ object OnlinePlaybackLauncher {
                 }
 
                 // 2. 低水位线自动无限续杯（还剩 3 首以下自动拉取）
-                if (queue.isNotEmpty() && curIdx >= queue.size - 3 && !isLoadingMore) {
-                    isLoadingMore = true
-                    try {
-                        val nextPage = radioPage + 1
-                        val seedMid = currentTrack?.remoteId.orEmpty()
-                        AppLogger.d(TAG, "[OnlineRadio] 电台低水位触发自动续杯，拉取第 $nextPage 页 (种子: $seedMid)...")
-                        val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
-                        val moreResult = repo.getRecommendSongs(
-                            page = nextPage,
-                            pageSize = 20,
-                            platform = radioPlatform,
-                            seedSongMids = if (seedMid.isNotBlank()) listOf(seedMid) else emptyList(),
-                        )
-                        val moreSongs = moreResult.getOrNull().orEmpty()
-                        if (moreSongs.isNotEmpty()) {
-                            val rawItems = moreSongs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
-                            MusicSourcePlaybackController.appendQueue(rawItems)
-                            _currentRadioSongs.value = _currentRadioSongs.value + moreSongs
-                            radioPage = nextPage
-                            AppLogger.i(TAG, "[OnlineRadio] 电台第 $nextPage 页续杯成功，已追加 ${rawItems.size} 首歌曲")
-                        }
-                    } catch (e: Exception) {
-                        AppLogger.w(TAG, "[OnlineRadio] 电台静默续杯异常: ${e.message}")
-                    } finally {
-                        isLoadingMore = false
-                    }
+                if (queue.isNotEmpty() && curIdx >= queue.size - 3) {
+                    val seedMid = currentTrack?.remoteId.orEmpty()
+                    triggerRadioRefill(appContext, seedMid)
                 }
             }
         }

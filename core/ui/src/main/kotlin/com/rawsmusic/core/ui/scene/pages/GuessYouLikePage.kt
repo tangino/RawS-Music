@@ -10,12 +10,23 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,8 +47,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -46,6 +62,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.model.AudioFile
+import com.rawsmusic.core.ui.widget.bitmaps.resolvePlaybackArtworkKey
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
@@ -77,6 +95,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 internal fun GuessYouLikePage(
     onBack: () -> Unit,
+    currentSong: AudioFile? = null,
+    currentCoverPath: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -124,111 +144,515 @@ internal fun GuessYouLikePage(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(scheme.background)
-            .rawStableStatusBarsPadding(),
-    ) {
-        // 顶部标题栏
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MiuixIcons.Regular.Back,
-                    contentDescription = null,
-                    tint = colors.onSurface,
-                )
+    // 实时监听电台队列的自动追加更新，保持界面歌曲列表与播放队列深度同步
+    LaunchedEffect(Unit) {
+        OnlinePlaybackLauncher.currentRadioSongs.collect { radioSongs ->
+            if (OnlinePlaybackLauncher.isRadioActive && radioSongs.isNotEmpty()) {
+                songs = radioSongs
             }
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.online_plaza_guess_like_title),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.onSurface,
-            )
         }
+    }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    // 权威封面与当前播放曲目实时推导：
+    // 优先从底层真正发声播放的歌曲（currentSong / playbackSnapshot）获取歌名，并在当前推荐列表中匹配对应的 coverUrl。
+    // 无论自动切歌还是点击切歌，切到第 2 首或第 N 首时，Header 封面立即随之精准更新！
+    val activePlayingTitle = currentSong?.title?.takeIf { it.isNotBlank() }
+        ?: playbackSnapshot.currentItem?.title?.takeIf { it.isNotBlank() }
+
+    val currentArtwork = remember(currentSong, currentCoverPath, activePlayingTitle, playbackSnapshot.currentItem, songs) {
+        // 1. 核心：根据当前真正播放的歌名，从推荐列表精准匹配第 2 首或正在播放歌曲的原始高清 coverUrl
+        val fromListMatched = if (!activePlayingTitle.isNullOrBlank()) {
+            songs.firstOrNull { it.title.equals(activePlayingTitle, ignoreCase = true) }?.coverUrl?.takeIf { it.isNotBlank() }
+        } else null
+
+        // 2. 底层播放通道（迷你播放条 MiniPlayer）下发的实时有效封面路径
+        val fromNavCover = currentCoverPath?.takeIf { it.isNotBlank() }
+        val fromNavSong = currentSong.resolvePlaybackArtworkKey(null)?.takeIf { it.isNotBlank() }
+
+        // 3. 在线快照中携带的 artworkUrl
+        val fromSnapshot = playbackSnapshot.currentItem?.artworkUrl?.takeIf { it.isNotBlank() }
+
+        // 4. 只有当没有歌曲在发声播放（播放器完全空闲）时，才取推荐列表首曲作为未起播默认背景
+        val fromFirstSong = if (activePlayingTitle.isNullOrBlank()) {
+            songs.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
+        } else null
+
+        fromListMatched ?: fromNavCover ?: fromNavSong ?: fromSnapshot ?: fromFirstSong
+    }
+    val hasArtwork = currentArtwork != null
+    val configuration = LocalConfiguration.current
+    val isWideScreen = configuration.screenWidthDp >= 600
+
+    val listState = rememberLazyListState()
+    val isScrolledPastHero by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0
+        }
+    }
+
+    if (isWideScreen) {
+        // ========== 大屏设备双栏响应式布局 ==========
+        Row(
+            modifier = modifier
+                .fillMaxSize()
+                .rawStableStatusBarsPadding(),
         ) {
-            // 顶部专属雷达信息卡片
-            item(key = "guess_like_header_card") {
+            // 1. 左栏：封面栏、雷达信息以及操作按钮
+            Column(
+                modifier = Modifier
+                    .width(320.dp)
+                    .fillMaxHeight()
+                    .padding(start = 16.dp, top = 8.dp, end = 12.dp, bottom = 16.dp),
+            ) {
+                // 顶部返回栏
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = MiuixIcons.Regular.Back,
+                            contentDescription = null,
+                            tint = colors.onSurface,
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.online_plaza_guess_like_title),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // 左侧大封面卡片（大尺寸方形图，完整高清展示封面，不被遮挡）
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(scheme.surfaceContainer.copy(alpha = 0.85f))
-                        .border(0.5.dp, scheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
-                        .padding(16.dp),
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(scheme.surfaceContainer),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // 头像或音乐雷达图标
+                    if (!currentArtwork.isNullOrBlank()) {
+                        BitmapImage(
+                            key = currentArtwork,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            targetWidth = 720,
+                            targetHeight = 720,
+                            showDefaultArtwork = false,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = MiuixIcons.Regular.Music,
+                            contentDescription = null,
+                            tint = scheme.primary,
+                            modifier = Modifier.size(64.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // 雷达用户信息
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(scheme.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val avatarUrl = qqAccount?.avatarUrl.orEmpty()
+                        if (avatarUrl.isNotBlank()) {
+                            BitmapImage(
+                                key = avatarUrl,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                targetWidth = 128,
+                                targetHeight = 128,
+                                showDefaultArtwork = false,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = MiuixIcons.Regular.Music,
+                                contentDescription = null,
+                                tint = scheme.primary,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (isLoggedIn) "专属私人雷达" else "精选推荐电台",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.onSurface,
+                            )
+                            Spacer(Modifier.width(6.dp))
                             Box(
                                 modifier = Modifier
-                                    .size(52.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(scheme.primary.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center,
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(scheme.primary.copy(alpha = 0.12f))
+                                    .padding(horizontal = 6.dp, vertical = 1.dp),
                             ) {
-                                val avatarUrl = qqAccount?.avatarUrl.orEmpty()
-                                if (avatarUrl.isNotBlank()) {
-                                    BitmapImage(
-                                        key = avatarUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.fillMaxSize(),
-                                        targetWidth = 128,
-                                        targetHeight = 128,
-                                        showDefaultArtwork = false,
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = MiuixIcons.Regular.Music,
-                                        contentDescription = null,
-                                        tint = scheme.primary,
-                                        modifier = Modifier.size(26.dp),
-                                    )
+                                Text(
+                                    text = if (isLoggedIn) "QQ 音乐" else "推荐",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = scheme.primary,
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(2.dp))
+
+                        Text(
+                            text = if (isLoggedIn) {
+                                "当前用户: ${qqAccount.nickname.ifBlank { qqAccount.userId }} · 基于听歌偏好"
+                            } else {
+                                stringResource(R.string.online_plaza_guess_like_subtitle_guest)
+                            },
+                            fontSize = 11.sp,
+                            color = colors.secondaryText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // 大屏幕：操作按钮置于左侧精选推荐电台控件下方
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = {
+                            if (isStartingRadio) return@Button
+                            isStartingRadio = true
+                            scope.launch {
+                                AppNoticeBus.post(
+                                    message = context.getString(R.string.online_plaza_guess_like_loading),
+                                    icon = AppNoticeIcon.PLAYLIST,
+                                )
+                                val result = OnlinePlaybackLauncher.launchGuessLikeRadio(
+                                    context = context,
+                                    platform = OnlinePlatform.QQ,
+                                    onSongsLoaded = { newSongs ->
+                                        songs = newSongs
+                                    },
+                                )
+                                when (result) {
+                                    is OnlinePlayResult.Started -> {
+                                        AppNoticeBus.post(
+                                            message = context.getString(R.string.online_plaza_guess_like_success),
+                                            icon = AppNoticeIcon.PLAYLIST,
+                                        )
+                                    }
+                                    is OnlinePlayResult.Failed -> AppNoticeBus.error(result.reason)
+                                    OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error("未安装或启用可用音源")
+                                    OnlinePlayResult.NoMatchFound -> AppNoticeBus.error("未匹配到可播放曲目")
                                 }
+                                isStartingRadio = false
+                            }
+                        },
+                        enabled = !isStartingRadio,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 40.dp),
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            if (isStartingRadio) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = scheme.onPrimary,
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                androidx.compose.foundation.Image(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    colorFilter = ColorFilter.tint(scheme.onPrimary),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.online_plaza_guess_like_btn),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = scheme.onPrimary,
+                                )
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (!isLoading) {
+                                pageIndex++
+                            }
+                        },
+                        enabled = !isLoading,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 40.dp),
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            androidx.compose.foundation.Image(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = null,
+                                colorFilter = ColorFilter.tint(colors.onSurface),
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "换一批",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2. 右栏：纯净展示歌曲列表
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(top = 8.dp, end = 16.dp, bottom = 16.dp),
+            ) {
+                // 歌曲列表
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 180.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    renderSongList(
+                        songs = songs,
+                        isLoading = isLoading,
+                        playbackSnapshot = playbackSnapshot,
+                        activePlayingTitle = activePlayingTitle,
+                        onSongPlay = { song, index ->
+                            scope.launch {
+                                OnlinePlaybackLauncher.playRadioTrack(
+                                    context = context,
+                                    item = song,
+                                    queue = songs,
+                                    index = index,
+                                    currentPage = pageIndex,
+                                )
+                            }
+                        },
+                        onSeedRadio = { song ->
+                            scope.launch {
+                                AppNoticeBus.post(
+                                    message = "正在以此歌为种子开启雷达电台...",
+                                    icon = AppNoticeIcon.PLAYLIST,
+                                )
+                                OnlinePlaybackLauncher.launchGuessLikeRadio(
+                                    context = context,
+                                    platform = OnlinePlatform.QQ,
+                                    seedSong = song,
+                                    onSongsLoaded = { newSongs ->
+                                        songs = newSongs
+                                    },
+                                )
+                            }
+                        },
+                        onNegativeFeedback = { song ->
+                            GuessLikeOptimizer.recordNegativeFeedback(song.id, song.artist)
+                            songs = songs.filterNot { it.id == song.id }
+                            AppNoticeBus.post(
+                                message = "已为您减少此类推荐",
+                                icon = AppNoticeIcon.INFO,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+    } else {
+        // ========== 手机竖屏沉浸式单栏布局 ==========
+        Box(
+            modifier = modifier.fillMaxSize(),
+        ) {
+            // 1. 页面内容可滚动列表（封面大图作为首个 Item，跟随手势平滑向上滚动）
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 180.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 沉浸式头部区域：大图封面背景跟随滚动 + 整体信息沉底轻量化
+                item(key = "guess_like_header_hero") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (hasArtwork) Modifier.height(360.dp) else Modifier.wrapContentHeight()
+                            )
+                    ) {
+                        // 封面大图：在 Header 内部横向占满、竖向贴顶，随列表自然向上滚动
+                        if (currentArtwork != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                                    .drawWithContent {
+                                        drawContent()
+                                        // 核心：使用 BlendMode.DstIn 透明度蒙版将封面底部平滑渐隐至完全透明，
+                                        // 不添加任何硬编码色块，自然透出系统底层动态流光背景，杜绝割裂与生硬横条。
+                                        drawRect(
+                                            brush = Brush.verticalGradient(
+                                                0.0f to Color.Black,
+                                                0.40f to Color.Black,
+                                                1.0f to Color.Transparent,
+                                            ),
+                                            blendMode = BlendMode.DstIn,
+                                        )
+                                    }
+                            ) {
+                                BitmapImage(
+                                    key = currentArtwork,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                    targetWidth = 1080,
+                                    targetHeight = 1080,
+                                    showDefaultArtwork = false,
+                                )
+
+                                // 顶部柔和微暗遮罩（渐隐至透明，底端无任何实体色块）
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                0.0f to Color.Black.copy(alpha = 0.35f),
+                                                0.40f to Color.Black.copy(alpha = 0.12f),
+                                                0.80f to Color.Transparent,
+                                            )
+                                        )
+                                )
+                            }
+                        }
+
+                        // 头部内容：将信息整体下移至封面底部，上半部完全留白展示人物画面，去掉半透明边框，缩小按钮
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (hasArtwork) Modifier.align(Alignment.BottomCenter)
+                                    else Modifier.rawStableStatusBarsPadding()
+                                )
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            if (!hasArtwork) {
+                                Spacer(Modifier.height(56.dp))
                             }
 
-                            Spacer(Modifier.width(14.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = if (isLoggedIn) "专属私人雷达" else "精选推荐电台",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = referenceStaticForeground(scheme.onBackground),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(scheme.primary.copy(alpha = 0.12f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    ) {
-                                        Text(
-                                            text = if (isLoggedIn) "QQ 音乐" else "推荐",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = scheme.primary,
+                            // 头像与信息行（去掉半透明边框与沉重底色，轻盈悬浮）
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (hasArtwork) Color.Black.copy(alpha = 0.35f)
+                                            else scheme.primary.copy(alpha = 0.15f)
+                                        ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    val avatarUrl = qqAccount?.avatarUrl.orEmpty()
+                                    if (avatarUrl.isNotBlank()) {
+                                        BitmapImage(
+                                            key = avatarUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            targetWidth = 128,
+                                            targetHeight = 128,
+                                            showDefaultArtwork = false,
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = MiuixIcons.Regular.Music,
+                                            contentDescription = null,
+                                            tint = if (hasArtwork) Color.White else scheme.primary,
+                                            modifier = Modifier.size(20.dp),
                                         )
                                     }
                                 }
 
-                                Spacer(Modifier.height(4.dp))
+                                Spacer(Modifier.width(10.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = if (isLoggedIn) "专属私人雷达" else "精选推荐电台",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (hasArtwork) Color.White else referenceStaticForeground(scheme.onBackground),
+                                            style = if (hasArtwork) {
+                                                TextStyle(
+                                                    shadow = Shadow(
+                                                        color = Color.Black.copy(alpha = 0.6f),
+                                                        offset = Offset(0f, 2f),
+                                                        blurRadius = 4f,
+                                                    )
+                                                )
+                                            } else TextStyle.Default,
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(
+                                                if (hasArtwork) Color.Black.copy(alpha = 0.35f)
+                                                else scheme.primary.copy(alpha = 0.12f)
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                    ) {
+                                        Text(
+                                            text = if (isLoggedIn) "QQ 音乐" else "推荐",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (hasArtwork) Color.White else scheme.primary,
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(2.dp))
 
                                 Text(
                                     text = if (isLoggedIn) {
@@ -236,20 +660,31 @@ internal fun GuessYouLikePage(
                                     } else {
                                         stringResource(R.string.online_plaza_guess_like_subtitle_guest)
                                     },
-                                    fontSize = 12.sp,
-                                    color = referenceStaticForeground(scheme.onSurfaceVariantSummary, 0.75f),
+                                    fontSize = 11.sp,
+                                    color = if (hasArtwork) Color.White.copy(alpha = 0.85f)
+                                    else referenceStaticForeground(scheme.onSurfaceVariantSummary, 0.75f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    style = if (hasArtwork) {
+                                        TextStyle(
+                                            shadow = Shadow(
+                                                color = Color.Black.copy(alpha = 0.5f),
+                                                offset = Offset(0f, 1f),
+                                                blurRadius = 3f,
+                                            )
+                                        )
+                                    } else TextStyle.Default,
                                 )
                             }
                         }
 
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(10.dp))
 
-                        // 操作按钮栏：开启电台与换一批
+                        // 操作按钮栏：自适应高度与充裕内边距，确保文字与图标完整舒适展示
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Button(
                                 onClick = {
@@ -274,21 +709,18 @@ internal fun GuessYouLikePage(
                                                     icon = AppNoticeIcon.PLAYLIST,
                                                 )
                                             }
-                                            is OnlinePlayResult.Failed -> {
-                                                AppNoticeBus.error(result.reason)
-                                            }
-                                            OnlinePlayResult.NoSourceInstalled -> {
-                                                AppNoticeBus.error("未安装或启用可用音源")
-                                            }
-                                            OnlinePlayResult.NoMatchFound -> {
-                                                AppNoticeBus.error("未匹配到可播放曲目")
-                                            }
+                                            is OnlinePlayResult.Failed -> AppNoticeBus.error(result.reason)
+                                            OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error("未安装或启用可用音源")
+                                            OnlinePlayResult.NoMatchFound -> AppNoticeBus.error("未匹配到可播放曲目")
                                         }
                                         isStartingRadio = false
                                     }
                                 },
                                 enabled = !isStartingRadio,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp),
+                                insideMargin = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                 colors = ButtonDefaults.buttonColorsPrimary(),
                             ) {
                                 Row(
@@ -306,7 +738,7 @@ internal fun GuessYouLikePage(
                                             imageVector = Icons.Default.PlayArrow,
                                             contentDescription = null,
                                             colorFilter = ColorFilter.tint(scheme.onPrimary),
-                                            modifier = Modifier.size(18.dp),
+                                            modifier = Modifier.size(16.dp),
                                         )
                                         Spacer(Modifier.width(6.dp))
                                         Text(
@@ -326,7 +758,15 @@ internal fun GuessYouLikePage(
                                     }
                                 },
                                 enabled = !isLoading,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp),
+                                insideMargin = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                colors = if (hasArtwork) {
+                                    ButtonDefaults.buttonColors(
+                                        color = Color.Black.copy(alpha = 0.35f),
+                                    )
+                                } else ButtonDefaults.buttonColors(),
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -335,229 +775,298 @@ internal fun GuessYouLikePage(
                                     androidx.compose.foundation.Image(
                                         imageVector = Icons.Default.Refresh,
                                         contentDescription = null,
-                                        colorFilter = ColorFilter.tint(colors.onSurface),
-                                        modifier = Modifier.size(16.dp),
+                                        colorFilter = ColorFilter.tint(if (hasArtwork) Color.White else colors.onSurface),
+                                        modifier = Modifier.size(15.dp),
                                     )
                                     Spacer(Modifier.width(6.dp))
                                     Text(
                                         text = "换一批",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = colors.onSurface,
+                                        color = if (hasArtwork) Color.White else colors.onSurface,
                                     )
                                 }
                             }
                         }
+
+                        Spacer(Modifier.height(8.dp))
                     }
                 }
             }
 
             // 歌曲列表区域
-            if (isLoading && songs.isEmpty()) {
-                item(key = "loading_indicator") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(
-                            color = scheme.primary,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(32.dp),
+            renderSongList(
+                songs = songs,
+                isLoading = isLoading,
+                playbackSnapshot = playbackSnapshot,
+                activePlayingTitle = activePlayingTitle,
+                onSongPlay = { song, index ->
+                    scope.launch {
+                        OnlinePlaybackLauncher.playRadioTrack(
+                            context = context,
+                            item = song,
+                            queue = songs,
+                            index = index,
+                            currentPage = pageIndex,
                         )
                     }
-                }
-            } else if (!isLoading && songs.isEmpty()) {
-                item(key = "empty_indicator") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "暂无推荐曲目，点击换一批重试",
-                            color = colors.secondaryText,
-                            fontSize = 13.sp,
+                },
+                onSeedRadio = { song ->
+                    scope.launch {
+                        AppNoticeBus.post(
+                            message = "正在以此歌为种子开启雷达电台...",
+                            icon = AppNoticeIcon.PLAYLIST,
+                        )
+                        OnlinePlaybackLauncher.launchGuessLikeRadio(
+                            context = context,
+                            platform = OnlinePlatform.QQ,
+                            seedSong = song,
+                            onSongsLoaded = { newSongs ->
+                                songs = newSongs
+                            },
                         )
                     }
+                },
+                onNegativeFeedback = { song ->
+                    GuessLikeOptimizer.recordNegativeFeedback(song.id, song.artist)
+                    songs = songs.filterNot { it.id == song.id }
+                    AppNoticeBus.post(
+                        message = "已为您减少此类推荐",
+                        icon = AppNoticeIcon.INFO,
+                    )
+                },
+            )
+        }
+
+        // 2. 悬浮吸顶标题栏（完全透明无遮罩层，保留通透沉浸感与返回按键）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .rawStableStatusBarsPadding()
+                .height(56.dp)
+                .padding(horizontal = 8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Back,
+                        contentDescription = null,
+                        tint = if (isScrolledPastHero || !hasArtwork) colors.onSurface else Color.White,
+                    )
                 }
-            } else {
-                itemsIndexed(
-                    items = songs,
-                    key = { index, song -> "${song.platform.id}_${song.id}_$index" },
-                ) { index, song ->
-                    val current = playbackSnapshot.currentItem
-                    val isPlayingThis = (playbackSnapshot.status == MusicSourcePlaybackStatus.Playing) && (current?.remoteId == song.id || current?.title == song.title)
-                    val isResolvingThis = (playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving || playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) && (current?.remoteId == song.id || current?.title == song.title)
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable {
-                                scope.launch {
-                                    OnlinePlaybackLauncher.play(
-                                        context = context,
-                                        item = song,
-                                        queue = songs,
-                                        index = index,
-                                    )
-                                }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        // 封面或序号
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(scheme.surfaceContainer),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            val cover = song.coverUrl
-                            if (!cover.isNullOrBlank()) {
-                                BitmapImage(
-                                    key = cover,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                    targetWidth = 120,
-                                    targetHeight = 120,
-                                    showDefaultArtwork = true,
-                                )
-                            } else {
-                                Text(
-                                    text = "${index + 1}",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = colors.secondaryText,
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.width(12.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = song.title,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Normal,
-                                    color = if (isPlayingThis || isResolvingThis) scheme.primary else colors.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                if (song.isVip) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .border(0.5.dp, scheme.primary, RoundedCornerShape(3.dp))
-                                            .padding(horizontal = 3.dp, vertical = 0.5.dp),
-                                    ) {
-                                        Text(
-                                            text = "VIP",
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = scheme.primary,
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(Modifier.height(3.dp))
-
-                            Text(
-                                text = "${song.artist} · ${song.album.ifBlank { "单曲" }}",
-                                fontSize = 11.sp,
-                                color = colors.secondaryText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.online_plaza_guess_like_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isScrolledPastHero || !hasArtwork) colors.onSurface else Color.White,
+                    style = if (!isScrolledPastHero && hasArtwork) {
+                        TextStyle(
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.6f),
+                                offset = Offset(0f, 2f),
+                                blurRadius = 4f,
                             )
-                        }
-
-                        if (isPlayingThis || isResolvingThis) {
-                            Spacer(Modifier.width(8.dp))
-                            if (isResolvingThis) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = scheme.primary,
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(scheme.primary),
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.width(4.dp))
-
-                        // 操作：以此歌为种子开启雷达电台
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .clickable {
-                                    scope.launch {
-                                        AppNoticeBus.post(
-                                            message = "正在以此歌为种子开启雷达电台...",
-                                            icon = AppNoticeIcon.PLAYLIST,
-                                        )
-                                        OnlinePlaybackLauncher.launchGuessLikeRadio(
-                                            context = context,
-                                            platform = OnlinePlatform.QQ,
-                                            seedSong = song,
-                                            onSongsLoaded = { newSongs ->
-                                                songs = newSongs
-                                            },
-                                        )
-                                    }
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            androidx.compose.foundation.Image(
-                                painter = painterResource(R.drawable.ic_playlist_play),
-                                contentDescription = "以此歌开启电台",
-                                colorFilter = ColorFilter.tint(colors.secondaryText),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-
-                        // 操作：负反馈（不感兴趣/减少此类推荐）
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .clickable {
-                                    GuessLikeOptimizer.recordNegativeFeedback(song.id, song.artist)
-                                    songs = songs.filterNot { it.id == song.id }
-                                    AppNoticeBus.post(
-                                        message = "已为您减少此类推荐",
-                                        icon = AppNoticeIcon.INFO,
-                                    )
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            androidx.compose.foundation.Image(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "减少推荐",
-                                colorFilter = ColorFilter.tint(colors.secondaryText.copy(alpha = 0.6f)),
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            item(key = "bottom_spacer") {
-                Spacer(Modifier.height(180.dp))
+                        )
+                    } else TextStyle.Default,
+                )
             }
         }
+    }
+}
+}
+
+/** 辅助扩展函数：供单栏与双栏复用的歌曲列表渲染扩展 */
+private fun androidx.compose.foundation.lazy.LazyListScope.renderSongList(
+    songs: List<OnlineSongItem>,
+    isLoading: Boolean,
+    playbackSnapshot: com.rawsmusic.module.data.source.playback.MusicSourcePlaybackSnapshot,
+    activePlayingTitle: String? = null,
+    onSongPlay: (OnlineSongItem, Int) -> Unit,
+    onSeedRadio: (OnlineSongItem) -> Unit,
+    onNegativeFeedback: (OnlineSongItem) -> Unit,
+) {
+    if (isLoading && songs.isEmpty()) {
+        item(key = "loading_indicator") {
+            val scheme = MiuixTheme.colorScheme
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    color = scheme.primary,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        }
+    } else if (!isLoading && songs.isEmpty()) {
+        item(key = "empty_indicator") {
+            val colors = themeColors()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "暂无推荐曲目，点击换一批重试",
+                    color = colors.secondaryText,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    } else {
+        itemsIndexed(
+            items = songs,
+            key = { index, song -> "${song.platform.id}_${song.id}_$index" },
+        ) { index, song ->
+            val scheme = MiuixTheme.colorScheme
+            val colors = themeColors()
+            val current = playbackSnapshot.currentItem
+            val isPlayingThis = (!activePlayingTitle.isNullOrBlank() && song.title.equals(activePlayingTitle, ignoreCase = true)) ||
+                ((playbackSnapshot.status == MusicSourcePlaybackStatus.Playing) && (current?.remoteId == song.id || current?.title == song.title))
+            val isResolvingThis = (playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving || playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) && (current?.remoteId == song.id || current?.title == song.title)
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onSongPlay(song, index) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 封面或序号
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(scheme.surfaceContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val cover = song.coverUrl
+                    if (!cover.isNullOrBlank()) {
+                        BitmapImage(
+                            key = cover,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            targetWidth = 120,
+                            targetHeight = 120,
+                            showDefaultArtwork = true,
+                        )
+                    } else {
+                        Text(
+                            text = "${index + 1}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.secondaryText,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = song.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = if (isPlayingThis || isResolvingThis) scheme.primary else colors.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (song.isVip) {
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .border(0.5.dp, scheme.primary, RoundedCornerShape(3.dp))
+                                    .padding(horizontal = 3.dp, vertical = 0.5.dp),
+                            ) {
+                                Text(
+                                    text = "VIP",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = scheme.primary,
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(3.dp))
+
+                    Text(
+                        text = "${song.artist} · ${song.album.ifBlank { "单曲" }}",
+                        fontSize = 11.sp,
+                        color = colors.secondaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                if (isPlayingThis || isResolvingThis) {
+                    Spacer(Modifier.width(8.dp))
+                    if (isResolvingThis) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = scheme.primary,
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(scheme.primary),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // 操作：以此歌为种子开启雷达电台
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable { onSeedRadio(song) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.foundation.Image(
+                        painter = painterResource(R.drawable.ic_playlist_play),
+                        contentDescription = "以此歌开启电台",
+                        colorFilter = ColorFilter.tint(colors.secondaryText),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                // 操作：负反馈（不感兴趣/减少此类推荐）
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable { onNegativeFeedback(song) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.foundation.Image(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "减少推荐",
+                        colorFilter = ColorFilter.tint(colors.secondaryText.copy(alpha = 0.6f)),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    item(key = "bottom_spacer") {
+        Spacer(Modifier.height(180.dp))
     }
 }

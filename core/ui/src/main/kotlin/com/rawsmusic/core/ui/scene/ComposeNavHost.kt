@@ -478,6 +478,8 @@ fun ComposeNavHost(
 
                         NavScene.GUESS_YOU_LIKE -> GuessYouLikePage(
                 onBack = onBack,
+                currentSong = data.miniPlayerSong ?: data.currentSong,
+                currentCoverPath = data.miniPlayerCoverPath,
                 modifier = Modifier.fillMaxSize(),
             )
 
