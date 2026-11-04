@@ -356,6 +356,9 @@ fun AppMainLayout(
             .collect { ownsSheet ->
                 playerSheetOwnsBottomChrome = ownsSheet
                 bottomChromeScrollState.setInteractionLocked(ownsSheet)
+                if (!ownsSheet) {
+                    bottomChromeScrollState.reset()
+                }
             }
     }
     LaunchedEffect(playerSceneProgressState) {
@@ -377,6 +380,8 @@ fun AppMainLayout(
     }
     LaunchedEffect(
         navState.currentScene,
+        windowLayoutProfile.windowWidth,
+        windowLayoutProfile.windowHeight,
         bottomNavigationEnabled,
         miniPlayerStyle.expandedHeightDp,
         miniPlayerStyle.compactHeightDp,
