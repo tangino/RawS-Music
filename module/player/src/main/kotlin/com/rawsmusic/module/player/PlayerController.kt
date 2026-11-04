@@ -6136,13 +6136,15 @@ class PlayerController private constructor(context: Context) {
         }
         val rendererSong = PlaybackSourceOverridePolicy.rendererSong(song, _playbackSourceOverride.value)
         val playbackPath = rendererSong.path
-        val isPhysicalLocalPlayback = !playbackPath.startsWith("http://", ignoreCase = true) &&
+        val isOnlinePlaybackTarget = song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
+            com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
+            _playbackSourceOverride.value?.sourceTag == "online_stream"
+        val isPhysicalLocalPlayback = !isOnlinePlaybackTarget &&
+            !playbackPath.startsWith("http://", ignoreCase = true) &&
             !playbackPath.startsWith("https://", ignoreCase = true) &&
             !playbackPath.startsWith("online://", ignoreCase = true) &&
             java.io.File(playbackPath).exists()
-        if (isPhysicalLocalPlayback || (song.encodingFormat != com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER &&
-            !com.rawsmusic.core.common.model.isOnlineSongKey(song.path))
-        ) {
+        if (isPhysicalLocalPlayback) {
             MusicSourcePlaybackController.resetForLocalPlayback()
         }
         if (_usbExclusiveActive.value) {

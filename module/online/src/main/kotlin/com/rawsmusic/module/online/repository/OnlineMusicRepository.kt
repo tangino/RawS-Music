@@ -122,6 +122,25 @@ class OnlineMusicRepository private constructor() {
     }
 
     /**
+     * 获取个性化推荐 / 猜你喜欢歌曲列表（如 QQ 音乐私人雷达）
+     */
+    suspend fun getRecommendSongs(
+        page: Int = 1,
+        pageSize: Int = 20,
+        platform: OnlinePlatform = _currentPlatform.value,
+        seedSongMids: List<String> = emptyList(),
+        favSongMids: List<String> = com.rawsmusic.module.online.recommend.GuessLikeOptimizer.getFavoriteSeeds(),
+    ): Result<List<OnlineSongItem>> {
+        return resultOf {
+            val rawList = getSource(platform).getRecommendSongs(page, pageSize, seedSongMids, favSongMids)
+            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.optimizeRecommendations(
+                candidates = rawList,
+                currentSeedId = seedSongMids.firstOrNull(),
+            )
+        }
+    }
+
+    /**
      * 获取歌单详情（优先读缓存）
      */
     suspend fun getPlaylistDetail(

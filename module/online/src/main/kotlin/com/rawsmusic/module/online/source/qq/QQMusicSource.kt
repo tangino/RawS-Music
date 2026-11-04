@@ -48,15 +48,16 @@ class QQMusicSource(
             .url("https://u.y.qq.com/cgi-bin/musicu.fcg")
             .header("User-Agent", userAgent)
             .header("Referer", "https://y.qq.com/")
-            .header("Host", "u.y.qq.com")
 
         cookieProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { cookie ->
-            requestBuilder.header("Cookie", cookie)
+            val cleanCookie = cookie.replace("\r", "").replace("\n", "")
+            requestBuilder.header("Cookie", cleanCookie)
         }
 
         val request = requestBuilder.post(body).build()
-        val response = client.newCall(request).execute()
-        val bodyStr = response.body?.string() ?: throw IllegalStateException("QQ 音乐网络响应为空")
+        val bodyStr = client.newCall(request).execute().use { response ->
+            response.body?.string() ?: throw IllegalStateException("QQ 音乐网络响应为空")
+        }
         JSONObject(bodyStr)
     }
 
@@ -1434,6 +1435,138 @@ class QQMusicSource(
         }
 
         Pair(album.copy(songCount = list.size), list)
+    }
+
+
+    /**
+     * 获取 QQ 音乐个性化推荐（猜你喜欢 / 私人雷达）歌曲流。
+     * 采用标准的 music.recommend.TrackRelationServer -> GetRadarSong RPC 协议。
+     * 已登录状态自动根据听歌喜好推荐，未登录自动平滑降级为精选热门曲目。
+     */
+    override suspend fun getRecommendSongs(
+        page: Int,
+        pageSize: Int,
+        seedSongMids: List<String>,
+        favSongMids: List<String>,
+    ): List<OnlineSongItem> = withContext(Dispatchers.IO) {
+        val cookieStr = cookieProvider?.invoke().orEmpty()
+        var uinLong = 0L
+        var authst = ""
+        if (cookieStr.isNotBlank()) {
+            val uinMatch = Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(cookieStr)
+            uinLong = uinMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            val keyMatch = Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)
+            authst = keyMatch?.groupValues?.get(1)?.trim().orEmpty()
+        }
+
+        val commObj = JSONObject().apply {
+            put("ct", 24)
+            put("cv", 0)
+            if (uinLong > 0) put("uin", uinLong)
+            if (authst.isNotBlank()) put("authst", authst)
+        }
+
+        val paramObj = JSONObject().apply {
+            put("Page", page.coerceAtLeast(1))
+            put("ReqType", 0)
+
+            val favArr = JSONArray()
+            favSongMids.filter { it.isNotBlank() }.forEach { mid ->
+                favArr.put(JSONObject().apply {
+                    put("mid", mid)
+                    put("songmid", mid)
+                })
+            }
+            put("FavSongs", favArr)
+
+            val entranceArr = JSONArray()
+            seedSongMids.filter { it.isNotBlank() }.forEach { mid ->
+                entranceArr.put(JSONObject().apply {
+                    put("mid", mid)
+                    put("songmid", mid)
+                })
+            }
+            put("EntranceSongs", entranceArr)
+        }
+
+        val radarObj = JSONObject().apply {
+            put("module", "music.recommend.TrackRelationServer")
+            put("method", "GetRadarSong")
+            put("param", paramObj)
+        }
+
+        val payload = JSONObject().apply {
+            put("comm", commObj)
+            put("radar", radarObj)
+        }
+
+        val resultSongs = mutableListOf<OnlineSongItem>()
+        try {
+            val respJson = postMusicU(payload)
+            val vecSongs = respJson.optJSONObject("radar")?.optJSONObject("data")?.optJSONArray("VecSongs")
+            if (vecSongs != null) {
+                for (i in 0 until vecSongs.length()) {
+                    val itemWrapper = vecSongs.optJSONObject(i) ?: continue
+                    val trackObj = itemWrapper.optJSONObject("Track") ?: itemWrapper
+
+                    val mid = trackObj.optString("mid").ifEmpty { trackObj.optString("songmid") }
+                    val name = trackObj.optString("name").ifEmpty { trackObj.optString("title") }
+                    if (mid.isBlank() || name.isBlank()) continue
+
+                    val singerArr = trackObj.optJSONArray("singer")
+                    val singers = mutableListOf<String>()
+                    if (singerArr != null) {
+                        for (s in 0 until singerArr.length()) {
+                            singerArr.optJSONObject(s)?.optString("name")?.takeIf { it.isNotBlank() }?.let {
+                                singers.add(it)
+                            }
+                        }
+                    }
+                    val singerStr = if (singers.isNotEmpty()) singers.joinToString(", ") else "未知歌手"
+
+                    val albumObj = trackObj.optJSONObject("album")
+                    val albumName = albumObj?.optString("name")?.ifEmpty { albumObj.optString("title") } ?: ""
+                    val albumMid = albumObj?.optString("mid") ?: ""
+
+                    val coverUrl = if (albumMid.isNotBlank()) {
+                        "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
+                    } else null
+
+                    val intervalSec = trackObj.optLong("interval", 0L)
+                    val durationMs = if (intervalSec in 1..86400) intervalSec * 1000L else 0L
+                    val isVip = parseQQIsVip(trackObj)
+
+                    resultSongs.add(
+                        OnlineSongItem(
+                            id = mid,
+                            platform = platform,
+                            title = name,
+                            artist = singerStr,
+                            album = albumName,
+                            durationMs = durationMs,
+                            coverUrl = coverUrl,
+                            isVip = isVip
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            com.rawsmusic.core.common.utils.AppLogger.e("QQMusicSource", "获取 QQ 音乐猜你喜欢推荐异常: ${e.message}", e)
+        }
+
+        if (resultSongs.isEmpty()) {
+            com.rawsmusic.core.common.utils.AppLogger.i("QQMusicSource", "GetRadarSong 未返回曲目，使用官方热歌榜兜底推荐流")
+            try {
+                val fallback = getLeaderboardDetailInternal(26).second
+                if (fallback.isNotEmpty()) {
+                    resultSongs.addAll(fallback.shuffled().take(pageSize))
+                }
+            } catch (e: Exception) {
+                com.rawsmusic.core.common.utils.AppLogger.w("QQMusicSource", "降级热歌榜异常: ${e.message}")
+            }
+        }
+
+        resultSongs
     }
 }
 

@@ -125,6 +125,7 @@ internal fun OnlinePlazaTab(
     val scope = rememberCoroutineScope()
     val repository = OnlineMusicRepository.getInstance()
     val platform by repository.currentPlatform.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val keyboard = LocalSoftwareKeyboardController.current
     val gridColumns = resolveOnlineGridColumns()
 
@@ -353,6 +354,7 @@ internal fun OnlinePlazaTab(
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
+
                         items(
                             searchResults.chunked(gridColumns),
                             key = { row -> "search_" + row.joinToString("_") { "${it.platform.id}_${it.id}" } }
@@ -411,6 +413,7 @@ internal fun OnlinePlazaTab(
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
+
                         items(
                             playlists.chunked(gridColumns),
                             key = { row -> row.joinToString("_") { "${it.platform.id}_${it.id}" } }

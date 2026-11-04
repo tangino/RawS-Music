@@ -148,6 +148,8 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.icon.extended.Music
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Settings
 
@@ -1024,6 +1026,8 @@ private fun LibraryTile(
     currentPlayingSong: AudioFile? = null,
 ) {
     var removing by remember(scene) { mutableStateOf(false) }
+    val isGuessLike = scene == NavScene.GUESS_YOU_LIKE
+    val qqAccount = if (isGuessLike) com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(com.rawsmusic.module.online.model.OnlinePlatform.QQ) else null
     val playedInfo = when (scene) {
         NavScene.CURRENT_PLAYLIST -> PlayedPlaylistManager.currentPlaylist.collectAsState().value
         NavScene.PREVIOUS_PLAYLIST -> PlayedPlaylistManager.previousPlaylist.collectAsState().value
@@ -1121,7 +1125,9 @@ private fun LibraryTile(
                 .clip(RoundedCornerShape(13.dp))
                 .background(pastelColorFor(scene.tag)),
         ) {
-            val candidateCover = if (isHistoryScene) {
+            val candidateCover = if (isGuessLike) {
+                qqAccount?.avatarUrl?.takeIf { it.isNotBlank() }
+            } else if (isHistoryScene) {
                 historyList.firstOrNull()?.coverKey?.takeIf { it.isNotBlank() }
             } else if (isPlayedScene) {
                 playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
@@ -1231,6 +1237,9 @@ private fun LibraryTile(
             overflow = TextOverflow.Ellipsis,
         )
         val statistics = when {
+            isGuessLike -> {
+                if (qqAccount != null) "专属雷达 · ${qqAccount.nickname.ifBlank { qqAccount.userId }}" else "推荐电台"
+            }
             isPlayedScene -> {
                 playedInfo?.let {
                     if (it.trackCount > 0) "${it.name} · ${it.trackCount}" else it.name
@@ -1270,6 +1279,7 @@ private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
     NavScene.PLAY_HISTORY -> R.drawable.ic_nav_custom_recent
+    NavScene.GUESS_YOU_LIKE -> R.drawable.ic_online_favorite
     else -> null
 }
 

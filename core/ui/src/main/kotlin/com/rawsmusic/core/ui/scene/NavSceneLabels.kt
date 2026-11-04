@@ -65,4 +65,5 @@ fun NavScene.labelRes(): Int = when (this) {
     NavScene.CURRENT_PLAYLIST -> R.string.nav_scene_current_playlist
     NavScene.PREVIOUS_PLAYLIST -> R.string.nav_scene_previous_playlist
     NavScene.PLAY_HISTORY -> R.string.nav_scene_play_history
+    NavScene.GUESS_YOU_LIKE -> R.string.nav_scene_guess_you_like
 }

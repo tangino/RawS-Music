@@ -65,18 +65,17 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
             }
         } else {
             val existingSongs = controller.visibleQueue.value.songs
-            if (existingSongs.size > 1) {
-                val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
-                val targetIndex = existingSongs.indexOfFirst { existing ->
-                    existing.path == targetKey ||
-                        existing.path == request.source.url ||
-                        existing.id == song.id ||
-                        (existing.title.equals(song.title, ignoreCase = true) &&
-                            existing.artist.equals(song.artist, ignoreCase = true))
-                }.takeIf { it >= 0 } ?: request.queueIndex.coerceIn(existingSongs.indices)
-
+            val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+            val existingMatchIndex = existingSongs.indexOfFirst { existing ->
+                existing.path == targetKey ||
+                    existing.path == request.source.url ||
+                    existing.id == song.id ||
+                    (existing.title.equals(song.title, ignoreCase = true) &&
+                        existing.artist.equals(song.artist, ignoreCase = true))
+            }
+            if (existingSongs.size > 1 && existingMatchIndex >= 0) {
                 existingSongs.mapIndexed { idx, existing ->
-                    if (idx == targetIndex) song else existing
+                    if (idx == existingMatchIndex) song else existing
                 }
             } else if (request.queue.isNotEmpty()) {
                 request.queue.mapIndexed { idx, mediaItem ->
@@ -291,21 +290,25 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         )
     }
 
-    /** Prevent the global local-queue repeat policy from consuming an online completion. */
-    fun consumePlaybackCompletion(): Boolean {
-        val completedPath = completionConsumePath
-        completionConsumePath = null
-        val currentSong = controller.currentSong.value
-        val isOnlineCurrent = currentSong != null && (
-            com.rawsmusic.core.common.model.isOnlineSongKey(currentSong.path) ||
-            currentSong.encodingFormat == MUSIC_SOURCE_ONLINE_ENCODING_MARKER ||
-            currentSong.path.startsWith("http://") || currentSong.path.startsWith("https://")
-        )
-        if (completedPath != null || isOnlineCurrent) {
-            // 无论是旧曲目退役时的完成事件，还是当前网络曲目，全局本地队列的 PlayerBackendStateControlCoordinator
-            // 都不应该调用 automaticAdvanceTransport，网络歌曲由 MusicSourcePlaybackController 独立调度 next(automatic = true)
-            return true
+    override fun onQueueAppended(newItems: List<com.rawsmusic.core.common.source.RawSourceMediaItem>) {
+        if (newItems.isEmpty()) return
+        val curQueue = controller.visibleQueue.value
+        val existingPaths = curQueue.songs.map { it.path }.toSet()
+        val newAudioFiles = newItems.map { it.toVirtualAudioFile() }.filter { it.path !in existingPaths }
+        if (newAudioFiles.isNotEmpty()) {
+            val updatedSongs = curQueue.songs + newAudioFiles
+            controller.adoptVisibleQueueSnapshot(updatedSongs, curQueue.currentIndex)
+            AppLogger.d(TAG, "已同步向 PlayerController 队列追加 ${newAudioFiles.size} 首在线曲目，当前总数: ${updatedSongs.size}")
         }
+    }
+
+    /**
+     * 在线歌曲播放完成时不再拦截 completion。
+     * 全局队列的 PlayerBackendStateControlCoordinator 会正常执行 automaticAdvanceTransport / automaticReplayTransport，
+     * 遵循用户设定的循环模式（单曲循环、列表循环、随机播放、顺序播放）无缝推进下一首。
+     */
+    fun consumePlaybackCompletion(): Boolean {
+        completionConsumePath = null
         return false
     }
 

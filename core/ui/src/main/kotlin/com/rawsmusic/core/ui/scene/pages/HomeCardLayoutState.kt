@@ -23,6 +23,7 @@ val HomeLibraryCardScenes: List<NavScene> = listOf(
     // （唯一入口是侧栏，而侧栏要求关掉底部导航，见 AppMainLayout 的 sideRailEnabled）。
     // 位置可由用户在「主界面卡片」编辑器里随意拖动，所以这里取「最显眼」而不是「最保守」。
     NavScene.ONLINE_MUSIC,
+    NavScene.GUESS_YOU_LIKE,
     NavScene.SONGS,
     NavScene.FOLDERS,
     NavScene.FOLDER_HIERARCHY,

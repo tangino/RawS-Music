@@ -1809,7 +1809,9 @@ class MainActivity : ComponentActivity() {
         // The queue snapshot is the atomic UI owner for song identity. Reading currentSong as a
         // second observable made one renderer commit invalidate this large library composition
         // twice. The direct value is only a cold-start fallback until the restored queue arrives.
-        val canonicalCurrentSong = playbackQueue.currentSong ?: playerController?.currentSong?.value
+        val liveCurrentSongForMain by playerController?.currentSong?.collectAsState()
+            ?: androidx.compose.runtime.mutableStateOf(null)
+        val canonicalCurrentSong = liveCurrentSongForMain ?: playbackQueue.currentSong ?: playerController?.currentSong?.value
         val homeCarouselQueue = remember(
             playbackQueue,
             canonicalCurrentSong,
@@ -3037,7 +3039,9 @@ class MainActivity : ComponentActivity() {
         // Queue + cursor is the player presentation snapshot. Avoid a second independent
         // currentSong subscription on the same composition boundary; renderer commit publishes
         // both fields together, while the direct read only covers a restored one-song cold start.
-        val playerUiSong = prewarmQueue.currentSong ?: playerController?.currentSong?.value
+        val liveCurrentSong by playerController?.currentSong?.collectAsState()
+            ?: androidx.compose.runtime.mutableStateOf(null)
+        val playerUiSong = liveCurrentSong ?: prewarmQueue.currentSong ?: playerController?.currentSong?.value
         val prewarmCommittedSong = playerUiSong
         val prewarmCommittedIndex = resolvePlaybackQueueBindingIndex(
             currentSong = prewarmCommittedSong,
@@ -3542,7 +3546,15 @@ class MainActivity : ComponentActivity() {
                 // Keep the committed lyric tree alive while a requested track is fading out.
                 // Publishing null here disposed every mini-lyric row, producing a full-frame
                 // flash before the target track's asynchronous lyrics arrived.
-                val lyricSong = lyricsCoordinator.lyricSong
+                val rawLyricSong = lyricsCoordinator.lyricSong
+                val lyricSong = rawLyricSong?.takeIf { lyric ->
+                    val cur = currentSong ?: return@takeIf false
+                    val lyricName = lyric.name.orEmpty()
+                    lyricName.isBlank() || cur.title.isBlank() ||
+                        lyricName.equals(cur.title, ignoreCase = true) ||
+                        cur.title.contains(lyricName, ignoreCase = true) ||
+                        lyricName.contains(cur.title, ignoreCase = true)
+                }
                 val displayTranslation = lyricsCoordinator.displayTranslation
                 val displayRoma = lyricsCoordinator.displayRoma
                 val queueSongs = queue.songs
@@ -4354,6 +4366,7 @@ class MainActivity : ComponentActivity() {
         if (playerSceneController.currentScene != PlayerSceneController.Scene.MAIN) return
 
         val uiSong = restorePlayerUiStateForNavigation("open_player") ?: return
+        primePlayerUi(uiSong)
         val uiCoverPath = resolveSongCoverForCompose(uiSong)
 
         prePlayerContainerScene = mainNavState.currentScene

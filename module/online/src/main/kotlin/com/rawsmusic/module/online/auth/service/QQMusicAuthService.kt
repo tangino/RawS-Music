@@ -35,6 +35,14 @@ class QQMusicAuthService(
     companion object {
         private const val TAG = "QQMusicAuthService"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        private const val APPID = "716027609"
+        private const val DAID = "383"
+        private const val PT_3RD_AID = "100497308"
+        private const val U1 = "https://graph.qq.com/oauth2.0/login_jump"
+        private const val REDIRECT_URI = "https://y.qq.com/portal/wx_redirect.html?login_type=1&surl=https%3A%2F%2Fy.qq.com%2F"
+
+        // 会话缓存，保留二维码对应的 login_sig 凭据
+        private val qrSessionCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
         /**
          * 计算腾讯 Web ptlogin 的 ptqrtoken 哈希值 (严格匹配前端 32 位有符号整数溢出规则)
@@ -46,19 +54,70 @@ class QQMusicAuthService(
             }
             return 2147483647L and e.toLong()
         }
+
+        /**
+         * 计算腾讯 g_tk (hash33, 初始值为 5381)
+         */
+        fun getGtk(key: String): Long {
+            var hash = 5381L
+            for (ch in key) {
+                hash += (hash shl 5) + ch.code
+            }
+            return hash and 0x7fffffffL
+        }
+
+        /**
+         * 解码腾讯 ptui 回调里的跳转 URL
+         */
+        fun unescapePtUrl(s: String): String {
+            return s.replace("\\/", "/")
+                .replace("\\x26", "&")
+                .replace("\\u0026", "&")
+                .replace("&amp;", "&")
+        }
     }
 
     override suspend fun getQrCode(): QrCodeData = withContext(Dispatchers.IO) {
-        val timestamp = System.currentTimeMillis()
-        val url = "https://ssl.ptlogin2.qq.com/ptqrshow?appid=716027609&e=2&l=M&s=3&d=72&v=4&t=0.$timestamp&daid=384&pt_3rd_aid=100497308"
-
-        val request = Request.Builder()
-            .url(url)
+        // 第 1 步: 请求 xlogin 获取 pt_login_sig 会话 Cookie
+        val xloginUrl = "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?appid=$APPID&daid=$DAID&style=33&hide_title_bar=1&hide_border=1&target=self&s_url=${URLEncoder.encode(U1, "UTF-8")}&pt_3rd_aid=$PT_3RD_AID&theme=2"
+        val xloginReq = Request.Builder()
+            .url(xloginUrl)
             .header("User-Agent", USER_AGENT)
-            .header("Referer", "https://y.qq.com/")
+            .header("Referer", "https://graph.qq.com/")
             .build()
 
-        val response = client.newCall(request).execute()
+        var ptLoginSig = ""
+        try {
+            val xloginResp = client.newCall(xloginReq).execute()
+            for (header in xloginResp.headers("Set-Cookie")) {
+                val parts = header.split(";")
+                for (part in parts) {
+                    val kv = part.trim().split("=")
+                    if (kv.size == 2 && kv[0] == "pt_login_sig") {
+                        ptLoginSig = kv[1]
+                        break
+                    }
+                }
+                if (ptLoginSig.isNotBlank()) break
+            }
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "获取 pt_login_sig 遇到网络异常: ${e.message}")
+        }
+
+        // 第 2 步: 请求 ptqrshow 获取二维码与 qrsig
+        val timestamp = System.currentTimeMillis()
+        val qrShowUrl = "https://xui.ptlogin2.qq.com/ssl/ptqrshow?appid=$APPID&e=2&l=M&s=3&d=72&v=4&t=0.$timestamp&daid=$DAID&pt_3rd_aid=$PT_3RD_AID&u1=${URLEncoder.encode(U1, "UTF-8")}"
+
+        val qrShowReqBuilder = Request.Builder()
+            .url(qrShowUrl)
+            .header("User-Agent", USER_AGENT)
+            .header("Referer", "https://xui.ptlogin2.qq.com/")
+
+        if (ptLoginSig.isNotBlank()) {
+            qrShowReqBuilder.header("Cookie", "pt_login_sig=$ptLoginSig")
+        }
+
+        val response = client.newCall(qrShowReqBuilder.build()).execute()
         val imageBytes = response.body?.bytes() ?: throw IllegalStateException("获取 QQ 登录二维码图片失败")
 
         // 从 Set-Cookie 中提取 qrsig
@@ -80,9 +139,15 @@ class QQMusicAuthService(
             throw IllegalStateException("获取 QQ 登录凭据 qrsig 失败")
         }
 
+        if (ptLoginSig.isNotBlank()) {
+            qrSessionCache[qrsig] = ptLoginSig
+        }
+
+        val compositeKey = if (ptLoginSig.isNotBlank()) "$qrsig@@$ptLoginSig" else qrsig
+
         QrCodeData(
             platform = platform,
-            key = qrsig,
+            key = compositeKey,
             qrImageBytes = imageBytes,
             expireTimeMs = 180_000L
         )
@@ -109,6 +174,19 @@ class QQMusicAuthService(
     }
 
     /**
+     * 辅助解析 Set-Cookie 头并加入 Map
+     */
+    private fun extractCookiesInto(header: String, cookieMap: MutableMap<String, String>) {
+        val parts = header.split(";")
+        for (part in parts) {
+            val kv = part.trim().split("=")
+            if (kv.size == 2 && kv[0].isNotBlank()) {
+                cookieMap[kv[0]] = kv[1]
+            }
+        }
+    }
+
+    /**
      * 自动追踪多跳重定向并合并收集所有 Set-Cookie
      */
     private fun followRedirectsAndCollectCookies(initialUrl: String, initialCookies: Map<String, String>): Pair<Map<String, String>, String> {
@@ -123,33 +201,39 @@ class QQMusicAuthService(
                 val requestBuilder = Request.Builder()
                     .url(currentUrl)
                     .header("User-Agent", USER_AGENT)
-                    .header("Referer", "https://y.qq.com/")
+                    .header("Referer", "https://xui.ptlogin2.qq.com/")
 
                 if (cookieHeader.isNotBlank()) {
                     requestBuilder.header("Cookie", cookieHeader)
                 }
 
-                val response = client.newCall(requestBuilder.build()).execute()
-
-                // 收集当前跳的所有 Set-Cookie
-                for (header in response.headers("Set-Cookie")) {
-                    val parts = header.split(";")
-                    for (part in parts) {
-                        val kv = part.trim().split("=")
-                        if (kv.size == 2 && kv[0].isNotBlank()) {
-                            cookieMap[kv[0]] = kv[1]
-                        }
+                client.newCall(requestBuilder.build()).execute().use { response ->
+                    // 收集当前跳的所有 Set-Cookie
+                    for (header in response.headers("Set-Cookie")) {
+                        extractCookiesInto(header, cookieMap)
                     }
-                }
 
-                val code = response.code
-                if (code in 300..399) {
-                    val location = response.header("Location") ?: break
-                    currentUrl = if (location.startsWith("http")) location else "https://graph.qq.com$location"
-                    depth++
-                } else {
-                    lastBody = response.body?.string() ?: ""
-                    break
+                    val code = response.code
+                    if (code in 300..399) {
+                        val location = response.header("Location")
+                        if (location.isNullOrBlank()) {
+                            currentUrl = ""
+                        } else {
+                            currentUrl = if (location.startsWith("http://") || location.startsWith("https://")) {
+                                location
+                            } else {
+                                try {
+                                    java.net.URI(currentUrl).resolve(location).toString()
+                                } catch (_: Exception) {
+                                    "https://graph.qq.com$location"
+                                }
+                            }
+                            depth++
+                        }
+                    } else {
+                        lastBody = response.body?.string() ?: ""
+                        currentUrl = ""
+                    }
                 }
             } catch (e: Exception) {
                 AppLogger.w(TAG, "重定向跟踪异常(depth=$depth): ${e.message}")
@@ -160,20 +244,34 @@ class QQMusicAuthService(
     }
 
     override suspend fun checkQrStatus(key: String, extra: Map<String, String>): QrCheckResult = withContext(Dispatchers.IO) {
-        val qrsig = key
+        val (qrsig, loginSig) = if (key.contains("@@")) {
+            val parts = key.split("@@", limit = 2)
+            Pair(parts[0], parts[1])
+        } else {
+            val sig = qrSessionCache[key] ?: extra["login_sig"] ?: ""
+            Pair(key, sig)
+        }
+
         val ptqrtoken = getPtQrToken(qrsig)
         val timestamp = System.currentTimeMillis()
-        val url = "https://ssl.ptlogin2.qq.com/ptqrlogin?u1=https%3A%2F%2Fgraph.qq.com%2Foauth2.0%2Flogin_jump&ptqrtoken=$ptqrtoken&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-$timestamp&js_ver=24032115&js_type=1&login_sig=&pt_uistyle=40&aid=716027609&daid=384&pt_3rd_aid=100497308"
+        val url = "https://xui.ptlogin2.qq.com/ssl/ptqrlogin?u1=${URLEncoder.encode(U1, "UTF-8")}&ptqrtoken=$ptqrtoken&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-$timestamp&js_ver=26030415&js_type=1&login_sig=$loginSig&pt_uistyle=40&aid=$APPID&daid=$DAID&pt_3rd_aid=$PT_3RD_AID&"
+
+        val cookieHeader = buildString {
+            append("qrsig=$qrsig")
+            if (loginSig.isNotBlank()) {
+                append("; pt_login_sig=$loginSig")
+            }
+        }
 
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
             .header("Referer", "https://xui.ptlogin2.qq.com/")
-            .header("Cookie", "qrsig=$qrsig")
+            .header("Cookie", cookieHeader)
             .build()
 
         val response = client.newCall(request).execute()
-        val bodyStr = response.body?.string() ?: ""
+        val bodyStr = response.use { it.body?.string().orEmpty() }
         AppLogger.d(TAG, "ptqrlogin 响应数据: $bodyStr")
 
         val args = parsePtuiCallback(bodyStr)
@@ -182,7 +280,7 @@ class QQMusicAuthService(
         }
 
         val code = args.getOrNull(0) ?: ""
-        val jumpUrl = args.getOrNull(2) ?: ""
+        val jumpUrl = unescapePtUrl(args.getOrNull(2) ?: "")
         val message = args.getOrNull(4) ?: ""
         val nickname = args.getOrNull(5) ?: ""
 
@@ -191,38 +289,144 @@ class QQMusicAuthService(
             "67" -> QrCheckResult(QrStatus.SCANNED, message.ifBlank { "二维码已扫描，请在手机上点击确认" })
             "65" -> QrCheckResult(QrStatus.EXPIRED, message.ifBlank { "二维码已失效，请点击刷新" })
             "0" -> {
+                AppLogger.i(TAG, "ptqrlogin 收到登录成功通知(code=0)，开始获取跳转凭据")
                 // 登录成功，提取第一阶段 Cookie
-                val initialCookies = mutableMapOf<String, String>()
-                initialCookies["qrsig"] = qrsig
+                val allCookies = mutableMapOf<String, String>()
+                allCookies["qrsig"] = qrsig
+                if (loginSig.isNotBlank()) allCookies["pt_login_sig"] = loginSig
 
                 for (header in response.headers("Set-Cookie")) {
-                    val parts = header.split(";")
-                    for (part in parts) {
-                        val kv = part.trim().split("=")
-                        if (kv.size == 2 && kv[0].isNotBlank()) {
-                            initialCookies[kv[0]] = kv[1]
-                        }
-                    }
+                    extractCookiesInto(header, allCookies)
                 }
 
                 // 跟踪跳转链获取完整登录 Cookie
-                val (allCookies, _) = if (jumpUrl.isNotBlank()) {
-                    followRedirectsAndCollectCookies(jumpUrl, initialCookies)
-                } else {
-                    Pair(initialCookies, "")
+                if (jumpUrl.isNotBlank()) {
+                    val (redirectCookies, _) = followRedirectsAndCollectCookies(jumpUrl, allCookies)
+                    allCookies.putAll(redirectCookies)
                 }
 
-                // 提取 uin
-                var uin = allCookies["uin"] ?: allCookies["p_uin"] ?: ""
-                uin = uin.replace("^o0*".toRegex(), "")
+                // 提取初步 uin 与凭据
+                var rawUin = allCookies["uin"] ?: allCookies["p_uin"] ?: allCookies["login_uin"] ?: ""
+                // 兜底：若 Cookie 中未提取到 uin，尝试从 jumpUrl 的 uin 参数提取
+                if (rawUin.isBlank() && jumpUrl.isNotBlank()) {
+                    val uinMatcher = Pattern.compile("[?&]uin=([^&]+)").matcher(jumpUrl)
+                    if (uinMatcher.find()) {
+                        rawUin = uinMatcher.group(1).orEmpty()
+                    }
+                }
+                rawUin = rawUin.replace("^o0*".toRegex(), "")
+                val pSkey = allCookies["p_skey"] ?: allCookies["skey"] ?: ""
+                val ui = allCookies["ui"] ?: ""
+
+                var finalUin = rawUin
+                var qmKeyst = ""
+
+                // 核心流程：使用 OAuth2.0 换取真正的 QQ 音乐 musickey 与 musicid（容错保护，超时不阻断主流程）
+                try {
+                    val gtk = if (pSkey.isNotBlank()) getGtk(pSkey) else 5381L
+                    val authBody = "response_type=code&client_id=$PT_3RD_AID&redirect_uri=${URLEncoder.encode(REDIRECT_URI, "UTF-8")}&scope=get_user_info%2Cget_app_friends&state=state&switch=&from_ptlogin=1&src=1&update_auth=1&openapi=1010_1030&g_tk=$gtk&auth_time=$timestamp&ui=${ui.uppercase()}"
+                    val cookieStr = allCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+
+                    val authReq = Request.Builder()
+                        .url("https://graph.qq.com/oauth2.0/authorize")
+                        .header("User-Agent", USER_AGENT)
+                        .header("Origin", "https://graph.qq.com")
+                        .header("Referer", "https://graph.qq.com/")
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .header("Cookie", cookieStr)
+                        .post(authBody.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .build()
+
+                    client.newCall(authReq).execute().use { authResp ->
+                        for (header in authResp.headers("Set-Cookie")) {
+                            extractCookiesInto(header, allCookies)
+                        }
+
+                        val loc = authResp.header("Location") ?: ""
+                        val authContent = if (loc.isBlank()) (authResp.body?.string() ?: "") else ""
+                        val codeMatcher = Pattern.compile("[?&]code=([^&]+)").matcher(if (loc.isNotBlank()) loc else authContent)
+                        val oauthCode = if (codeMatcher.find()) {
+                            java.net.URLDecoder.decode(codeMatcher.group(1), "UTF-8")
+                        } else ""
+
+                        if (oauthCode.isNotBlank()) {
+                            AppLogger.d(TAG, "获取 QQ 互联 OAuth code 成功: $oauthCode")
+                            val loginKey = allCookies["qqmusic_key"] ?: allCookies["p_skey"] ?: allCookies["skey"] ?: ""
+                            val reqComm = JSONObject().apply {
+                                put("g_tk", getGtk(loginKey))
+                                put("platform", "yqq")
+                                put("ct", 24)
+                                put("cv", 0)
+                            }
+                            val reqParam = JSONObject().apply {
+                                put("code", oauthCode)
+                            }
+                            val reqPayload = JSONObject().apply {
+                                put("comm", reqComm)
+                                put("req", JSONObject().apply {
+                                    put("module", "QQConnectLogin.LoginServer")
+                                    put("method", "QQLogin")
+                                    put("param", reqParam)
+                                })
+                            }
+
+                            val qqLoginReq = Request.Builder()
+                                .url("https://u.y.qq.com/cgi-bin/musicu.fcg")
+                                .header("User-Agent", USER_AGENT)
+                                .header("Origin", "https://y.qq.com")
+                                .header("Referer", "https://y.qq.com/")
+                                .header("Content-Type", "application/x-www-form-urlencoded")
+                                .post(reqPayload.toString().toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                                .build()
+
+                            client.newCall(qqLoginReq).execute().use { qqLoginResp ->
+                                for (header in qqLoginResp.headers("Set-Cookie")) {
+                                    extractCookiesInto(header, allCookies)
+                                }
+                                val qqLoginBody = qqLoginResp.body?.string() ?: ""
+                                AppLogger.d(TAG, "QQLogin 换取响应: $qqLoginBody")
+                                val qqLoginJson = JSONObject(qqLoginBody)
+                                val loginData = qqLoginJson.optJSONObject("req")?.optJSONObject("data")
+                                if (loginData != null) {
+                                    val musickey = loginData.optString("musickey", "")
+                                    val musicid = loginData.optLong("musicid", 0L)
+                                    if (musickey.isNotBlank()) {
+                                        qmKeyst = musickey
+                                        allCookies["qm_keyst"] = musickey
+                                        allCookies["qqmusic_key"] = musickey
+                                        allCookies["psrf_musickey_id"] = musickey
+                                    }
+                                    if (musicid > 0L) {
+                                        finalUin = musicid.toString()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "OAuth 置换 QQ 音乐凭据异常: ${e.message}")
+                }
+
+                if (finalUin.isNotBlank()) {
+                    allCookies["uin"] = finalUin
+                    allCookies["login_uin"] = finalUin
+                    allCookies["euin"] = finalUin
+                }
+                val tokens = mutableMapOf<String, String>()
+                if (finalUin.isNotBlank()) tokens["uin"] = finalUin
+                if (qmKeyst.isNotBlank()) tokens["key"] = qmKeyst
+
+                val defaultNickname = nickname.ifBlank {
+                    if (finalUin.isNotBlank()) "QQ 用户 $finalUin" else "QQ 音乐用户"
+                }
 
                 val account = PlatformAccount(
                     platform = platform,
-                    userId = uin,
-                    nickname = nickname.ifBlank { if (uin.isNotBlank()) "QQ 用户 $uin" else "QQ 音乐用户" },
-                    avatarUrl = if (uin.isNotBlank()) "https://q1.qlogo.cn/g?b=qq&nk=$uin&s=100" else "",
+                    userId = finalUin.ifBlank { "qq_user" },
+                    nickname = defaultNickname,
+                    avatarUrl = if (finalUin.isNotBlank()) "https://q1.qlogo.cn/g?b=qq&nk=$finalUin&s=100" else "",
                     cookies = allCookies,
-                    tokens = mapOf("uin" to uin),
+                    tokens = tokens,
                     updatedAt = System.currentTimeMillis()
                 )
 
@@ -233,12 +437,13 @@ class QQMusicAuthService(
                     account
                 }
 
-                AppLogger.i(TAG, "QQ 音乐登录成功: ${enrichedAccount.nickname} (${enrichedAccount.userId})")
+                AppLogger.i(TAG, "QQ 音乐扫码登录成功: ${enrichedAccount.nickname} (${enrichedAccount.userId})")
                 QrCheckResult(QrStatus.SUCCESS, "登录成功", enrichedAccount)
             }
             else -> QrCheckResult(QrStatus.WAITING, message.ifBlank { "等待扫码中..." })
         }
     }
+
 
     override suspend fun refreshUserInfo(account: PlatformAccount): PlatformAccount = withContext(Dispatchers.IO) {
         val uin = account.userId
@@ -276,8 +481,8 @@ class QQMusicAuthService(
                 .post(requestBody)
                 .build()
 
-            val response = client.newCall(request).execute()
-            val bodyStr = response.body?.string() ?: return@withContext account
+            val bodyStr = client.newCall(request).execute().use { it.body?.string().orEmpty() }
+            if (bodyStr.isBlank()) return@withContext account
             AppLogger.d(TAG, "刷新 QQ 用户信息响应: $bodyStr")
             val json = JSONObject(bodyStr)
             val data = json.optJSONObject("userinfo")?.optJSONObject("data")
@@ -299,6 +504,38 @@ class QQMusicAuthService(
         } catch (e: Exception) {
             AppLogger.e(TAG, "刷新 QQ 音乐用户信息失败: ${e.message}", e)
         }
+
+        // 方案 2: 若 GetBaseInfo 失败，尝试通过主页接口获取昵称和头像兜底
+        try {
+            val homepageUrl = "https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg?g_tk=5381&loginUin=$uin&hostUin=$uin&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0&cid=205360838&ct=20&cv=269&reqfrom=1&reqtype=1&userid=$uin&uin=$uin"
+            val hpReq = Request.Builder()
+                .url(homepageUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://y.qq.com/")
+                .header("Cookie", account.toCookieHeader())
+                .get()
+                .build()
+
+            val hpResp = client.newCall(hpReq).execute()
+            val hpBody = hpResp.body?.string() ?: ""
+            if (hpBody.isNotBlank()) {
+                val hpJson = JSONObject(cleanJsonp(hpBody))
+                val hpData = hpJson.optJSONObject("data")
+                val creator = hpData?.optJSONObject("creator")
+                if (creator != null) {
+                    val nick = creator.optString("nick", account.nickname)
+                    val headpic = creator.optString("headpic", account.avatarUrl)
+                    if (nick.isNotBlank() || headpic.isNotBlank()) {
+                        return@withContext account.copy(
+                            nickname = nick.ifBlank { account.nickname },
+                            avatarUrl = headpic.ifBlank { account.avatarUrl },
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
         account
     }
 
@@ -374,8 +611,7 @@ class QQMusicAuthService(
                 .get()
                 .build()
 
-            val resp = client.newCall(req).execute()
-            val body = resp.body?.string() ?: ""
+            val body = client.newCall(req).execute().use { it.body?.string().orEmpty() }
             AppLogger.d(TAG, "QQ 用户自建歌单接口响应: $body")
 
             if (body.isNotBlank()) {
@@ -421,8 +657,7 @@ class QQMusicAuthService(
                     .get()
                     .build()
 
-                val hpResp = client.newCall(hpReq).execute()
-                val hpBody = hpResp.body?.string() ?: ""
+                val hpBody = client.newCall(hpReq).execute().use { it.body?.string().orEmpty() }
 
                 if (hpBody.isNotBlank()) {
                     val hpJson = JSONObject(cleanJsonp(hpBody))

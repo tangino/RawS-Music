@@ -10,6 +10,11 @@ import com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController
 import com.rawsmusic.module.data.source.playback.OnlineAudioFileCache
 import com.rawsmusic.module.data.source.runtime.MusicSourceSearchCoordinator
 import com.rawsmusic.module.online.model.OnlineSongItem
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
 /** 在线歌曲起播的结果。文案映射交给 UI 层，数据层不产出用户可见字符串。 */
@@ -235,5 +240,155 @@ object OnlinePlaybackLauncher {
         val targetIndex = startIndex.coerceIn(songs.indices)
         val item = songs[targetIndex]
         return play(context = context, item = item, queue = songs, index = targetIndex)
+    }
+
+    // ====== 电台 / 猜你喜欢无限流状态管理 ======
+    @Volatile
+    private var isRadioMode: Boolean = false
+    val isRadioActive: Boolean
+        get() = isRadioMode
+
+    private val _currentRadioSongs = kotlinx.coroutines.flow.MutableStateFlow<List<OnlineSongItem>>(emptyList())
+    val currentRadioSongs: kotlinx.coroutines.flow.StateFlow<List<OnlineSongItem>> = _currentRadioSongs
+    @Volatile
+    private var radioPage: Int = 1
+    @Volatile
+    private var radioPlatform: com.rawsmusic.module.online.model.OnlinePlatform = com.rawsmusic.module.online.model.OnlinePlatform.QQ
+    private var radioMonitorJob: Job? = null
+    private val radioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * 一键开启猜你喜欢 / 私人雷达电台
+     * @param context Android 上下文
+     * @param platform 平台（默认 QQ 音乐）
+     */
+    suspend fun launchGuessLikeRadio(
+        context: Context,
+        platform: com.rawsmusic.module.online.model.OnlinePlatform = com.rawsmusic.module.online.model.OnlinePlatform.QQ,
+        seedSong: OnlineSongItem? = null,
+        onSongsLoaded: ((List<OnlineSongItem>) -> Unit)? = null,
+    ): OnlinePlayResult {
+        isRadioMode = false
+        radioMonitorJob?.cancel()
+        radioPage = 1
+        radioPlatform = platform
+
+        val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
+        val seedMids = if (seedSong != null) listOf(seedSong.id) else emptyList()
+        val songsResult = repo.getRecommendSongs(
+            page = 1,
+            pageSize = 20,
+            platform = platform,
+            seedSongMids = seedMids,
+        )
+        val candidateSongs = songsResult.getOrNull().orEmpty()
+        val songs = if (seedSong != null && candidateSongs.none { it.id == seedSong.id }) {
+            listOf(seedSong) + candidateSongs
+        } else {
+            candidateSongs
+        }
+
+        if (songs.isEmpty()) {
+            return OnlinePlayResult.Failed("获取个性推荐曲目为空")
+        }
+
+        _currentRadioSongs.value = songs
+        onSongsLoaded?.invoke(songs)
+
+        // 标记第一首歌曲已播
+        com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongPlayedInRadio(songs[0].id)
+
+        val playResult = playQueue(context, songs, startIndex = 0)
+        if (playResult is OnlinePlayResult.Started) {
+            isRadioMode = true
+            startRadioWatermarkMonitor(context.applicationContext)
+        }
+        return playResult
+    }
+
+    /**
+     * 用户主动负反馈（减少此类推荐，并切到下一首）
+     */
+    fun dislikeCurrentRadioSong(context: Context) {
+        val snapshot = MusicSourcePlaybackController.snapshot.value
+        val item = snapshot.currentItem
+        if (item != null) {
+            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordNegativeFeedback(
+                songId = item.remoteId,
+                artist = item.artists.joinToString(", "),
+            )
+            com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                message = "已为您减少此类推荐",
+                icon = com.rawsmusic.core.common.ui.AppNoticeIcon.INFO,
+            )
+            MusicSourcePlaybackController.next()
+        }
+    }
+
+    /**
+     * 电台队列低水位线监控：队列剩余不足 3 首时，自动静默获取下一批追加入队
+     */
+    private fun startRadioWatermarkMonitor(appContext: Context) {
+        radioMonitorJob?.cancel()
+        radioMonitorJob = radioScope.launch {
+            var isLoadingMore = false
+            var lastTrackId: String? = null
+            var lastTrackArtist: String? = null
+            var trackStartTimeMs: Long = System.currentTimeMillis()
+
+            MusicSourcePlaybackController.snapshot.collect { snapshot ->
+                if (!isRadioMode) return@collect
+                val queue = snapshot.queue
+                val curIdx = snapshot.currentIndex
+                val currentTrack = snapshot.currentItem
+
+                // 1. 行为监听闭环：检测切歌时长，判定正负反馈
+                if (currentTrack != null && currentTrack.remoteId != lastTrackId) {
+                    val playedDurationSec = (System.currentTimeMillis() - trackStartTimeMs) / 1000
+                    if (lastTrackId != null && lastTrackArtist != null) {
+                        if (playedDurationSec in 1..9) {
+                            // 听不足 10 秒即切歌：记录负反馈抑制
+                            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordNegativeFeedback(lastTrackId!!, lastTrackArtist!!)
+                        } else if (playedDurationSec >= 40) {
+                            // 听满 40 秒以上：记录正向偏好种子
+                            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordPositiveFeedback(lastTrackId!!)
+                        }
+                    }
+                    lastTrackId = currentTrack.remoteId
+                    lastTrackArtist = currentTrack.artists.joinToString(", ")
+                    trackStartTimeMs = System.currentTimeMillis()
+                    com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongPlayedInRadio(currentTrack.remoteId)
+                }
+
+                // 2. 低水位线自动无限续杯（还剩 3 首以下自动拉取）
+                if (queue.isNotEmpty() && curIdx >= queue.size - 3 && !isLoadingMore) {
+                    isLoadingMore = true
+                    try {
+                        val nextPage = radioPage + 1
+                        val seedMid = currentTrack?.remoteId.orEmpty()
+                        AppLogger.d(TAG, "[OnlineRadio] 电台低水位触发自动续杯，拉取第 $nextPage 页 (种子: $seedMid)...")
+                        val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
+                        val moreResult = repo.getRecommendSongs(
+                            page = nextPage,
+                            pageSize = 20,
+                            platform = radioPlatform,
+                            seedSongMids = if (seedMid.isNotBlank()) listOf(seedMid) else emptyList(),
+                        )
+                        val moreSongs = moreResult.getOrNull().orEmpty()
+                        if (moreSongs.isNotEmpty()) {
+                            val rawItems = moreSongs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+                            MusicSourcePlaybackController.appendQueue(rawItems)
+                            _currentRadioSongs.value = _currentRadioSongs.value + moreSongs
+                            radioPage = nextPage
+                            AppLogger.i(TAG, "[OnlineRadio] 电台第 $nextPage 页续杯成功，已追加 ${rawItems.size} 首歌曲")
+                        }
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "[OnlineRadio] 电台静默续杯异常: ${e.message}")
+                    } finally {
+                        isLoadingMore = false
+                    }
+                }
+            }
+        }
     }
 }

@@ -71,4 +71,18 @@ interface OnlinePlatformSource {
         OnlineAlbum(id = albumId, platform = platform, title = "", coverUrl = "", artist = ""),
         emptyList(),
     )
+
+    /**
+     * 获取个性化推荐 / 猜你喜欢歌曲列表（可选能力，默认空实现）。
+     * @param page 页码，从 1 开始
+     * @param pageSize 每页歌曲数
+     * @param seedSongMids 入口/当前正在播放的种子歌曲 ID 列表
+     * @param favSongMids 用户偏好/收藏的种子歌曲 ID 列表
+     */
+    suspend fun getRecommendSongs(
+        page: Int = 1,
+        pageSize: Int = 20,
+        seedSongMids: List<String> = emptyList(),
+        favSongMids: List<String> = emptyList(),
+    ): List<OnlineSongItem> = emptyList()
 }

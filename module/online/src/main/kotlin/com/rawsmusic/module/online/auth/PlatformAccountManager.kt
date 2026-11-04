@@ -52,7 +52,15 @@ object PlatformAccountManager {
 
     private val _accounts = MutableStateFlow<Map<OnlinePlatform, PlatformAccount?>>(emptyMap())
     /** 各平台当前登录的账号；未登录的平台值为 null 或不存在。 */
-    val accounts: StateFlow<Map<OnlinePlatform, PlatformAccount?>> = _accounts.asStateFlow()
+    val accounts: StateFlow<Map<OnlinePlatform, PlatformAccount?>>
+        get() {
+            ensureRestored()
+            return _accounts.asStateFlow()
+        }
+
+    init {
+        ensureRestored()
+    }
 
     @Volatile
     private var restored = false
@@ -175,62 +183,48 @@ object PlatformAccountManager {
 
     /**
      * 手动使用用户输入的 Cookie / Token 登录（对应 OrBitPlayer 的 Cookie 登录机制）。
+     *
+     * 支持复杂字符串自动解析，并在联网丰富资料失败时采用兜底账号，保证登录可用。
+     */
+    suspend fun loginWithCookies(
+        platform: OnlinePlatform,
+        rawInput: String,
+    ): Result<PlatformAccount> = withContext(Dispatchers.IO) {
+        val parsedResult = com.rawsmusic.module.online.auth.util.PlatformCookieParser.parseToAccount(platform, rawInput)
+        if (parsedResult.isFailure) {
+            return@withContext Result.failure(parsedResult.exceptionOrNull() ?: IllegalArgumentException("Cookie 格式解析失败"))
+        }
+        val initialAccount = parsedResult.getOrThrow()
+        completeLoginWithAccount(platform, initialAccount)
+    }
+
+    /**
+     * 兼容重载：使用已解析的 Cookie Map 登录
      */
     suspend fun loginWithCookies(
         platform: OnlinePlatform,
         cookies: Map<String, String>,
     ): Result<PlatformAccount> = withContext(Dispatchers.IO) {
+        val rawJoined = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        loginWithCookies(platform, rawJoined)
+    }
+
+    private suspend fun completeLoginWithAccount(
+        platform: OnlinePlatform,
+        initialAccount: PlatformAccount,
+    ): Result<PlatformAccount> = withContext(Dispatchers.IO) {
         val service = authServices[platform]
             ?: return@withContext Result.failure(IllegalStateException("暂不支持 ${platform.displayName} 登录"))
-        try {
-            val initialAccount = when (platform) {
-                OnlinePlatform.QQ -> {
-                    val uin = cookies["uin"] ?: cookies["login_uin"] ?: cookies["luin"] ?: ""
-                    val cleanUin = uin.removePrefix("o").trim()
-                    val token = cookies["qm_keyst"] ?: cookies["qqmusic_key"] ?: cookies["psrf_musickey_id"] ?: ""
-                    PlatformAccount(
-                        platform = platform,
-                        userId = cleanUin.ifBlank { "qq_user" },
-                        nickname = if (cleanUin.isNotBlank()) "QQ用户_$cleanUin" else "QQ音乐用户",
-                        avatarUrl = "",
-                        isVip = false,
-                        vipLevel = "",
-                        cookies = cookies,
-                        tokens = if (token.isNotBlank()) mapOf("token" to token) else emptyMap(),
-                        updatedAt = System.currentTimeMillis(),
-                    )
-                }
-                OnlinePlatform.KUGOU -> {
-                    val userId = cookies["userid"] ?: cookies["kg_mid"] ?: ""
-                    val token = cookies["token"] ?: cookies["kg_token"] ?: ""
-                    PlatformAccount(
-                        platform = platform,
-                        userId = userId.ifBlank { "kugou_user" },
-                        nickname = if (userId.isNotBlank()) "酷狗用户_$userId" else "酷狗音乐用户",
-                        avatarUrl = "",
-                        isVip = false,
-                        vipLevel = "",
-                        cookies = cookies,
-                        tokens = if (token.isNotBlank()) mapOf("token" to token) else emptyMap(),
-                        updatedAt = System.currentTimeMillis(),
-                    )
-                }
-                else -> return@withContext Result.failure(IllegalStateException("暂不支持 ${platform.displayName} 登录"))
-            }
 
-            // 尝试通过网络拉取真实的用户昵称、头像和 VIP 状态
-            val validatedAccount = try {
-                service.refreshUserInfo(initialAccount)
-            } catch (e: Exception) {
-                AppLogger.w(TAG, "刷新 Cookie 账号信息异常，使用初始凭据兜底: ${e.message}")
-                initialAccount
-            }
-            saveAccount(validatedAccount)
-            Result.success(validatedAccount)
+        // 尝试通过网络拉取真实的用户昵称、头像和 VIP 状态
+        val validatedAccount = try {
+            service.refreshUserInfo(initialAccount)
         } catch (e: Exception) {
-            AppLogger.e(TAG, "Cookie 登录失败", e)
-            Result.failure(e)
+            AppLogger.w(TAG, "刷新 Cookie 账号信息异常，使用初始凭据兜底: ${e.message}")
+            initialAccount
         }
+        saveAccount(validatedAccount)
+        Result.success(validatedAccount)
     }
 
     /**

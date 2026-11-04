@@ -65,7 +65,8 @@ enum class NavScene(
     ONLINE_ARTIST_DETAIL(56, "online_artist_detail", "在线歌手详情", "person"),
     CURRENT_PLAYLIST(57, "current_playlist", "当前播放歌单", "queue_music"),
     PREVIOUS_PLAYLIST(58, "previous_playlist", "上次播放歌单", "history"),
-    PLAY_HISTORY(59, "play_history", "历史播放", "history");
+    PLAY_HISTORY(59, "play_history", "历史播放", "history"),
+    GUESS_YOU_LIKE(60, "guess_you_like", "猜你喜欢", "favorite");
 
     companion object {
         private val idMap = entries.associateBy { it.id }
@@ -116,13 +117,15 @@ enum class NavScene(
         COMPOSER_DETAIL,
         ONLINE_PLAYLIST_DETAIL,
         ONLINE_ARTIST_DETAIL,
+        GUESS_YOU_LIKE,
     )
 }
 
 fun isOnlineMusicScene(scene: NavScene?): Boolean =
     scene == NavScene.ONLINE_MUSIC ||
         scene == NavScene.ONLINE_PLAYLIST_DETAIL ||
-        scene == NavScene.ONLINE_ARTIST_DETAIL
+        scene == NavScene.ONLINE_ARTIST_DETAIL ||
+        scene == NavScene.GUESS_YOU_LIKE
 
 fun isOnlineMusicDetailTransition(from: NavScene?, to: NavScene?): Boolean =
     from != null && to != null && from != to && isOnlineMusicScene(from) && isOnlineMusicScene(to)

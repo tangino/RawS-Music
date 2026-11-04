@@ -29,6 +29,7 @@
     <string name="online_tab_search">Search</string>
     <string name="online_tab_favorites">Favorites</string>
     <string name="nav_scene_online_music">Online music</string>
+    <string name="nav_scene_guess_you_like">Guess You Like</string>
     <string name="nav_scene_online_playlist_detail">Online playlist</string>
     <string name="nav_scene_online_artist_detail">Online artist</string>
     <string name="online_plaza_section_recommend">Recommended</string>
@@ -562,4 +563,11 @@
     <string name="download_dialog_all_cached">All online songs in this playlist already exist locally</string>
     <string name="download_queued_notice">Added %1$d songs to download queue</string>
     <string name="download_already_local">Already Local</string>
+    <string name="online_plaza_guess_like_title">Guess You Like</string>
+    <string name="online_plaza_guess_like_subtitle_logged_in">Personalized radar based on your favorite tracks</string>
+    <string name="online_plaza_guess_like_subtitle_guest">Not logged in · Popular trending radio</string>
+    <string name="online_plaza_guess_like_btn">Start Radio</string>
+    <string name="online_plaza_guess_like_loading">Generating personalized radio…</string>
+    <string name="online_plaza_guess_like_success">Radio started with endless queue</string>
+
 </resources>

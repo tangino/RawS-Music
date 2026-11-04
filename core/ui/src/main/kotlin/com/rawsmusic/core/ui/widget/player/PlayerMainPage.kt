@@ -2668,11 +2668,11 @@ private fun ArtworkTitleInfoPager(
             artworkTransitionState.isGestureActive || artworkTransitionState.isSettling
         val holders = if (automaticArtworkFade) {
             activeHolders.filter { it.song != null }
-                .distinctBy { if (it.token != 0) "token:${it.token}" else "${it.key}|${it.song?.path}" }
+                .distinctBy { "token:${it.token}|${it.key}|${it.song?.path}" }
         } else {
             (listOf(previousHolder, nextHolder) + activeHolders)
                 .filter { it.song != null && (it.token != 0 || it.key.isNotBlank()) }
-                .distinctBy { if (it.token != 0) "token:${it.token}" else "${it.key}|${it.song?.path}" }
+                .distinctBy { "token:${it.token}|${it.key}|${it.song?.path}" }
         }
 
         // Reference has three complete ArtworkItemNodes, not three images plus a two-page text pager.

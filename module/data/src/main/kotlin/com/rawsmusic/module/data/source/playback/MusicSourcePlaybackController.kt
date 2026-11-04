@@ -215,6 +215,23 @@ object MusicSourcePlaybackController {
     }
 
     /**
+     * 向当前在线播放队列末尾追加歌曲（用于电台/推荐流静默续播）
+     */
+    fun appendQueue(newItems: List<RawSourceMediaItem>) {
+        if (newItems.isEmpty()) return
+        val currentSnap = mutableSnapshot.value
+        val currentQueue = currentSnap.queue.toMutableList()
+        val currentIds = currentQueue.map { it.stableIdentity }.toSet()
+        val toAdd = newItems.filter { it.stableIdentity !in currentIds }
+        if (toAdd.isNotEmpty()) {
+            currentQueue.addAll(toAdd)
+            mutableSnapshot.value = currentSnap.copy(queue = currentQueue)
+            backend?.onQueueAppended(toAdd)
+            com.rawsmusic.core.common.utils.AppLogger.d("MusicSourcePlayback", "已向播放队列静默追加 " + toAdd.size + " 首歌曲，当前队列共 " + currentQueue.size + " 首")
+        }
+    }
+
+    /**
      * 直接使用已通过寻源与探活校验的直链起播，避免重复触发二次解析与模糊检索。
      */
     fun playResolved(
@@ -1052,16 +1069,14 @@ object MusicSourcePlaybackController {
                 if (completionHandledGeneration == generation) return
                 completionHandledGeneration = generation
                 prepared = false
-                if (state.canGoNext) {
-                    next(automatic = true)
-                } else {
-                    mutableSnapshot.value = state.copy(
-                        status = MusicSourcePlaybackStatus.Completed,
-                        positionMs = duration.coerceAtLeast(state.positionMs),
-                        durationMs = duration.coerceAtLeast(0L),
-                        bufferedPercent = 100,
-                    )
-                }
+                // 通过 PlayerController 宿主播放时，播放完成由 PlayerController 统一自动切歌推进（遵循全局循环/随机模式），
+                // 严禁在此处重复触发 next(automatic = true) 导致双跳竞争。
+                mutableSnapshot.value = state.copy(
+                    status = MusicSourcePlaybackStatus.Completed,
+                    positionMs = duration.coerceAtLeast(state.positionMs),
+                    durationMs = duration.coerceAtLeast(0L),
+                    bufferedPercent = 100,
+                )
             }
             MusicSourceBackendStatus.Error -> {
                 if (fallbackAttemptedGeneration == generation) return

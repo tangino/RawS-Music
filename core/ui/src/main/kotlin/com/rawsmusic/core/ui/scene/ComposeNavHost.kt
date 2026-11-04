@@ -47,6 +47,7 @@ import com.rawsmusic.core.ui.scene.pages.LibrarySceneGroupingWarmup
 import com.rawsmusic.core.ui.scene.pages.LocalLibraryChromeInfo
 import com.rawsmusic.core.ui.scene.pages.MetadataMatchSourceUi
 import com.rawsmusic.core.ui.scene.pages.OnlineMusicPortalPage
+import com.rawsmusic.core.ui.scene.pages.GuessYouLikePage
 import com.rawsmusic.core.ui.scene.pages.OnlinePlaylistDetailPage
 import com.rawsmusic.core.ui.scene.pages.PlaylistsPage
 import com.rawsmusic.core.ui.scene.pages.onlinePlaylistDetailArgument
@@ -471,6 +472,11 @@ fun ComposeNavHost(
             )
 
             NavScene.SOURCE_IMPORT -> SourceImportPage(
+                onBack = onBack,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+                        NavScene.GUESS_YOU_LIKE -> GuessYouLikePage(
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )

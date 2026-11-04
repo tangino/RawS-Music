@@ -27,6 +27,7 @@
     <string name="online_tab_search">全网搜歌</string>
     <string name="online_tab_favorites">我的收藏</string>
     <string name="nav_scene_online_music">在线音乐</string>
+    <string name="nav_scene_guess_you_like">猜你喜欢</string>
     <string name="nav_scene_online_playlist_detail">在线歌单详情</string>
     <string name="nav_scene_online_artist_detail">在线歌手详情</string>
     <string name="online_plaza_section_recommend">推荐</string>
@@ -1038,4 +1039,11 @@
     <string name="download_dialog_all_cached">当前歌单中所有网络歌曲均已在本地存在，无需重复下载</string>
     <string name="download_queued_notice">已将 %1$d 首歌曲加入下载队列</string>
     <string name="download_already_local">本地已存在</string>
+    <string name="online_plaza_guess_like_title">猜你喜欢</string>
+    <string name="online_plaza_guess_like_subtitle_logged_in">基于 QQ 音乐红心与听歌喜好生成专属私人雷达</string>
+    <string name="online_plaza_guess_like_subtitle_guest">未登录 QQ 音乐 · 随机精选流行推荐电台</string>
+    <string name="online_plaza_guess_like_btn">开启电台</string>
+    <string name="online_plaza_guess_like_loading">正在生成专属电台推荐…</string>
+    <string name="online_plaza_guess_like_success">已开启猜你喜欢电台，无限连播已就绪</string>
+
 </resources>
