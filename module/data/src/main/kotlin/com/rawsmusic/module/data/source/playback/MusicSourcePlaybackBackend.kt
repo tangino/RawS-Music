@@ -55,6 +55,7 @@ interface MusicSourcePlaybackBackend {
     fun stop()
     fun peekNextQueueIndex(): Int? = null
     fun onQueueAppended(newItems: List<RawSourceMediaItem>) {}
+    fun onQueueReplaced(newItems: List<RawSourceMediaItem>, currentIndex: Int) {}
 }
 
 /**

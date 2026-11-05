@@ -302,6 +302,17 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         }
     }
 
+    override fun onQueueReplaced(
+        newItems: List<com.rawsmusic.core.common.source.RawSourceMediaItem>,
+        currentIndex: Int,
+    ) {
+        if (newItems.isEmpty()) return
+        val newAudioFiles = newItems.map { it.toVirtualAudioFile() }
+        val resolvedIndex = currentIndex.coerceIn(0, newAudioFiles.size - 1)
+        controller.adoptVisibleQueueSnapshot(newAudioFiles, resolvedIndex)
+        AppLogger.d(TAG, "已同步向 PlayerController 替换队列共 ${newAudioFiles.size} 首在线曲目，当前索引: $resolvedIndex")
+    }
+
     /**
      * 在线歌曲播放完成时不再拦截 completion。
      * 全局队列的 PlayerBackendStateControlCoordinator 会正常执行 automaticAdvanceTransport / automaticReplayTransport，

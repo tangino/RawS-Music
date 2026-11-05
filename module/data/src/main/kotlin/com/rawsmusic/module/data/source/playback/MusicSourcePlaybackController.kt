@@ -232,6 +232,30 @@ object MusicSourcePlaybackController {
     }
 
     /**
+     * 用新批次曲目整体替换当前在线播放队列（保留当前播放曲目，位于索引 0）
+     */
+    fun replaceQueueRetainingCurrent(newItems: List<RawSourceMediaItem>) {
+        if (newItems.isEmpty()) return
+        val currentSnap = mutableSnapshot.value
+        val currentTrack = currentSnap.currentItem
+        val newQueue = mutableListOf<RawSourceMediaItem>()
+        if (currentTrack != null) {
+            newQueue.add(currentTrack)
+            val filteredMore = newItems.filter { it.stableIdentity != currentTrack.stableIdentity }
+            newQueue.addAll(filteredMore)
+        } else {
+            newQueue.addAll(newItems)
+        }
+        val targetIndex = if (newQueue.isNotEmpty()) 0 else -1
+        mutableSnapshot.value = currentSnap.copy(
+            queue = newQueue,
+            currentIndex = targetIndex,
+        )
+        backend?.onQueueReplaced(newQueue, targetIndex)
+        com.rawsmusic.core.common.utils.AppLogger.d("MusicSourcePlayback", "已用新批次替换播放队列，共 ${newQueue.size} 首歌曲，当前播放曲目保留在首位")
+    }
+
+    /**
      * 直接使用已通过寻源与探活校验的直链起播，避免重复触发二次解析与模糊检索。
      */
     fun playResolved(

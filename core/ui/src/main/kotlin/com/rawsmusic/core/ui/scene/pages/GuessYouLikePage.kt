@@ -115,11 +115,20 @@ internal fun GuessYouLikePage(
     var isStartingRadio by remember { mutableStateOf(false) }
 
     val playbackSnapshot by MusicSourcePlaybackController.snapshot.collectAsState()
+    val listState = rememberLazyListState()
 
     fun loadRecommendSongs(page: Int) {
         scope.launch {
             isLoading = true
             try {
+                if (OnlinePlaybackLauncher.isRadioActive) {
+                    val refreshed = OnlinePlaybackLauncher.refreshRadioBatch(OnlinePlatform.QQ)
+                    if (refreshed != null && refreshed.isNotEmpty()) {
+                        songs = refreshed
+                        listState.animateScrollToItem(0)
+                        return@launch
+                    }
+                }
                 val currentSeed = playbackSnapshot.currentItem?.remoteId.orEmpty()
                 val result = OnlineMusicRepository.getInstance().getRecommendSongs(
                     platform = OnlinePlatform.QQ,
@@ -145,11 +154,19 @@ internal fun GuessYouLikePage(
         }
     }
 
-    // 实时监听电台队列的自动追加更新，保持界面歌曲列表与播放队列深度同步
+    // 实时监听电台队列的自动更新，新批次替换旧批次并保留当前播放歌曲，UI 平滑滚动与即时刷新
     LaunchedEffect(Unit) {
         OnlinePlaybackLauncher.currentRadioSongs.collect { radioSongs ->
             if (OnlinePlaybackLauncher.isRadioActive && radioSongs.isNotEmpty()) {
+                val isDifferentList = songs.isEmpty() ||
+                    songs.size != radioSongs.size ||
+                    songs.firstOrNull()?.id != radioSongs.firstOrNull()?.id ||
+                    (songs.size > 1 && radioSongs.size > 1 && songs[1].id != radioSongs[1].id)
                 songs = radioSongs
+                if (isDifferentList) {
+                    // 当新批次替换发生时，平滑回到列表顶部（当前播放曲目处），确保 UI 直观呈现新批次
+                    listState.animateScrollToItem(0)
+                }
             }
         }
     }
@@ -184,7 +201,6 @@ internal fun GuessYouLikePage(
     val configuration = LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp >= 600
 
-    val listState = rememberLazyListState()
     val isScrolledPastHero by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0
@@ -452,6 +468,7 @@ internal fun GuessYouLikePage(
             ) {
                 // 歌曲列表
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize().bottomChromeNestedScroll(),
                     contentPadding = PaddingValues(bottom = 180.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),

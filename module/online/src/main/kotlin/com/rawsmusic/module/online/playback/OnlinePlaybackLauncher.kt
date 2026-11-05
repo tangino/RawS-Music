@@ -360,13 +360,13 @@ object OnlinePlaybackLauncher {
     }
 
     /**
-     * 触发电台续杯追加下一批个性化推荐歌曲
+     * 触发电台自动更新新批次个性化推荐歌曲（除当前播放曲目外，旧批次其余歌曲被新批次替换，UI 与播放队列深度同步更新）
      */
     suspend fun triggerRadioRefill(appContext: Context, seedMid: String = "") {
         if (!refillMutex.tryLock()) return
         try {
             val nextPage = radioPage + 1
-            AppLogger.d(TAG, "[OnlineRadio] 电台触发自动续杯，拉取第 $nextPage 页 (种子: $seedMid)...")
+            AppLogger.d(TAG, "[OnlineRadio] 电台触发自动更新新批次，拉取第 $nextPage 页 (种子: $seedMid)...")
             val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
             val moreResult = repo.getRecommendSongs(
                 page = nextPage,
@@ -376,17 +376,92 @@ object OnlinePlaybackLauncher {
             )
             val moreSongs = moreResult.getOrNull().orEmpty()
             if (moreSongs.isNotEmpty()) {
+                val currentSnapshot = MusicSourcePlaybackController.snapshot.value
+                val currentMediaItem = currentSnapshot.currentItem
+
+                // 优先从现有电台列表匹配当前正在播放的曲目对象，无匹配则根据当前播放快照转换
+                val currentPlayingSong = _currentRadioSongs.value.firstOrNull {
+                    (currentMediaItem != null && it.id == currentMediaItem.remoteId) ||
+                    (!currentMediaItem?.title.isNullOrBlank() && it.title.equals(currentMediaItem?.title, ignoreCase = true))
+                } ?: currentMediaItem?.let {
+                    OnlineSongItem(
+                        id = it.remoteId,
+                        platform = radioPlatform,
+                        title = it.title,
+                        artist = it.artists.joinToString(", "),
+                        album = it.album,
+                        durationMs = it.durationMs,
+                        coverUrl = it.artworkUrl,
+                    )
+                }
+
+                // 核心：除了当前播放的歌曲之外，旧批次的歌曲被新批次的歌曲替换
+                val replacedSongs = if (currentPlayingSong != null) {
+                    val filteredNew = moreSongs.filterNot { it.id == currentPlayingSong.id }
+                    listOf(currentPlayingSong) + filteredNew
+                } else {
+                    moreSongs
+                }
+
                 val rawItems = moreSongs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
-                MusicSourcePlaybackController.appendQueue(rawItems)
-                _currentRadioSongs.value = _currentRadioSongs.value + moreSongs
+                MusicSourcePlaybackController.replaceQueueRetainingCurrent(rawItems)
+                _currentRadioSongs.value = replacedSongs
                 radioPage = nextPage
-                AppLogger.i(TAG, "[OnlineRadio] 电台第 $nextPage 页续杯成功，已追加 ${rawItems.size} 首歌曲，当前总数: ${_currentRadioSongs.value.size}")
+                AppLogger.i(TAG, "[OnlineRadio] 电台第 $nextPage 页自动替换批次成功，已保留当前播放歌曲并替换其余歌曲为新批次 ${moreSongs.size} 首，当前共: ${replacedSongs.size}")
             }
         } catch (e: Exception) {
-            AppLogger.w(TAG, "[OnlineRadio] 电台静默续杯异常: ${e.message}")
+            AppLogger.w(TAG, "[OnlineRadio] 电台自动更新批次异常: ${e.message}")
         } finally {
             refillMutex.unlock()
         }
+    }
+
+    /**
+     * 手动触发更新新批次推荐（电台运行中保留当前播放歌曲，其余被新批次替换）
+     */
+    suspend fun refreshRadioBatch(
+        platform: com.rawsmusic.module.online.model.OnlinePlatform = radioPlatform,
+    ): List<OnlineSongItem>? {
+        val nextPage = radioPage + 1
+        val repo = com.rawsmusic.module.online.repository.OnlineMusicRepository.getInstance()
+        val currentSnapshot = MusicSourcePlaybackController.snapshot.value
+        val currentMediaItem = currentSnapshot.currentItem
+        val currentSeed = currentMediaItem?.remoteId.orEmpty()
+        val moreResult = repo.getRecommendSongs(
+            page = nextPage,
+            pageSize = 20,
+            platform = platform,
+            seedSongMids = if (currentSeed.isNotBlank()) listOf(currentSeed) else emptyList(),
+        )
+        val moreSongs = moreResult.getOrNull().orEmpty()
+        if (moreSongs.isNotEmpty()) {
+            val currentPlayingSong = _currentRadioSongs.value.firstOrNull {
+                (currentMediaItem != null && it.id == currentMediaItem.remoteId) ||
+                (!currentMediaItem?.title.isNullOrBlank() && it.title.equals(currentMediaItem?.title, ignoreCase = true))
+            } ?: currentMediaItem?.let {
+                OnlineSongItem(
+                    id = it.remoteId,
+                    platform = platform,
+                    title = it.title,
+                    artist = it.artists.joinToString(", "),
+                    album = it.album,
+                    durationMs = it.durationMs,
+                    coverUrl = it.artworkUrl,
+                )
+            }
+            val replacedSongs = if (currentPlayingSong != null) {
+                val filteredNew = moreSongs.filterNot { it.id == currentPlayingSong.id }
+                listOf(currentPlayingSong) + filteredNew
+            } else {
+                moreSongs
+            }
+            val rawItems = moreSongs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+            MusicSourcePlaybackController.replaceQueueRetainingCurrent(rawItems)
+            _currentRadioSongs.value = replacedSongs
+            radioPage = nextPage
+            return replacedSongs
+        }
+        return null
     }
 
     /**
