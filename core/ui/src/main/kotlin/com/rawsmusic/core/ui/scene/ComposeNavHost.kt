@@ -48,6 +48,7 @@ import com.rawsmusic.core.ui.scene.pages.LocalLibraryChromeInfo
 import com.rawsmusic.core.ui.scene.pages.MetadataMatchSourceUi
 import com.rawsmusic.core.ui.scene.pages.OnlineMusicPortalPage
 import com.rawsmusic.core.ui.scene.pages.GuessYouLikePage
+import com.rawsmusic.core.ui.scene.pages.DailyRecommendPage
 import com.rawsmusic.core.ui.scene.pages.OnlinePlaylistDetailPage
 import com.rawsmusic.core.ui.scene.pages.PlaylistsPage
 import com.rawsmusic.core.ui.scene.pages.onlinePlaylistDetailArgument
@@ -480,6 +481,11 @@ fun ComposeNavHost(
                 onBack = onBack,
                 currentSong = data.miniPlayerSong ?: data.currentSong,
                 currentCoverPath = data.miniPlayerCoverPath,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            NavScene.DAILY_RECOMMEND -> DailyRecommendPage(
+                onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )
 

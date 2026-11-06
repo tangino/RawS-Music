@@ -91,6 +91,10 @@ import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.prefs.PlayedPlaylistManager
 import com.rawsmusic.core.common.prefs.PlayHistoryManager
 import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.model.DailyRecommendData
+import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
+import com.rawsmusic.module.online.playback.OnlinePlayResult
+import com.rawsmusic.module.online.repository.OnlineMusicRepository
 import com.rawsmusic.core.ui.theme.FontScaleLayoutReporter
 import com.rawsmusic.module.data.prefs.AppPreferences
 import com.rawsmusic.core.common.model.AudioFile
@@ -151,8 +155,39 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.icon.extended.Music
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Settings
+
+@Composable
+private fun rememberDailyRecommendDataState(): DailyRecommendData {
+    val cal = java.util.Calendar.getInstance()
+    val dayStr = String.format("%02d", cal.get(java.util.Calendar.DAY_OF_MONTH))
+    val monthNames = arrayOf("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+    val monthStr = monthNames.getOrElse(cal.get(java.util.Calendar.MONTH)) { "TODAY" }
+    var data by remember {
+        mutableStateOf(
+            DailyRecommendData(
+                dateDay = dayStr,
+                dateMonth = monthStr,
+                title = "每日30首",
+                subTitle = "今日私享 · 30首专属推荐",
+            )
+        )
+    }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                val fresh = OnlineMusicRepository.getInstance().getDailyRecommendData(forceRefresh = false)
+                withContext(Dispatchers.Main) {
+                    data = fresh
+                }
+            } catch (_: Exception) {}
+        }
+    }
+    return data
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -207,6 +242,7 @@ fun HomePage(
     val setRawFlowMode = LocalRawFlowModeSetter.current
     val sceneMotionFrozen = LocalSceneBackgroundFrozen.current
     val retainedLibraryPopulation = LocalReferenceRetainedLibraryPopulation.current
+    val dailyRecommendData = rememberDailyRecommendDataState()
     LaunchedEffect(sceneMotionFrozen) {
         if (sceneMotionFrozen) {
             homeCardEditMode = false
@@ -279,6 +315,7 @@ fun HomePage(
             playCounts = playCounts,
             carouselState = carouselState,
             headerOptions = headerOptions,
+            dailyRecommendData = dailyRecommendData,
             homeCardLayoutState = homeCardLayoutState,
             homeContentCounts = homeContentCounts,
             homeCardEditMode = homeCardEditMode,
@@ -370,6 +407,7 @@ fun HomePage(
                 isPlaying = effectivePlaying,
                 playCounts = playCounts,
                 mostPlayedVisible = headerOptions.mostPlayedVisible,
+                dailyRecommendData = dailyRecommendData,
                 homeCardLayoutState = homeCardLayoutState,
                 homeContentCounts = homeContentCounts,
                 homeCardEditMode = homeCardEditMode,
@@ -475,6 +513,7 @@ private fun HomePageContent(
     isPlaying: Boolean,
     playCounts: Map<Long, Int>,
     mostPlayedVisible: Boolean,
+    dailyRecommendData: DailyRecommendData,
     homeCardLayoutState: HomeCardLayoutState,
     homeContentCounts: Map<NavScene, Int>,
     homeCardEditMode: Boolean,
@@ -509,8 +548,11 @@ private fun HomePageContent(
     val homeCardRowMaxWidth = (windowLayoutProfile.homeCardContentMaxWidth - 32.dp)
         .coerceAtLeast(1.dp)
     val visibleLibraryScenes = homeCardLayoutState.scenes(HomeCardGroup.LIBRARY)
+    val gridLibraryScenes = remember(visibleLibraryScenes) {
+        visibleLibraryScenes.filterNot { it == NavScene.DAILY_RECOMMEND }
+    }
     val visibleToolScenes = homeCardLayoutState.scenes(HomeCardGroup.TOOLS)
-    val libraryCards = remember(songs, visibleLibraryScenes) { homeLibraryCards(songs, visibleLibraryScenes) }
+    val libraryCards = remember(songs, gridLibraryScenes) { homeLibraryCards(songs, gridLibraryScenes) }
     val toolCards = remember(songs, visibleToolScenes) { homeToolCards(songs, visibleToolScenes) }
     val librarySlots = remember(libraryCards, homeCardEditMode, homeCardLayoutState.hiddenScenes) {
         buildHomeCardSlots(
@@ -609,6 +651,36 @@ private fun HomePageContent(
                     hostFrozen = sceneMotionFrozen,
                 )
             }
+        }
+
+        if (homeCardLayoutState.isVisible(NavScene.DAILY_RECOMMEND)) {
+            val coroutineScope = rememberCoroutineScope()
+            val context = LocalContext.current
+            DailyRecommendCard(
+                dailyData = dailyRecommendData,
+                editMode = homeCardEditMode,
+                currentCoverKey = currentSong?.coverKey ?: dailyRecommendData.songs.firstOrNull()?.coverUrl,
+                onRemove = { homeCardLayoutState.hide(NavScene.DAILY_RECOMMEND) },
+                onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
+                onPlay = {
+                    if (dailyRecommendData.songs.isNotEmpty()) {
+                        coroutineScope.launch {
+                            OnlinePlaybackLauncher.play(
+                                context = context,
+                                item = dailyRecommendData.songs[0],
+                                queue = dailyRecommendData.songs,
+                                index = 0
+                            )
+                        }
+                    } else {
+                        onNavigate(NavScene.DAILY_RECOMMEND)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = homeCardRowMaxWidth)
+                    .align(Alignment.CenterHorizontally),
+            )
         }
 
         HomeSectionTitle(
@@ -1282,11 +1354,13 @@ private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
     NavScene.PLAY_HISTORY -> R.drawable.ic_nav_custom_recent
     NavScene.GUESS_YOU_LIKE -> R.drawable.ic_online_favorite
+    NavScene.DAILY_RECOMMEND -> R.drawable.ic_nav_custom_recent
     else -> null
 }
 
 @Composable
 private fun homeCardStatisticsText(scene: NavScene, count: Int?): String {
+    if (scene == NavScene.DAILY_RECOMMEND) return stringResource(R.string.home_card_statistics_daily_recommend)
     if (count == null) return ""
     return when (scene) {
         NavScene.SONGS, NavScene.QUEUE, NavScene.RECENTLY_ADDED,
@@ -1627,6 +1701,7 @@ private fun VectorIcon(
 
 internal const val HOME_VIRTUAL_LIST_ENCODING_PREFIX = "raws_home_holder:"
 private const val HOME_HOLDER_HERO = "hero"
+private const val HOME_HOLDER_DAILY_RECOMMEND = "daily_recommend"
 private const val HOME_HOLDER_LIBRARY_HEADER = "library_header"
 private const val HOME_HOLDER_LIBRARY_ROW = "library_row"
 private const val HOME_HOLDER_MOST_HEADER = "most_header"
@@ -1661,6 +1736,7 @@ internal fun rememberHomeVirtualListProviderSpec(
     playCounts: Map<Long, Int>,
     carouselState: HomeArtworkCarouselState,
     headerOptions: HomeHeaderOptionsState,
+    dailyRecommendData: DailyRecommendData,
     homeCardLayoutState: HomeCardLayoutState,
     homeContentCounts: Map<NavScene, Int>,
     homeCardEditMode: Boolean,
@@ -1733,8 +1809,11 @@ internal fun rememberHomeVirtualListProviderSpec(
     val latestArtworkDoubleTap by rememberUpdatedState(onCurrentArtworkDoubleTap)
     val latestArtworkBoundsChanged by rememberUpdatedState(onCurrentArtworkBoundsChanged)
     val visibleLibraryScenes = homeCardLayoutState.scenes(HomeCardGroup.LIBRARY)
+    val gridLibraryScenes = remember(visibleLibraryScenes) {
+        visibleLibraryScenes.filterNot { it == NavScene.DAILY_RECOMMEND }
+    }
     val visibleToolScenes = homeCardLayoutState.scenes(HomeCardGroup.TOOLS)
-    val libraryCards = remember(songs, visibleLibraryScenes) { homeLibraryCards(songs, visibleLibraryScenes) }
+    val libraryCards = remember(songs, gridLibraryScenes) { homeLibraryCards(songs, gridLibraryScenes) }
     val toolCards = remember(songs, visibleToolScenes) { homeToolCards(songs, visibleToolScenes) }
     val librarySlots = remember(libraryCards, homeCardEditMode, homeCardLayoutState.hiddenScenes) {
         buildHomeCardSlots(
@@ -1823,9 +1902,13 @@ internal fun rememberHomeVirtualListProviderSpec(
         }
     }
 
-    val items = remember(mostPlayed, libraryRows.size, toolRows.size, headerOptions.mostPlayedVisible) {
+    val isDailyRecommendVisible = homeCardLayoutState.isVisible(NavScene.DAILY_RECOMMEND)
+    val items = remember(mostPlayed, libraryRows.size, toolRows.size, headerOptions.mostPlayedVisible, isDailyRecommendVisible) {
         buildList {
             add(homeSyntheticAudioFile(-9_100_001L, HOME_HOLDER_HERO, "HOME Hero"))
+            if (isDailyRecommendVisible) {
+                add(homeSyntheticAudioFile(-9_100_006L, HOME_HOLDER_DAILY_RECOMMEND, "HOME Daily Recommend"))
+            }
             add(homeSyntheticAudioFile(-9_100_002L, HOME_HOLDER_LIBRARY_HEADER, "HOME Library"))
             repeat(libraryRows.size) { row ->
                 add(homeSyntheticAudioFile(-9_110_000L - row, "$HOME_HOLDER_LIBRARY_ROW:$row", "HOME Library $row"))
@@ -1868,12 +1951,15 @@ internal fun rememberHomeVirtualListProviderSpec(
         headerOptions.weatherVisible,
         headerOptions.searchBarVisible,
         showSettingsShortcut,
+        isDailyRecommendVisible,
+        dailyRecommendData,
     ) {
         VirtualListCustomProvider(
             itemHeight = { song, _ ->
                 val kind = song.encodingFormat.removePrefix(HOME_VIRTUAL_LIST_ENCODING_PREFIX)
                 when {
                     kind == HOME_HOLDER_HERO -> heroHeight
+                    kind == HOME_HOLDER_DAILY_RECOMMEND -> 164.dp
                     kind == HOME_HOLDER_LIBRARY_HEADER -> sectionHeaderHeight
                     kind.startsWith("$HOME_HOLDER_LIBRARY_ROW:") -> cardRowHeight
                     kind == HOME_HOLDER_MOST_HEADER -> sectionHeaderHeight
@@ -1949,6 +2035,41 @@ internal fun rememberHomeVirtualListProviderSpec(
                                     hostFrozen = latestSceneMotionFrozen,
                                 )
                             }
+                        }
+                    }
+                    kind == HOME_HOLDER_DAILY_RECOMMEND -> {
+                        val coroutineScope = rememberCoroutineScope()
+                        val context = LocalContext.current
+                        Box(
+                            modifier = modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            DailyRecommendCard(
+                                dailyData = dailyRecommendData,
+                                editMode = homeCardEditMode,
+                                currentCoverKey = latestCarouselCurrentSong?.coverKey ?: dailyRecommendData.songs.firstOrNull()?.coverUrl,
+                                onRemove = { homeCardLayoutState.hide(NavScene.DAILY_RECOMMEND) },
+                                onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
+                                onPlay = {
+                                    if (dailyRecommendData.songs.isNotEmpty()) {
+                                        coroutineScope.launch {
+                                            OnlinePlaybackLauncher.play(
+                                                context = context,
+                                                item = dailyRecommendData.songs[0],
+                                                queue = dailyRecommendData.songs,
+                                                index = 0
+                                            )
+                                        }
+                                    } else {
+                                        onNavigate(NavScene.DAILY_RECOMMEND)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .widthIn(max = homeCardRowMaxWidth),
+                            )
                         }
                     }
                     kind == HOME_HOLDER_LIBRARY_HEADER -> {

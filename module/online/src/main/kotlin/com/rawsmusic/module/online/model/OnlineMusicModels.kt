@@ -106,3 +106,16 @@ data class OnlineArtistDetail(
     val hotSongs: List<OnlineSongItem> = emptyList(),
     val albums: List<OnlineAlbum> = emptyList(),
 )
+
+/** 每日30首（今日私享）聚合数据模型 */
+data class DailyRecommendData(
+    val dateDay: String,
+    val dateMonth: String,
+    val title: String = "每日30首",
+    val subTitle: String = "根据近期喜好每日更新 · 30首",
+    val diversityScore: Int = 0,
+    val tags: List<String> = emptyList(),
+    val songs: List<OnlineSongItem> = emptyList(),
+    val isFromLogin: Boolean = false,
+)
+

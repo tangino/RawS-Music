@@ -48,8 +48,10 @@ class KugouMusicSource(
             .header("User-Agent", userAgent)
             .header("Referer", "http://m.kugou.com/")
 
-        cookieProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { cookie ->
-            requestBuilder.header("Cookie", cookie)
+        val cookie = cookieProvider?.invoke()?.takeIf { it.isNotBlank() }
+            ?: com.rawsmusic.module.online.auth.PlatformAccountManager.getCookieHeader(OnlinePlatform.KUGOU).takeIf { it.isNotBlank() }
+        cookie?.let {
+            requestBuilder.header("Cookie", it)
         }
 
         val request = requestBuilder.get().build()
@@ -214,6 +216,7 @@ class KugouMusicSource(
             // 【优先核心】针对酷狗用户云歌单（自建/收藏），优先使用移动端云歌单协议拉取歌曲
             try {
                 val account = accountProvider?.invoke()
+                    ?: com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.KUGOU)
                 val authService = com.rawsmusic.module.online.auth.service.KugouMusicAuthService()
                 val (cloudPlaylist, cloudSongs) = authService.getPlaylistTracks(playlistId, account)
                 if (cloudSongs.isNotEmpty()) {

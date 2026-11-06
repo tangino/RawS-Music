@@ -103,10 +103,12 @@ object PlatformAccountManager {
      * 注意方向：是 online 模块内部接线（`auth → repository`），不引入跨模块依赖。
      */
     fun bindToRepository() {
-        OnlineMusicRepository.getInstance().bindAuthProviders(
-            cookieProvider = { platform -> getCookieHeaderWithoutRestore(platform) },
-            accountProvider = { platform -> _accounts.value[platform] },
-        )
+        runCatching {
+            OnlineMusicRepository.getInstance().bindAuthProviders(
+                cookieProvider = { platform -> getCookieHeaderWithoutRestore(platform) },
+                accountProvider = { platform -> _accounts.value[platform] },
+            )
+        }
     }
 
     // 供 bindToRepository 内部用：避免 provider 在恢复过程中再次触发 ensureRestored（会死锁）。

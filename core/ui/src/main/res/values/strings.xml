@@ -28,6 +28,14 @@
     <string name="online_tab_favorites">我的收藏</string>
     <string name="nav_scene_online_music">在线音乐</string>
     <string name="nav_scene_guess_you_like">猜你喜欢</string>
+    <string name="nav_scene_daily_recommend">每日30首</string>
+    <string name="home_card_statistics_daily_recommend">30 首专属推荐</string>
+    <string name="daily_recommend_title">每日30首</string>
+    <string name="daily_recommend_subtitle">今日私享 · 30首专属推荐</string>
+    <string name="daily_recommend_play_all">播放全部</string>
+    <string name="daily_recommend_diversity">多样性</string>
+    <string name="daily_recommend_refresh">刷新</string>
+    <string name="daily_recommend_empty">暂无推荐歌曲</string>
     <string name="nav_scene_online_playlist_detail">在线歌单详情</string>
     <string name="nav_scene_online_artist_detail">在线歌手详情</string>
     <string name="online_plaza_section_recommend">推荐</string>

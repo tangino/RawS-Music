@@ -115,6 +115,7 @@ internal val PersistentLibraryRailSupportedScenes: Set<NavScene> = ReferenceLibr
     NavScene.ONLINE_ARTIST_DETAIL,
     NavScene.PLAY_HISTORY,
     NavScene.GUESS_YOU_LIKE,
+    NavScene.DAILY_RECOMMEND,
 )
 
 internal fun supportsPersistentLibraryRailScene(scene: NavScene): Boolean =
@@ -162,6 +163,8 @@ private fun NavScene.persistentLibraryRailRoot(): NavScene = when (this) {
     NavScene.PLAYLIST_LIST -> NavScene.PLAYLISTS
     NavScene.ONLINE_PLAYLIST_DETAIL,
     NavScene.ONLINE_ARTIST_DETAIL -> NavScene.ONLINE_MUSIC
+    NavScene.GUESS_YOU_LIKE,
+    NavScene.DAILY_RECOMMEND -> NavScene.HOME
     else -> this
 }
 

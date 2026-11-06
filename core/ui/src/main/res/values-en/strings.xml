@@ -30,6 +30,14 @@
     <string name="online_tab_favorites">Favorites</string>
     <string name="nav_scene_online_music">Online music</string>
     <string name="nav_scene_guess_you_like">Guess You Like</string>
+    <string name="nav_scene_daily_recommend">Daily Recommend</string>
+    <string name="home_card_statistics_daily_recommend">30 recommended tracks</string>
+    <string name="daily_recommend_title">Daily 30</string>
+    <string name="daily_recommend_subtitle">Today\'s Picks · 30 Songs</string>
+    <string name="daily_recommend_play_all">Play All</string>
+    <string name="daily_recommend_diversity">Diversity</string>
+    <string name="daily_recommend_refresh">Refresh</string>
+    <string name="daily_recommend_empty">No songs available</string>
     <string name="nav_scene_online_playlist_detail">Online playlist</string>
     <string name="nav_scene_online_artist_detail">Online artist</string>
     <string name="online_plaza_section_recommend">Recommended</string>

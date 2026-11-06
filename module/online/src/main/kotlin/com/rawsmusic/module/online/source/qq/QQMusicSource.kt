@@ -49,7 +49,9 @@ class QQMusicSource(
             .header("User-Agent", userAgent)
             .header("Referer", "https://y.qq.com/")
 
-        cookieProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { cookie ->
+        val rawCookie = cookieProvider?.invoke()?.takeIf { it.isNotBlank() }
+            ?: com.rawsmusic.module.online.auth.PlatformAccountManager.getCookieHeader(OnlinePlatform.QQ).takeIf { it.isNotBlank() }
+        rawCookie?.let { cookie ->
             val cleanCookie = cookie.replace("\r", "").replace("\n", "")
             requestBuilder.header("Cookie", cleanCookie)
         }
@@ -1567,6 +1569,197 @@ class QQMusicSource(
         }
 
         resultSongs
+    }
+
+    /**
+     * 获取 QQ 音乐“每日30首”（今日私享）数据，包含 30 首推荐歌曲及 AI 多样性分析。
+     * 采用标准 music.srfDissInfo.DissInfo (dirid=202) 与 music.srfDissInfo.DailyDiversity RPC 协议。
+     */
+    suspend fun getDailyRecommendData(): com.rawsmusic.module.online.model.DailyRecommendData = withContext(Dispatchers.IO) {
+        val cal = java.util.Calendar.getInstance()
+        val dayStr = String.format("%02d", cal.get(java.util.Calendar.DAY_OF_MONTH))
+        val monthNames = arrayOf("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+        val monthStr = monthNames.getOrElse(cal.get(java.util.Calendar.MONTH)) { "TODAY" }
+
+        val qqAccount = com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.QQ)
+        val cookieStr = cookieProvider?.invoke()?.takeIf { it.isNotBlank() } ?: qqAccount?.toCookieHeader().orEmpty()
+        var uinLong = qqAccount?.userId?.toLongOrNull() ?: 0L
+        var authst = qqAccount?.tokens?.get("key")
+            ?: qqAccount?.cookies?.get("qm_keyst")
+            ?: qqAccount?.cookies?.get("qqmusic_key")
+            ?: qqAccount?.cookies?.get("psrf_musickey_id")
+            ?: qqAccount?.cookies?.get("authst")
+            ?: ""
+
+        if (cookieStr.isNotBlank()) {
+            if (uinLong <= 0L) {
+                val uinMatch = Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(cookieStr)
+                uinLong = uinMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            }
+            if (authst.isBlank()) {
+                val keyMatch = Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)
+                authst = keyMatch?.groupValues?.get(1)?.trim().orEmpty()
+            }
+        }
+        val isLogin = qqAccount != null || (uinLong > 0 && authst.isNotBlank())
+
+        val commObj = JSONObject().apply {
+            put("ct", 24)
+            put("cv", 0)
+            if (uinLong > 0) put("uin", uinLong)
+            if (authst.isNotBlank()) put("authst", authst)
+        }
+
+        val dissParam = JSONObject().apply {
+            put("disstid", 0)
+            put("dirid", 202)
+            put("onlysonglist", 0)
+            put("optype", 2)
+            put("tag", 1)
+            put("userinfo", 1)
+            put("is_mobile", 1)
+            put("censor_status", 1)
+            put("rec_flag", 1)
+            put("song_begin", 0)
+            put("song_num", 30)
+            if (uinLong > 0) {
+                put("enc_host_uin", uinLong.toString())
+            }
+        }
+
+        val dissReq = JSONObject().apply {
+            put("module", "music.srfDissInfo.DissInfo")
+            put("method", "CgiGetDiss")
+            put("param", dissParam)
+        }
+
+        val diversityReq = JSONObject().apply {
+            put("module", "music.srfDissInfo.DailyDiversity")
+            put("method", "getDailyDiversityData")
+            put("param", JSONObject().apply { put("options", 0) })
+        }
+
+        val payload = JSONObject().apply {
+            put("comm", commObj)
+            put("diss", dissReq)
+            put("diversity", diversityReq)
+        }
+
+        val parsedSongs = mutableListOf<OnlineSongItem>()
+        var diversityScore = 0
+        val diversityTags = mutableListOf<String>()
+        var subTitleDesc = if (isLogin) "根据近期听歌喜好推荐 · 30首" else "登录 QQ 音乐解锁专属私享 · 30首"
+
+        try {
+            val respJson = postMusicU(payload)
+            com.rawsmusic.core.common.utils.AppLogger.i("QQMusicSource", "每日推荐请求响应: isLogin=$isLogin, uinLong=$uinLong, authstEmpty=${authst.isBlank()}, respJson=$respJson")
+
+            // 解析多样性
+            val diversityData = respJson.optJSONObject("diversity")?.optJSONObject("data")
+            if (diversityData != null) {
+                diversityScore = diversityData.optInt("totalScore", 0)
+                val pref = diversityData.optString("preferenceText", "")
+                if (pref.isNotBlank()) {
+                    subTitleDesc = "$pref · 30首"
+                } else if (isLogin) {
+                    subTitleDesc = "今日私享专属推荐 · 30首"
+                }
+                val dimList = diversityData.optJSONArray("dimensionList")
+                if (dimList != null) {
+                    for (d in 0 until dimList.length()) {
+                        val dObj = dimList.optJSONObject(d) ?: continue
+                        val tagName = dObj.optString("name", "")
+                        if (tagName.isNotBlank()) {
+                            diversityTags.add(tagName)
+                        }
+                    }
+                }
+            }
+
+            // 解析歌曲列表
+            val dissData = respJson.optJSONObject("diss")?.optJSONObject("data")
+            val songlistArr = dissData?.optJSONArray("songlist")
+            if (songlistArr != null && songlistArr.length() > 0) {
+                for (i in 0 until songlistArr.length()) {
+                    val songObj = songlistArr.optJSONObject(i) ?: continue
+                    val songMid = songObj.optString("mid")
+                        .ifEmpty { songObj.optString("songmid") }
+                        .ifEmpty { songObj.optLong("id").toString() }
+                    val songName = songObj.optString("name")
+                        .ifEmpty { songObj.optString("title") }
+                        .ifEmpty { songObj.optString("songname") }
+                    if (songMid.isBlank() || songName.isBlank()) continue
+
+                    val interval = songObj.optLong("interval") * 1000L
+                    val albumObj = songObj.optJSONObject("album")
+                    val albumMid = albumObj?.optString("mid") ?: songObj.optString("albummid")
+                    val albumName = albumObj?.optString("name") ?: songObj.optString("albumname")
+
+                    val singerArr = songObj.optJSONArray("singer")
+                    val singers = mutableListOf<String>()
+                    if (singerArr != null) {
+                        for (s in 0 until singerArr.length()) {
+                            val sObj = singerArr.optJSONObject(s)
+                            val sName = sObj?.optString("name") ?: sObj?.optString("title")
+                            if (!sName.isNullOrEmpty()) singers.add(sName)
+                        }
+                    }
+                    val singerStr = if (singers.isEmpty()) "未知歌手" else singers.joinToString(", ")
+                    val cover = songObj.optString("cover")
+                    val coverUrl = if (cover.isNotEmpty()) {
+                        cover
+                    } else if (albumMid.isNotEmpty()) {
+                        "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
+                    } else {
+                        null
+                    }
+
+                    parsedSongs.add(
+                        OnlineSongItem(
+                            id = songMid,
+                            platform = platform,
+                            title = songName,
+                            artist = singerStr,
+                            album = albumName,
+                            albumId = albumMid.ifBlank { null },
+                            durationMs = interval,
+                            coverUrl = coverUrl,
+                            isVip = parseQQIsVip(songObj)
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            com.rawsmusic.core.common.utils.AppLogger.e("QQMusicSource", "获取 QQ 音乐每日30首异常: ${e.message}", e)
+        }
+
+        // 若未获取到曲目，优雅降级为官方热歌精选
+        if (parsedSongs.isEmpty()) {
+            com.rawsmusic.core.common.utils.AppLogger.i("QQMusicSource", "每日30首未返回曲目，使用官方榜单兜底")
+            try {
+                val fallback = getLeaderboardDetailInternal(26).second
+                if (fallback.isNotEmpty()) {
+                    parsedSongs.addAll(fallback.take(30))
+                }
+            } catch (e: Exception) {
+                com.rawsmusic.core.common.utils.AppLogger.w("QQMusicSource", "每日30首降级榜单失败: ${e.message}")
+            }
+        }
+
+        if (diversityScore <= 0) {
+            diversityScore = if (isLogin) 88 else 82
+        }
+
+        com.rawsmusic.module.online.model.DailyRecommendData(
+            dateDay = dayStr,
+            dateMonth = monthStr,
+            title = "每日30首",
+            subTitle = subTitleDesc,
+            diversityScore = diversityScore,
+            tags = diversityTags,
+            songs = parsedSongs,
+            isFromLogin = isLogin
+        )
     }
 }
 

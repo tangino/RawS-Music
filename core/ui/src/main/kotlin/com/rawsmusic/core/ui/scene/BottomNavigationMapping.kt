@@ -3,7 +3,9 @@ package com.rawsmusic.core.ui.scene
 /** Maps detail/sub-scenes back to the tab that owns them. */
 fun NavScene.bottomNavigationRoot(): NavScene = when (this) {
     NavScene.HOME,
-    NavScene.SOURCE_IMPORT -> NavScene.HOME
+    NavScene.SOURCE_IMPORT,
+    NavScene.DAILY_RECOMMEND,
+    NavScene.GUESS_YOU_LIKE -> NavScene.HOME
 
     NavScene.FOLDERS,
     NavScene.FOLDER_HIERARCHY,

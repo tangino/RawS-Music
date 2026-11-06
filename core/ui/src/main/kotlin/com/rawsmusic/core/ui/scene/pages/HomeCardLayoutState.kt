@@ -16,15 +16,12 @@ private const val HOME_LIBRARY_ORDER_KEY = "library_order"
 private const val HOME_TOOL_ORDER_KEY = "tool_order"
 private const val HOME_HIDDEN_KEY = "hidden_scenes"
 private const val HOME_CARD_SEPARATOR = "|"
-private const val HOME_LAYOUT_VERSION_KEY = "home_card_layout_version_v3"
-private const val CURRENT_LAYOUT_VERSION = 3
+private const val HOME_LAYOUT_VERSION_KEY = "home_card_layout_version_v4"
+private const val CURRENT_LAYOUT_VERSION = 4
 
 /** Categories shown in the Music Library section of HOME. */
 val HomeLibraryCardScenes: List<NavScene> = listOf(
-    // 默认排序（严格对应 1~16）：
-    // 1 在线音乐，2 猜你喜欢，3 歌单，4 当前播放歌单，5 上次播放歌单，6 播放队列，
-    // 7 历史播放，8 文件夹，9 文件夹层次结构，10 专辑，11 艺术家，12 最近添加，
-    // 13 流派，14 年份，15 作曲家，16 音源导入
+    NavScene.DAILY_RECOMMEND,
     NavScene.ONLINE_MUSIC,
     NavScene.GUESS_YOU_LIKE,
     NavScene.PLAYLISTS,

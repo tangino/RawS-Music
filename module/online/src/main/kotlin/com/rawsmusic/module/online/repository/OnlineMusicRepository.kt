@@ -49,6 +49,19 @@ class OnlineMusicRepository private constructor() {
         OnlinePlatform.MIGU to miguSource
     )
 
+    init {
+        // 注册惰性凭据提供者：lambda 仅在发起网络请求时执行，避免单例构造期产生循环依赖
+        qqSource.setCookieProvider {
+            com.rawsmusic.module.online.auth.PlatformAccountManager.getCookieHeader(OnlinePlatform.QQ)
+        }
+        kugouSource.setCookieProvider {
+            com.rawsmusic.module.online.auth.PlatformAccountManager.getCookieHeader(OnlinePlatform.KUGOU)
+        }
+        kugouSource.setAccountProvider {
+            com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.KUGOU)
+        }
+    }
+
     /**
      * 绑定平台账号提供者，使音源网络请求自动携带登录 Cookie。
      *
@@ -471,6 +484,29 @@ class OnlineMusicRepository private constructor() {
         detailCache.evictAll()
         tagsCache.clear()
         leaderboardCache.clear()
+        dailyRecommendCache = null
+    }
+
+    @Volatile
+    private var dailyRecommendCache: Pair<String, com.rawsmusic.module.online.model.DailyRecommendData>? = null
+
+    /**
+     * 获取 QQ 音乐每日30首（今日私享）聚合数据（支持当日内存缓存与强制刷新）
+     */
+    suspend fun getDailyRecommendData(forceRefresh: Boolean = false): com.rawsmusic.module.online.model.DailyRecommendData {
+        val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+        if (!forceRefresh) {
+            dailyRecommendCache?.let { (cachedDay, data) ->
+                if (cachedDay == todayStr && data.songs.isNotEmpty()) {
+                    return data
+                }
+            }
+        }
+        val freshData = qqSource.getDailyRecommendData()
+        if (freshData.songs.isNotEmpty()) {
+            dailyRecommendCache = Pair(todayStr, freshData)
+        }
+        return freshData
     }
 }
 
