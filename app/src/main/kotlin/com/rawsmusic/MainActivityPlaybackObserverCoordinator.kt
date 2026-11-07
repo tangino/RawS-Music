@@ -24,6 +24,7 @@ internal class MainActivityPlaybackObserverCoordinator(
 ) {
     private var boundController: PlayerController? = null
     private var lastPublishedOnlineIdentity: String? = null
+    private var lastPublishedOnlineStatus: com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus? = null
     private val jobs = mutableListOf<Job>()
 
     fun start(target: PlayerController? = controller()) {
@@ -33,6 +34,7 @@ internal class MainActivityPlaybackObserverCoordinator(
         jobs.clear()
         boundController = target
         lastPublishedOnlineIdentity = null
+        lastPublishedOnlineStatus = null
         jobs += scope.launch(Dispatchers.Main) {
             target.playState.collect { state ->
                 onPlaybackState(state)
@@ -59,11 +61,15 @@ internal class MainActivityPlaybackObserverCoordinator(
                     cur.path.startsWith("http://", ignoreCase = true) ||
                     cur.path.startsWith("https://", ignoreCase = true)
                 )
-                val isPreparingOnline = onlineSnapshot.status ==
+                val isOnlinePlaybackActive = onlineSnapshot.status ==
+                    com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing ||
+                    onlineSnapshot.status ==
                     com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing ||
                     onlineSnapshot.status ==
-                    com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving
-                if (!isOnlineCurrent && !isPreparingOnline) {
+                    com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving ||
+                    onlineSnapshot.status ==
+                    com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Paused
+                if (!isOnlineCurrent && !isOnlinePlaybackActive) {
                     lastPublishedOnlineIdentity = null
                     return@collect
                 }
@@ -78,6 +84,24 @@ internal class MainActivityPlaybackObserverCoordinator(
                     albumArtPath = onlineItem.artworkUrl,
                     encodingFormat = com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
                 )
+                // 核心同步：在线歌曲/播客状态推进时，立即更新外部观察者播放状态（双竖线/三角形）
+                if (lastPublishedOnlineStatus != onlineSnapshot.status) {
+                    lastPublishedOnlineStatus = onlineSnapshot.status
+                    when (onlineSnapshot.status) {
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing -> {
+                            onPlaybackState(PlayState.PLAYING)
+                        }
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Paused -> {
+                            onPlaybackState(PlayState.PAUSED)
+                        }
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing,
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving -> {
+                            onPlaybackState(PlayState.PREPARING)
+                        }
+                        else -> Unit
+                    }
+                }
+
                 // MusicSourcePlaybackController.snapshot also updates on every position tick.
                 // Publishing on each tick re-ran miniPlayer.updateSong + lyrics.markSongPending,
                 // which made the bottom bar title/artist/lyric flicker continuously. Publish only
@@ -92,6 +116,7 @@ internal class MainActivityPlaybackObserverCoordinator(
                 }
                 if (identity == lastPublishedOnlineIdentity) return@collect
                 lastPublishedOnlineIdentity = identity
+
                 // Once the controller has committed the same semantic online item, its currentSong
                 // is authoritative. Re-publishing the snapshot copy here caused the title/cover to
                 // alternate between two equivalent-but-not-identical AudioFile instances.

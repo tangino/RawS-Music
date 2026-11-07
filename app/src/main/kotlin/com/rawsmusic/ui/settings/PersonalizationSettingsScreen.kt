@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.rawsmusic.R
 import com.rawsmusic.module.data.prefs.PersonalizationPreferences
+import com.rawsmusic.module.data.prefs.SettingsSurfaceStyle
 import com.rawsmusic.module.data.prefs.TopChromeStyle
 import com.rawsmusic.module.data.prefs.LibraryBottomButtonsLayout
 import com.rawsmusic.module.data.prefs.LibraryBottomButtonsMode
@@ -48,6 +49,36 @@ fun PersonalizationSettingsScreen(onBack: () -> Unit) {
     val libraryBottomButtonsMode by PersonalizationPreferences.libraryBottomButtonsMode.collectAsState()
     val libraryBottomButtonsLayout by PersonalizationPreferences.libraryBottomButtonsLayout.collectAsState()
     val alphabetIndexHidden by PersonalizationPreferences.alphabetIndexHidden.collectAsState()
+    val dailyRecommendMaterial by PersonalizationPreferences.dailyRecommendMaterial.collectAsState()
+    val surfaceSolidText = stringResource(R.string.settings_surface_solid)
+    val surfaceAcrylicText = stringResource(R.string.settings_surface_acrylic)
+    val surfaceLiquidGlassText = stringResource(R.string.settings_surface_liquid_glass)
+    val dailyRecommendMaterialEntry = remember(
+        dailyRecommendMaterial,
+        surfaceSolidText,
+        surfaceAcrylicText,
+        surfaceLiquidGlassText,
+    ) {
+        DropdownEntry(
+            items = listOf(
+                DropdownItem(
+                    text = surfaceLiquidGlassText,
+                    selected = dailyRecommendMaterial == SettingsSurfaceStyle.LIQUID_GLASS,
+                    onClick = { PersonalizationPreferences.dailyRecommendMaterialValue = SettingsSurfaceStyle.LIQUID_GLASS },
+                ),
+                DropdownItem(
+                    text = surfaceAcrylicText,
+                    selected = dailyRecommendMaterial == SettingsSurfaceStyle.ACRYLIC,
+                    onClick = { PersonalizationPreferences.dailyRecommendMaterialValue = SettingsSurfaceStyle.ACRYLIC },
+                ),
+                DropdownItem(
+                    text = surfaceSolidText,
+                    selected = dailyRecommendMaterial == SettingsSurfaceStyle.SOLID,
+                    onClick = { PersonalizationPreferences.dailyRecommendMaterialValue = SettingsSurfaceStyle.SOLID },
+                ),
+            )
+        )
+    }
     val topChromeHazeTitle = stringResource(R.string.settings_top_chrome_style_haze)
     val topChromeHazeSummary = stringResource(R.string.settings_top_chrome_style_haze_summary)
     val topChromeTransparentTitle = stringResource(R.string.settings_top_chrome_style_transparent)
@@ -225,6 +256,12 @@ fun PersonalizationSettingsScreen(onBack: () -> Unit) {
                 description = stringResource(com.rawsmusic.core.ui.R.string.home_card_settings_entry_summary),
                 iconRes = R.drawable.ic_settings_personalization,
                 onClick = { showHomeCardSettings = true },
+            )
+            RawWindowDropdownPreference(
+                entry = dailyRecommendMaterialEntry,
+                title = stringResource(R.string.settings_daily_recommend_material_title),
+                summary = stringResource(R.string.settings_daily_recommend_material_summary),
+                maxHeight = 240.dp,
             )
         }
     }

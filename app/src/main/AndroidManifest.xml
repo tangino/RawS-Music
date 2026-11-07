@@ -84,6 +84,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.RawSMusic"
         android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
         <meta-data android:name="lyricon_module" android:value="true" />
@@ -179,6 +180,25 @@
         <activity android:name=".ui.settings.HardwareDeviceControlActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.WebDavBackupActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.PlatformAccountActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
+        <activity
+            android:name=".ui.settings.SpotifyLoginActivity"
+            android:theme="@style/SettingsActivityTheme"
+            android:launchMode="singleTop"
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="rawsmusic" android:host="spotify-callback" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.settings.SpotifyWebSyncActivity"
+            android:theme="@style/SettingsActivityTheme"
+            android:launchMode="singleTop"
+            android:exported="false"
+            android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.PlatformPlaylistImportActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.CloudSyncActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />
         <activity android:name=".ui.settings.AboutActivity" android:theme="@style/SettingsActivityTheme" android:launchMode="singleTop" android:enableOnBackInvokedCallback="true" />

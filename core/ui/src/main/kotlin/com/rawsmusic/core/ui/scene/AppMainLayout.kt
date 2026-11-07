@@ -851,7 +851,9 @@ private fun NavScene.supportsRawFlowBackground(): Boolean {
         NavScene.ONLINE_PLAYLIST_DETAIL,
         NavScene.ONLINE_ARTIST_DETAIL,
         NavScene.GUESS_YOU_LIKE,
-        NavScene.DAILY_RECOMMEND -> true
+        NavScene.DAILY_RECOMMEND,
+        NavScene.PODCAST,
+        NavScene.PODCAST_DETAIL -> true
         else -> false
     }
 }

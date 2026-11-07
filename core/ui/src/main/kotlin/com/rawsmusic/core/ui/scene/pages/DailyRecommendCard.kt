@@ -28,6 +28,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,9 +50,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
 import com.rawsmusic.core.ui.R
+import com.rawsmusic.core.ui.scene.LocalAppBackgroundBackdrop
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.ui.widget.player.rememberCoverAccentColor
+import com.rawsmusic.module.data.prefs.PersonalizationPreferences
+import com.rawsmusic.module.data.prefs.SettingsSurfaceStyle
 import com.rawsmusic.module.online.model.DailyRecommendData
 import top.yukonga.miuix.kmp.basic.Text
 
@@ -72,9 +84,14 @@ internal fun DailyRecommendCard(
 ) {
     val colors = themeColors()
     val isDark = colors.background.luminance() < 0.5f
+    val backdrop = LocalAppBackgroundBackdrop.current
+    val material by PersonalizationPreferences.dailyRecommendMaterial.collectAsState()
+    val glassSettings by PersonalizationPreferences.globalLiquidGlassSettings.collectAsState()
+    val performanceMode by PersonalizationPreferences.performanceMode.collectAsState()
+    val cardShape = RoundedCornerShape(28.dp)
 
-    // 权威色调：根据当前专辑封面动态提取主色调
-    val coverKey = currentCoverKey ?: dailyData.songs.firstOrNull()?.coverUrl
+    // 权威色调与封面：必须严格从每日推荐歌曲自身获取，绝不从当前播放歌曲中获取
+    val coverKey = dailyData.songs.firstOrNull()?.coverUrl
     val extractedAccent = rememberCoverAccentColor(coverKey)
     val accent = if (extractedAccent == Color(0xFF6B5A70)) {
         if (isDark) Color(0xFFD4A373) else Color(0xFFE89842)
@@ -98,6 +115,144 @@ internal fun DailyRecommendCard(
         )
     }
 
+    val isGlass = material == SettingsSurfaceStyle.LIQUID_GLASS && backdrop != null
+    val wave1Alpha = if (isGlass) {
+        if (isDark) 0.07f else 0.05f
+    } else {
+        if (isDark) 0.15f else 0.13f
+    }
+    val wave2Alpha = if (isGlass) {
+        if (isDark) 0.12f else 0.09f
+    } else {
+        if (isDark) 0.24f else 0.20f
+    }
+
+    val cardModifier = when {
+        material == SettingsSurfaceStyle.LIQUID_GLASS && backdrop != null -> {
+            Modifier
+                .fillMaxWidth()
+                .height(112.dp)
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { cardShape },
+                    effects = {
+                        val minDimension = size.minDimension
+                        val liquidBlurDp = (glassSettings.blurRadiusDp * 0.25f)
+                            .coerceAtMost(if (performanceMode) 2f else 8f)
+                        vibrancy(glassSettings.vibrancyStrength)
+                        blur(liquidBlurDp.dp.toPx())
+                        lens(
+                            refractionHeight = glassSettings.refractionHeightFraction * minDimension * 0.35f,
+                            refractionAmount = glassSettings.refractionAmountFraction * minDimension * 1.25f,
+                            depthEffect = true,
+                            chromaticAberration = glassSettings.chromaticAberration > 0.001f,
+                        )
+                    },
+                    highlight = {
+                        Highlight.Default.copy(
+                            alpha = (0.34f * glassSettings.highlightStrength).coerceIn(0f, 1f),
+                        )
+                    },
+                    shadow = {
+                        Shadow(
+                            radius = 8.dp,
+                            color = Color.Black.copy(
+                                alpha = (0.12f * glassSettings.shadowStrength).coerceIn(0f, 0.4f),
+                            ),
+                        )
+                    },
+                    innerShadow = {
+                        InnerShadow(
+                            radius = 6.dp,
+                            alpha = (0.22f * glassSettings.shadowStrength).coerceIn(0f, 1f),
+                        )
+                    },
+                    onDrawSurface = {
+                        drawRect(colors.surface.copy(alpha = if (isDark) 0.16f else 0.24f))
+                        drawRect(accent.copy(alpha = if (isDark) 0.08f else 0.06f))
+                    },
+                )
+                .clip(cardShape)
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = if (isDark) 0.22f else 0.35f),
+                    shape = cardShape,
+                )
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onEnterEdit,
+                )
+        }
+        material == SettingsSurfaceStyle.ACRYLIC && backdrop != null -> {
+            Modifier
+                .fillMaxWidth()
+                .height(112.dp)
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { cardShape },
+                    effects = {
+                        vibrancy(0.72f * glassSettings.vibrancyStrength)
+                        blur((glassSettings.blurRadiusDp * 1.55f).dp.toPx())
+                    },
+                    highlight = {
+                        Highlight.Default.copy(
+                            alpha = (0.20f * glassSettings.highlightStrength).coerceIn(0f, 0.6f),
+                        )
+                    },
+                    shadow = {
+                        Shadow(
+                            radius = 8.dp,
+                            color = Color.Black.copy(
+                                alpha = (0.16f * glassSettings.shadowStrength).coerceIn(0f, 0.4f),
+                            ),
+                        )
+                    },
+                    innerShadow = {
+                        InnerShadow(
+                            radius = 4.dp,
+                            alpha = (0.12f * glassSettings.shadowStrength).coerceIn(0f, 0.5f),
+                        )
+                    },
+                    onDrawSurface = {
+                        drawRect(colors.surface.copy(alpha = if (isDark) 0.68f else 0.78f))
+                        drawRect(accent.copy(alpha = if (isDark) 0.10f else 0.08f))
+                    },
+                )
+                .clip(cardShape)
+                .border(
+                    width = 1.dp,
+                    color = cardBorderColor,
+                    shape = cardShape,
+                )
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onEnterEdit,
+                )
+        }
+        else -> {
+            Modifier
+                .fillMaxWidth()
+                .height(112.dp)
+                .shadow(
+                    elevation = if (isDark) 3.dp else 6.dp,
+                    shape = cardShape,
+                    ambientColor = Color.Black.copy(alpha = 0.06f),
+                    spotColor = accent.copy(alpha = 0.25f),
+                )
+                .clip(cardShape)
+                .background(Brush.horizontalGradient(cardBg))
+                .border(
+                    width = 1.dp,
+                    color = cardBorderColor,
+                    shape = cardShape,
+                )
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onEnterEdit,
+                )
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -106,26 +261,7 @@ internal fun DailyRecommendCard(
     ) {
         // 底层卡片主体
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(112.dp)
-                .shadow(
-                    elevation = if (isDark) 3.dp else 6.dp,
-                    shape = RoundedCornerShape(28.dp),
-                    ambientColor = Color.Black.copy(alpha = 0.06f),
-                    spotColor = accent.copy(alpha = 0.25f),
-                )
-                .clip(RoundedCornerShape(28.dp))
-                .background(Brush.horizontalGradient(cardBg))
-                .border(
-                    width = 1.dp,
-                    color = cardBorderColor,
-                    shape = RoundedCornerShape(28.dp),
-                )
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onEnterEdit,
-                )
+            modifier = cardModifier
         ) {
             // 1. 双层细腻流体丝绸波浪（Canvas 矢量贝塞尔曲线填充，自适应宽屏延展，永不失真）
             Canvas(modifier = Modifier.matchParentSize()) {
@@ -147,7 +283,7 @@ internal fun DailyRecommendCard(
                     path = wave1,
                     brush = Brush.verticalGradient(
                         listOf(
-                            accent.copy(alpha = if (isDark) 0.15f else 0.13f),
+                            accent.copy(alpha = wave1Alpha),
                             accent.copy(alpha = if (isDark) 0.03f else 0.02f),
                         )
                     ),
@@ -168,7 +304,7 @@ internal fun DailyRecommendCard(
                     path = wave2,
                     brush = Brush.verticalGradient(
                         listOf(
-                            accent.copy(alpha = if (isDark) 0.24f else 0.20f),
+                            accent.copy(alpha = wave2Alpha),
                             accent.copy(alpha = if (isDark) 0.06f else 0.04f),
                         )
                     ),

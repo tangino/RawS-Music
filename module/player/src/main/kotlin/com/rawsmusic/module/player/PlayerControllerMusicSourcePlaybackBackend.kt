@@ -210,6 +210,8 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
             }
             FfmpegAudioPlayer.State.PLAYING -> {
                 applyPendingStartPolicy()
+                val targetSong = request.toAudioFile()
+                controller.notifyOnlinePlaybackActive(targetSong)
                 mutableSnapshot.value = current.copy(
                     status = if (pauseAfterStart) {
                         MusicSourceBackendStatus.Preparing

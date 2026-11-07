@@ -47,6 +47,7 @@ dependencies {
     // 平台接口全部是 JSON，解析统一走 org.json（Android 内置）；持久化 DTO 用 Gson。
     implementation(libs.okhttp)
     implementation(libs.gson)
+    implementation(libs.mmkv)
 
     // QQ / 酷狗扫码登录的二维码生成。
     implementation(libs.zxing.core)

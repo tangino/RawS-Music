@@ -102,6 +102,7 @@ fun LiquidGlassAppearanceScreen(
     val globalGlass by PersonalizationPreferences.globalLiquidGlassSettings.collectAsState()
     val settingsSurfaceStyle by PersonalizationPreferences.settingsSurfaceStyle.collectAsState()
     val noticeSurfaceStyle by PersonalizationPreferences.noticeSurfaceStyle.collectAsState()
+    val dailyRecommendMaterial by PersonalizationPreferences.dailyRecommendMaterial.collectAsState()
     val bottomBarMaterial by PersonalizationPreferences.bottomBarMaterial.collectAsState()
     val mainButtonsSurface by PersonalizationPreferences.libraryBottomButtonsSurface.collectAsState()
     val playbackMaterial = bottomBarMaterial.asSurfaceStyle()
@@ -395,6 +396,7 @@ fun LiquidGlassAppearanceScreen(
                 MaterialTarget.MAIN_BUTTONS to mainButtonsMaterial,
                 MaterialTarget.SETTINGS_PAGE to settingsSurfaceStyle,
                 MaterialTarget.POPUP_NOTICE to noticeSurfaceStyle,
+                MaterialTarget.DAILY_RECOMMEND to dailyRecommendMaterial,
             )
             SettingsSurfaceStyle.entries.forEach { material ->
                 MaterialAssignmentRow(
@@ -705,6 +707,7 @@ private enum class MaterialTarget {
     MAIN_BUTTONS,
     SETTINGS_PAGE,
     POPUP_NOTICE,
+    DAILY_RECOMMEND,
 }
 
 private fun BottomBarMaterial.asSurfaceStyle(): SettingsSurfaceStyle = when (this) {
@@ -741,6 +744,8 @@ private fun applyMaterialTarget(target: MaterialTarget, material: SettingsSurfac
             PersonalizationPreferences.settingsSurfaceStyleValue = material
         MaterialTarget.POPUP_NOTICE ->
             PersonalizationPreferences.noticeSurfaceStyleValue = material
+        MaterialTarget.DAILY_RECOMMEND ->
+            PersonalizationPreferences.dailyRecommendMaterialValue = material
     }
 }
 
@@ -812,6 +817,7 @@ private fun MaterialAssignmentRow(
                         MaterialTarget.MAIN_BUTTONS -> stringResource(R.string.settings_material_target_main_buttons)
                         MaterialTarget.SETTINGS_PAGE -> stringResource(R.string.settings_material_target_settings)
                         MaterialTarget.POPUP_NOTICE -> stringResource(R.string.settings_material_target_notice)
+                        MaterialTarget.DAILY_RECOMMEND -> stringResource(R.string.settings_material_target_daily_recommend)
                     }
                     Box(
                         modifier = Modifier

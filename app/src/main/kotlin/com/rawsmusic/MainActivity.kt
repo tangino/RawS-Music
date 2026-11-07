@@ -2436,6 +2436,9 @@ class MainActivity : ComponentActivity() {
                     com.rawsmusic.core.ui.scene.AppSideRailDestination.ONLINE_MUSIC -> {
                         mainNavState.navigateTo(com.rawsmusic.core.ui.scene.NavScene.ONLINE_MUSIC)
                     }
+                    com.rawsmusic.core.ui.scene.AppSideRailDestination.PODCAST -> {
+                        mainNavState.navigateTo(com.rawsmusic.core.ui.scene.NavScene.PODCAST)
+                    }
                     com.rawsmusic.core.ui.scene.AppSideRailDestination.LOG_ANALYSIS -> {
                         launchSettingsActivity(com.rawsmusic.ui.settings.LogViewerActivity::class.java)
                     }

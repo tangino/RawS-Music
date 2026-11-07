@@ -65,6 +65,7 @@ object PersonalizationPreferences {
     private const val KEY_GLASS_SHADOW = "personalization_glass_shadow_v1"
     private const val KEY_SETTINGS_SURFACE_STYLE = "personalization_settings_surface_style_v1"
     private const val KEY_NOTICE_SURFACE_STYLE = "personalization_notice_surface_style_v1"
+    private const val KEY_DAILY_RECOMMEND_MATERIAL = "personalization_daily_recommend_material_v1"
 
     private val allowedBottomNavigationTags = setOf(
         "home",
@@ -339,6 +340,24 @@ object PersonalizationPreferences {
             if (_noticeSurfaceStyle.value == value) return
             _noticeSurfaceStyle.value = value
             AppPreferences.storage.encode(KEY_NOTICE_SURFACE_STYLE, value.prefValue)
+        }
+
+    private val _dailyRecommendMaterial = MutableStateFlow(
+        SettingsSurfaceStyle.fromPref(
+            AppPreferences.storage.decodeString(
+                KEY_DAILY_RECOMMEND_MATERIAL,
+                SettingsSurfaceStyle.LIQUID_GLASS.prefValue,
+            )
+        )
+    )
+    val dailyRecommendMaterial = _dailyRecommendMaterial.asStateFlow()
+
+    var dailyRecommendMaterialValue: SettingsSurfaceStyle
+        get() = _dailyRecommendMaterial.value
+        set(value) {
+            if (_dailyRecommendMaterial.value == value) return
+            _dailyRecommendMaterial.value = value
+            AppPreferences.storage.encode(KEY_DAILY_RECOMMEND_MATERIAL, value.prefValue)
         }
 
     fun updateGlobalLiquidGlassSettings(

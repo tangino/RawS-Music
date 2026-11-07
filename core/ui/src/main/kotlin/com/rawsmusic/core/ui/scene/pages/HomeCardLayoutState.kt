@@ -16,13 +16,14 @@ private const val HOME_LIBRARY_ORDER_KEY = "library_order"
 private const val HOME_TOOL_ORDER_KEY = "tool_order"
 private const val HOME_HIDDEN_KEY = "hidden_scenes"
 private const val HOME_CARD_SEPARATOR = "|"
-private const val HOME_LAYOUT_VERSION_KEY = "home_card_layout_version_v4"
-private const val CURRENT_LAYOUT_VERSION = 4
+private const val HOME_LAYOUT_VERSION_KEY = "home_card_layout_version_v5"
+private const val CURRENT_LAYOUT_VERSION = 5
 
 /** Categories shown in the Music Library section of HOME. */
 val HomeLibraryCardScenes: List<NavScene> = listOf(
     NavScene.DAILY_RECOMMEND,
     NavScene.ONLINE_MUSIC,
+    NavScene.PODCAST,
     NavScene.GUESS_YOU_LIKE,
     NavScene.PLAYLISTS,
     NavScene.CURRENT_PLAYLIST,

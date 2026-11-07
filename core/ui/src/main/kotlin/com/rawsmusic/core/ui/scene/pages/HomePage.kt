@@ -659,7 +659,7 @@ private fun HomePageContent(
             DailyRecommendCard(
                 dailyData = dailyRecommendData,
                 editMode = homeCardEditMode,
-                currentCoverKey = currentSong?.coverKey ?: dailyRecommendData.songs.firstOrNull()?.coverUrl,
+                currentCoverKey = dailyRecommendData.songs.firstOrNull()?.coverUrl,
                 onRemove = { homeCardLayoutState.hide(NavScene.DAILY_RECOMMEND) },
                 onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
                 onPlay = {
@@ -1352,6 +1352,7 @@ private fun LibraryTile(
 private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
     NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
+    NavScene.PODCAST -> R.drawable.ic_side_rail_podcast
     NavScene.PLAY_HISTORY -> R.drawable.ic_nav_custom_recent
     NavScene.GUESS_YOU_LIKE -> R.drawable.ic_online_favorite
     NavScene.DAILY_RECOMMEND -> R.drawable.ic_nav_custom_recent
@@ -1361,6 +1362,7 @@ private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
 @Composable
 private fun homeCardStatisticsText(scene: NavScene, count: Int?): String {
     if (scene == NavScene.DAILY_RECOMMEND) return stringResource(R.string.home_card_statistics_daily_recommend)
+    if (scene == NavScene.PODCAST) return "全球播客"
     if (count == null) return ""
     return when (scene) {
         NavScene.SONGS, NavScene.QUEUE, NavScene.RECENTLY_ADDED,
@@ -2049,7 +2051,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                             DailyRecommendCard(
                                 dailyData = dailyRecommendData,
                                 editMode = homeCardEditMode,
-                                currentCoverKey = latestCarouselCurrentSong?.coverKey ?: dailyRecommendData.songs.firstOrNull()?.coverUrl,
+                                currentCoverKey = dailyRecommendData.songs.firstOrNull()?.coverUrl,
                                 onRemove = { homeCardLayoutState.hide(NavScene.DAILY_RECOMMEND) },
                                 onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
                                 onPlay = {

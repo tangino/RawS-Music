@@ -2215,6 +2215,9 @@
     <string name="settings_material_target_main_buttons">主界面按钮</string>
     <string name="settings_material_target_settings">设置页</string>
     <string name="settings_material_target_notice">弹窗通知</string>
+    <string name="settings_material_target_daily_recommend">每日推荐</string>
+    <string name="settings_daily_recommend_material_title">每日推荐卡片材质</string>
+    <string name="settings_daily_recommend_material_summary">统一控制主界面每日推荐入口材质，默认为液态玻璃</string>
     <string name="settings_liquid_glass_blur">模糊半径</string>
     <string name="settings_liquid_glass_refraction_height">折射高度</string>
     <string name="settings_liquid_glass_refraction_amount">折射强度</string>

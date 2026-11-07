@@ -2238,6 +2238,9 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="settings_material_target_main_buttons">Main buttons</string>
     <string name="settings_material_target_settings">Settings</string>
     <string name="settings_material_target_notice">Popup notice</string>
+    <string name="settings_material_target_daily_recommend">Daily recommend</string>
+    <string name="settings_daily_recommend_material_title">Daily recommend material</string>
+    <string name="settings_daily_recommend_material_summary">Control surface material of daily recommend card</string>
     <string name="settings_liquid_glass_blur">Blur radius</string>
     <string name="settings_liquid_glass_refraction_height">Refraction height</string>
     <string name="settings_liquid_glass_refraction_amount">Refraction amount</string>

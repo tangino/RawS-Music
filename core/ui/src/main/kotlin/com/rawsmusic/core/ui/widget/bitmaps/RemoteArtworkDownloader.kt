@@ -7,11 +7,16 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /**
  * 远程封面网络下载调度器。
@@ -27,9 +32,25 @@ object RemoteArtworkDownloader {
     private const val TAG = "RemoteArtworkDownloader"
     private const val MAX_IMAGE_BYTES = 32L * 1024L * 1024L // 32MB
 
+    private val trustAllCerts = arrayOf<TrustManager>(
+        object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+    )
+
+    private val sslSocketFactory = try {
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAllCerts, SecureRandom())
+        sslContext.socketFactory
+    } catch (e: Exception) {
+        null
+    }
+
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(18, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(32, 5, TimeUnit.MINUTES))
         .dispatcher(Dispatcher().apply {
             maxRequests = 32
@@ -38,6 +59,14 @@ object RemoteArtworkDownloader {
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
+        .apply {
+            val sf = sslSocketFactory
+            val tm = trustAllCerts[0] as? X509TrustManager
+            if (sf != null && tm != null) {
+                sslSocketFactory(sf, tm)
+                hostnameVerifier { _, _ -> true }
+            }
+        }
         .build()
 
     private val prefetchExecutor = Executors.newFixedThreadPool(6) { runnable ->
@@ -81,7 +110,6 @@ object RemoteArtworkDownloader {
         val trimmed = rawUrl.trim()
         return when {
             trimmed.startsWith("//") -> "https:$trimmed"
-            trimmed.startsWith("http://", ignoreCase = true) -> "https://" + trimmed.substring(7)
             else -> trimmed
         }
     }

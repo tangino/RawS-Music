@@ -489,6 +489,21 @@ fun ComposeNavHost(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            NavScene.PODCAST -> com.rawsmusic.core.ui.scene.pages.PodcastPage(
+                onBack = onBack,
+                onOpenShow = { show: com.rawsmusic.module.online.model.PodcastShow ->
+                    com.rawsmusic.core.ui.scene.pages.PodcastNavHolder.currentShow = show
+                    state.navigateTo(NavScene.PODCAST_DETAIL)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            NavScene.PODCAST_DETAIL -> com.rawsmusic.core.ui.scene.pages.PodcastDetailPage(
+                show = com.rawsmusic.core.ui.scene.pages.PodcastNavHolder.currentShow,
+                onBack = onBack,
+                modifier = Modifier.fillMaxSize(),
+            )
+
             NavScene.ONLINE_MUSIC -> OnlineMusicPortalPage(
                 onBack = onBack,
                 onOpenPlaylist = { platform, playlistId ->
