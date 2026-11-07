@@ -469,7 +469,9 @@ fun ComposeNavHost(
                 songs = data.songs,
                 onBack = onBack,
                 onSongClick = callbacks.onSongClick,
-                onPlayQueue = callbacks.onPlayQueue
+                onPlayQueue = callbacks.onPlayQueue,
+                currentSong = data.currentSong,
+                isPlaying = data.miniPlayerIsPlaying,
             )
 
             NavScene.SOURCE_IMPORT -> SourceImportPage(

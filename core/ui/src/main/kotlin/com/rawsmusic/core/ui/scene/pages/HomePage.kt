@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -771,7 +772,9 @@ fun Daily20Page(
     songs: List<AudioFile>,
     onBack: () -> Unit,
     onSongClick: (AudioFile, Int) -> Unit,
-    onPlayQueue: (List<AudioFile>, Int) -> Unit
+    onPlayQueue: (List<AudioFile>, Int) -> Unit,
+    currentSong: AudioFile? = null,
+    isPlaying: Boolean = false,
 ) {
     var todayKey by remember { mutableStateOf(todayKey()) }
     LaunchedEffect(Unit) {
@@ -896,12 +899,20 @@ fun Daily20Page(
             }
         }
 
-        items(dailySongs) { song ->
-            val position = dailySongs.indexOf(song)
+        itemsIndexed(
+            items = dailySongs,
+            key = { index, song -> "${song.id}_${song.path}_$index" }
+        ) { index, song ->
+            val isCurrent = currentSong != null &&
+                song.path == currentSong.path &&
+                song.cueOffsetMs == currentSong.cueOffsetMs &&
+                song.cueTrackIndex == currentSong.cueTrackIndex
             DailySongRow(
-                position = position + 1,
+                position = index + 1,
                 song = song,
-                onClick = { onPlayQueue(dailySongs, position) }
+                isCurrent = isCurrent,
+                isPlaying = isCurrent && isPlaying,
+                onClick = { onPlayQueue(dailySongs, index) }
             )
         }
 
@@ -1447,8 +1458,13 @@ private fun MostPlayedRow(
 private fun DailySongRow(
     position: Int,
     song: AudioFile,
+    isCurrent: Boolean = false,
+    isPlaying: Boolean = false,
     onClick: () -> Unit
 ) {
+    val activeColor = MiuixTheme.colorScheme.primary
+    val normalTitleColor = referenceStaticForeground(MiuixTheme.colorScheme.onBackground)
+    val titleColor = if (isCurrent) activeColor else normalTitleColor
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1457,7 +1473,12 @@ private fun DailySongRow(
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(position.toString(), fontSize = 22.sp, color = referenceStaticForeground(MiuixTheme.colorScheme.onBackground), modifier = Modifier.width(34.dp))
+        Text(
+            position.toString(),
+            fontSize = 22.sp,
+            color = if (isCurrent) activeColor else normalTitleColor,
+            modifier = Modifier.width(34.dp)
+        )
         Box(
             modifier = Modifier
                 .size(52.dp)
@@ -1477,10 +1498,30 @@ private fun DailySongRow(
         }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(song.displayName, fontSize = 19.sp, color = referenceStaticForeground(MiuixTheme.colorScheme.onBackground), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist.ifBlank { stringResource(R.string.common_unknown_artist) }, fontSize = 14.sp, color = referenceStaticForeground(MiuixTheme.colorScheme.onSurfaceVariantSummary, 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                song.displayName,
+                fontSize = 19.sp,
+                color = titleColor,
+                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                song.artist.ifBlank { stringResource(R.string.common_unknown_artist) },
+                fontSize = 14.sp,
+                color = if (isCurrent) activeColor.copy(alpha = 0.82f) else referenceStaticForeground(MiuixTheme.colorScheme.onSurfaceVariantSummary, 0.72f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        VectorIcon(Icons.Default.PlayArrow, contentDescription = null, tint = referenceStaticForeground(MiuixTheme.colorScheme.onSurfaceVariantSummary, 0.72f), modifier = Modifier.size(28.dp))
+        Image(
+            painter = painterResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
+            contentDescription = stringResource(if (isPlaying) R.string.common_pause else R.string.common_play),
+            colorFilter = ColorFilter.tint(
+                if (isCurrent) activeColor else referenceStaticForeground(MiuixTheme.colorScheme.onSurfaceVariantSummary, 0.72f)
+            ),
+            modifier = Modifier.size(28.dp)
+        )
     }
 }
 

@@ -1922,21 +1922,33 @@ class PlayerController private constructor(context: Context) {
                     val deferred = pendingRendererUiCommit
                     val latestRequested = uiSelectionControlCoordinator.requestedSong()
 
-                    // TRACK_STARTED is the renderer-owned commit boundary. Never discard that
-                    // boundary merely because a URI/path has a different textual representation.
-                    // If a newer tap exists and this callback belongs to the retiring request, keep
-                    // waiting for the newer renderer item without destroying its commit context.
-                    if (latestRequested != null && !rendererSourceMatches(latestRequested.path, newPath)) {
-                        AppLogger.w(
-                            TAG,
-                            "TRACK_STARTED ignored retiring target path=$newPath " +
-                                "pending=${deferred?.song?.path} latest=${latestRequested.path}",
-                        )
-                        return@withLock
-                    }
-
                     val oldIndex = _queue.value.currentIndex
                     val oldSong = _currentSong.value
+                    val matchesOldRetiringSong = oldSong != null && rendererSourceMatches(oldSong.path, newPath)
+
+                    // TRACK_STARTED is the renderer-owned commit boundary.
+                    // Only discard this callback when newPath actually belongs to the retiring song
+                    // while a newer target request is waiting. If newPath is already a new track
+                    // (e.g. natural progression, gapless advance, or next button), any stale
+                    // latestRequested must not block the real track commit.
+                    if (latestRequested != null && !rendererSourceMatches(latestRequested.path, newPath)) {
+                        if (matchesOldRetiringSong) {
+                            AppLogger.w(
+                                TAG,
+                                "TRACK_STARTED ignored retiring target path=$newPath " +
+                                    "pending=${deferred?.song?.path} latest=${latestRequested.path}",
+                            )
+                            return@withLock
+                        } else {
+                            AppLogger.i(
+                                TAG,
+                                "TRACK_STARTED clearing stale requestedSong=${latestRequested.path} " +
+                                    "for incoming track path=$newPath",
+                            )
+                            clearPendingUiSelection()
+                        }
+                    }
+
                     val songs: List<AudioFile>
                     val newIndex: Int
                     val song: AudioFile
@@ -1959,18 +1971,29 @@ class PlayerController private constructor(context: Context) {
                         song = songs[newIndex]
                     } else {
                         if (deferred != null) {
-                            AppLogger.w(
-                                TAG,
-                                "TRACK_STARTED ignored while waiting for deferred target " +
-                                    "path=$newPath expected=${deferred.song.path}",
-                            )
-                            return@withLock
+                            if (matchesOldRetiringSong) {
+                                AppLogger.w(
+                                    TAG,
+                                    "TRACK_STARTED ignored while waiting for deferred target " +
+                                        "path=$newPath expected=${deferred.song.path}",
+                                )
+                                return@withLock
+                            } else {
+                                AppLogger.i(
+                                    TAG,
+                                    "TRACK_STARTED clearing stale pendingRendererUiCommit=${deferred.song.path} " +
+                                        "for incoming track path=$newPath",
+                                )
+                                pendingRendererUiCommit = null
+                            }
                         }
 
                         songs = _queue.value.songs
-                        val requestedIndex = latestRequested?.let { requested ->
-                            songs.indexOfFirst { samePlaybackItem(it, requested) }
-                        } ?: -1
+                        val requestedIndex = latestRequested
+                            ?.takeIf { rendererSourceMatches(it.path, newPath) }
+                            ?.let { requested ->
+                                songs.indexOfFirst { samePlaybackItem(it, requested) }
+                            } ?: -1
                         newIndex = requestedIndex.takeIf { it >= 0 }
                             ?: songs.indexOfFirst { rendererSourceMatches(it.path, newPath) }
                         if (newIndex < 0) {
@@ -1994,6 +2017,7 @@ class PlayerController private constructor(context: Context) {
                     queueControlCoordinator.onManualTargetCommitted(song)
                     persistSelectedSongForColdStart(song)
                     clearRequestedSongIfCommitted(song)
+                    clearPendingUiSelection()
                     AppPreferences.Player.lastPosition = _position.value
                     smForceTransition(PlayState.PLAYING, "native_track_started")
                     resetOnlineFailureFuse()
@@ -2103,6 +2127,7 @@ class PlayerController private constructor(context: Context) {
                             ?.takeIf { samePlaybackItem(it.song, nextSong) }
                             ?.let { pendingRendererUiCommit = null }
                         clearRequestedSongIfCommitted(nextSong)
+                        clearPendingUiSelection()
                         persistSelectedSongForColdStart(nextSong)
                         if (positionMs != null) {
                             _position.value = positionMs.coerceAtLeast(0L)
