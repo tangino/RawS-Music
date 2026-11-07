@@ -60,11 +60,22 @@ object PlayHistoryManager {
     val history: StateFlow<List<PlayHistoryItem>> = _history.asStateFlow()
 
     /**
+     * 判断是否为播客音频（播客由专属 PodcastStore 单独管理，不混入主界面历史播放卡片与全局播放历史）。
+     */
+    fun isPodcastPath(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        return path.startsWith("online://podcast", ignoreCase = true) ||
+            path.contains("/podcast/", ignoreCase = true) ||
+            path.startsWith("podcast://", ignoreCase = true)
+    }
+
+    /**
      * 点击播放歌曲后自动记录进入历史。
      * 若已在历史中，则移到最前（更新为最新播放时间），并根据上限自动裁剪。
      */
     fun recordSong(song: AudioFile) {
         if (song.title.isBlank() && song.path.isBlank()) return
+        if (isPodcastPath(song.path)) return
         val current = _history.value.toMutableList()
         // 去重：优先比较非空 path，若无有效 path 则比较 title + artist
         current.removeAll {
@@ -126,8 +137,14 @@ object PlayHistoryManager {
             val array = JSONArray(jsonStr)
             val list = mutableListOf<PlayHistoryItem>()
             val limit = maxHistoryCount
+            var hadPodcast = false
             for (i in 0 until minOf(array.length(), limit)) {
                 val obj = array.optJSONObject(i) ?: continue
+                val path = obj.optString("path", "")
+                if (isPodcastPath(path)) {
+                    hadPodcast = true
+                    continue
+                }
                 list.add(
                     PlayHistoryItem(
                         id = obj.optLong("id", 0L),
@@ -135,12 +152,15 @@ object PlayHistoryManager {
                         artist = obj.optString("artist", ""),
                         album = obj.optString("album", ""),
                         duration = obj.optLong("duration", 0L),
-                        path = obj.optString("path", ""),
+                        path = path,
                         coverKey = obj.optString("coverKey", ""),
                         albumArtPath = obj.optString("albumArtPath", ""),
                         playedAt = obj.optLong("playedAt", 0L),
                     )
                 )
+            }
+            if (hadPodcast) {
+                saveHistory(list)
             }
             list
         } catch (_: Exception) {

@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.scene.HomeFullCoverSourceAnchor
@@ -175,6 +176,32 @@ internal fun HomeOrbitCoverFlow(
                     animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
                 )
             }
+        }
+    }
+
+    // 主界面 coverflow 封面：如果当前封面不是当前播放歌曲，5 秒没有操作，自动平滑切换回当前歌曲封面
+    LaunchedEffect(
+        pagerState.currentPage,
+        pagerState.isScrollInProgress,
+        currentSong,
+        displaySongs
+    ) {
+        if (currentSong == null || displaySongs.isEmpty()) return@LaunchedEffect
+        if (pagerState.isScrollInProgress) return@LaunchedEffect
+
+        val targetIdx = displaySongs.indexOfFirst {
+            it.path == currentSong.path || (it.id > 0 && it.id == currentSong.id)
+        }
+        if (targetIdx !in displaySongs.indices) return@LaunchedEffect
+        if (pagerState.currentPage == targetIdx) return@LaunchedEffect
+
+        delay(5000L)
+
+        if (!pagerState.isScrollInProgress && pagerState.currentPage != targetIdx) {
+            pagerState.animateScrollToPage(
+                page = targetIdx,
+                animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing)
+            )
         }
     }
 
