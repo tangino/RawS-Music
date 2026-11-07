@@ -5878,44 +5878,21 @@ class PlayerController private constructor(context: Context) {
         val override = _playbackSourceOverride.value
         if (override != null) {
             val normOverride = normalizeRendererSource(override.playbackPath)
-            if ((override.matchesPath(requestedPath) && normOverride == normRen) ||
-                (override.matchesPath(rendererPath) && normOverride == normReq)
-            ) {
-                return true
+            if (override.matchesPath(requestedPath)) {
+                if (normOverride == normRen || normOverride.contains(normRen) || normRen.contains(normOverride)) {
+                    return true
+                }
+            }
+            if (override.matchesPath(rendererPath)) {
+                if (normOverride == normReq || normOverride.contains(normReq) || normReq.contains(normOverride)) {
+                    return true
+                }
             }
         }
         if (MusicSourceResolvedStreamRegistry.matches(requestedPath, rendererPath) ||
             MusicSourceResolvedStreamRegistry.matches(rendererPath, requestedPath)
         ) {
             return true
-        }
-        // 针对网络歌曲在在线快照中匹配当前曲目
-        val onlineSnapshot = MusicSourcePlaybackController.snapshot.value
-        val currentOnline = onlineSnapshot.currentItem
-        if (currentOnline != null) {
-            val onlineKey = com.rawsmusic.core.common.model.onlineSongKey(currentOnline.sourceId, currentOnline.remoteId)
-            val matchesReq = requestedPath == onlineKey || requestedPath == currentOnline.stableIdentity
-            val matchesRen = rendererPath == onlineKey || rendererPath == currentOnline.stableIdentity
-            if (matchesReq || matchesRen) {
-                val otherPath = if (matchesReq) normRen else normReq
-                if (otherPath.contains("cache", ignoreCase = true) ||
-                    otherPath.startsWith("http", ignoreCase = true) ||
-                    otherPath.startsWith("/") ||
-                    otherPath.endsWith(".mp3", ignoreCase = true) ||
-                    otherPath.endsWith(".m4a", ignoreCase = true) ||
-                    otherPath.endsWith(".flac", ignoreCase = true)
-                ) {
-                    return true
-                }
-            }
-        }
-        val isReqOnline = com.rawsmusic.core.common.model.isOnlineSongKey(requestedPath) || requestedPath.startsWith("online://")
-        val isRenOnline = com.rawsmusic.core.common.model.isOnlineSongKey(rendererPath) || rendererPath.startsWith("online://")
-        if (isReqOnline != isRenOnline) {
-            val physical = if (isReqOnline) normRen else normReq
-            if (override != null && (override.playbackPath.contains(physical) || physical.contains(override.playbackPath))) {
-                return true
-            }
         }
         return false
     }

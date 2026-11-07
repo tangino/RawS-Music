@@ -92,7 +92,13 @@ object MusicSourceResolvedStreamRegistry {
 
     fun matches(semanticKey: String, actualPath: String): Boolean {
         if (semanticKey == actualPath) return true
-        val entry = entries[actualPath] ?: return false
+        val direct = entries[actualPath]
+        val entry = direct ?: run {
+            val normActual = actualPath.replace('\\', '/').trimEnd('/')
+            entries.entries.firstOrNull { (k, _) ->
+                k.replace('\\', '/').trimEnd('/') == normActual
+            }?.value
+        } ?: return false
         val entryKey = com.rawsmusic.core.common.model.onlineSongKey(entry.item.sourceId, entry.item.remoteId)
         return entryKey == semanticKey || entry.item.stableIdentity == semanticKey
     }

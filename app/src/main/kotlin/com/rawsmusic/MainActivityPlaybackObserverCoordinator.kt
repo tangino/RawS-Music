@@ -73,9 +73,15 @@ internal class MainActivityPlaybackObserverCoordinator(
                     lastPublishedOnlineIdentity = null
                     return@collect
                 }
+                val onlinePathKey = com.rawsmusic.core.common.model.onlineSongKey(onlineItem.sourceId, onlineItem.remoteId)
+                val resolvedId = if (cur != null && cur.path == onlinePathKey && cur.id != 0L) {
+                    cur.id
+                } else {
+                    onlineItem.stableIdentity.hashCode().toLong()
+                }
                 val virtualSong = AudioFile(
-                    id = if (cur?.id != null && cur.id != 0L) cur.id else onlineItem.stableIdentity.hashCode().toLong(),
-                    path = com.rawsmusic.core.common.model.onlineSongKey(onlineItem.sourceId, onlineItem.remoteId),
+                    id = resolvedId,
+                    path = onlinePathKey,
                     title = onlineItem.title,
                     artist = onlineItem.artists.joinToString(", "),
                     album = onlineItem.album,
