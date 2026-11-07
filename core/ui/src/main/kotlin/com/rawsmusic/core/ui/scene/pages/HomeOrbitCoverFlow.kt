@@ -96,6 +96,7 @@ import kotlin.math.absoluteValue
 internal fun HomeOrbitCoverFlow(
     songs: List<AudioFile>,
     currentSong: AudioFile?,
+    currentPlayingIndex: Int = -1,
     isPlaying: Boolean,
     reflectionAlpha: Float = 0.85f,
     onSelectSong: (AudioFile, Int) -> Unit,
@@ -130,13 +131,9 @@ internal fun HomeOrbitCoverFlow(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE ||
         configuration.screenWidthDp > configuration.screenHeightDp
 
-    val initialIndex = remember(displaySongs, currentSong) {
-        val found = if (currentSong != null) {
-            displaySongs.indexOfFirst {
-                it.path == currentSong.path || (it.id > 0 && it.id == currentSong.id)
-            }
-        } else -1
-        if (found >= 0) found else (displaySongs.size / 2).coerceIn(0, (displaySongs.size - 1).coerceAtLeast(0))
+    val initialIndex = remember(displaySongs, currentSong, currentPlayingIndex) {
+        val found = findCurrentSongIndex(displaySongs, currentSong, currentPlayingIndex)
+        if (found >= 0) found else 0
     }
 
     val pagerState = rememberPagerState(
@@ -165,11 +162,9 @@ internal fun HomeOrbitCoverFlow(
     )
 
     // 响应外部播放歌曲变更时自动驱动 Cover Flow 居中
-    LaunchedEffect(currentSong, displaySongs) {
+    LaunchedEffect(currentSong, displaySongs, currentPlayingIndex) {
         if (currentSong != null && displaySongs.isNotEmpty()) {
-            val targetIdx = displaySongs.indexOfFirst {
-                it.path == currentSong.path || (it.id > 0 && it.id == currentSong.id)
-            }
+            val targetIdx = findCurrentSongIndex(displaySongs, currentSong, currentPlayingIndex)
             if (targetIdx in displaySongs.indices && pagerState.currentPage != targetIdx) {
                 pagerState.animateScrollToPage(
                     page = targetIdx,
@@ -184,22 +179,22 @@ internal fun HomeOrbitCoverFlow(
         pagerState.currentPage,
         pagerState.isScrollInProgress,
         currentSong,
-        displaySongs
+        displaySongs,
+        currentPlayingIndex
     ) {
         if (currentSong == null || displaySongs.isEmpty()) return@LaunchedEffect
         if (pagerState.isScrollInProgress) return@LaunchedEffect
 
-        val targetIdx = displaySongs.indexOfFirst {
-            it.path == currentSong.path || (it.id > 0 && it.id == currentSong.id)
-        }
+        val targetIdx = findCurrentSongIndex(displaySongs, currentSong, currentPlayingIndex)
         if (targetIdx !in displaySongs.indices) return@LaunchedEffect
         if (pagerState.currentPage == targetIdx) return@LaunchedEffect
 
         delay(5000L)
 
-        if (!pagerState.isScrollInProgress && pagerState.currentPage != targetIdx) {
+        val finalTarget = findCurrentSongIndex(displaySongs, currentSong, currentPlayingIndex)
+        if (!pagerState.isScrollInProgress && finalTarget in displaySongs.indices && pagerState.currentPage != finalTarget) {
             pagerState.animateScrollToPage(
-                page = targetIdx,
+                page = finalTarget,
                 animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing)
             )
         }
@@ -262,8 +257,7 @@ internal fun HomeOrbitCoverFlow(
                 ) { page ->
                     val song = displaySongs.getOrNull(page) ?: return@HorizontalPager
                     val isCurrentPage = pagerState.currentPage == page
-                    val isPlayingThis = isPlaying && currentSong != null &&
-                        (currentSong.path == song.path || (currentSong.id > 0 && currentSong.id == song.id))
+                    val isPlayingThis = isPlaying && currentSong != null && isSameAudioSong(currentSong, song)
 
                     // 基于相对当前页偏移的绝对正数层叠景深：越靠近中心越高，左右对称递减
                     val baseZIndex = when {
@@ -307,8 +301,7 @@ internal fun HomeOrbitCoverFlow(
                                     onDoubleTap = {
                                         if (isCurrentPage) {
                                             if (!song.isPlaceholderCover()) {
-                                                val isThisSongCurrent = currentSong != null &&
-                                                    (currentSong.path == song.path || (currentSong.id > 0 && currentSong.id == song.id))
+                                                val isThisSongCurrent = currentSong != null && isSameAudioSong(currentSong, song)
                                                 if (isThisSongCurrent) {
                                                     onPlayPause()
                                                 } else {
@@ -688,4 +681,80 @@ private fun generatePlaceholderSongs(): List<AudioFile> = (0 until 7).map { inde
         duration = 0L,
         albumArtPath = ""
     )
+}
+
+/**
+ * 严格且兼容地比对两首曲目是否属于同一播放实体：
+ * 1. 考虑 CUE/分轨偏移量与分轨序号；
+ * 2. 考虑全部非零 ID（含负数虚拟 ID，如在线歌曲、推荐流等）；
+ * 3. 考虑在线曲目 semantic key（online://platform/id）；
+ * 4. 考虑歌名 + 艺术家的元数据深度匹配保底。
+ */
+internal fun isSameAudioSong(a: AudioFile?, b: AudioFile?): Boolean {
+    if (a == null || b == null) return false
+    if (a === b) return true
+
+    // 1. 精确路径与分轨匹配
+    if (a.path.isNotBlank() && a.path == b.path) {
+        if (a.cueOffsetMs == b.cueOffsetMs && a.cueTrackIndex == b.cueTrackIndex) {
+            return true
+        }
+    }
+
+    // 2. 数据库或虚拟 ID 匹配（注意允许负数虚拟 ID，如在线歌曲与占位符，仅排除 0L）
+    if (a.id != 0L && a.id == b.id) {
+        return true
+    }
+
+    // 3. 在线曲目语义 Key 比对（兼容 online:// 格式）
+    val aOnline = com.rawsmusic.core.common.model.isOnlineSongKey(a.path)
+    val bOnline = com.rawsmusic.core.common.model.isOnlineSongKey(b.path)
+    if (aOnline && bOnline && a.path.equals(b.path, ignoreCase = true)) {
+        return true
+    }
+
+    // 4. 元数据名称与艺术家深度比对（解决网络歌曲与缓存歌曲路径不同问题）
+    if (a.title.isNotBlank() && a.title.equals(b.title, ignoreCase = true)) {
+        val aArtist = a.artist.trim()
+        val bArtist = b.artist.trim()
+        if (aArtist.isBlank() || bArtist.isBlank() ||
+            aArtist.equals(bArtist, ignoreCase = true) ||
+            aArtist.contains(bArtist, ignoreCase = true) ||
+            bArtist.contains(aArtist, ignoreCase = true)
+        ) {
+            return true
+        }
+    }
+
+    return false
+}
+
+/**
+ * 寻找当前播放歌曲在列表中的精确位置：
+ * 优先采用播放器权威传来的索引，校验通过直接返回；校验不通过再通过比对查找；若找不到则用权威索引兜底。
+ */
+internal fun findCurrentSongIndex(
+    songs: List<AudioFile>,
+    currentSong: AudioFile?,
+    preferredIndex: Int = -1
+): Int {
+    if (songs.isEmpty()) return -1
+
+    // 1. 优先校验权威队列游标处是否就是当前播放歌曲
+    if (preferredIndex in songs.indices) {
+        if (currentSong == null || isSameAudioSong(songs[preferredIndex], currentSong)) {
+            return preferredIndex
+        }
+    }
+
+    if (currentSong == null) return -1
+
+    // 2. 遍历查找精确匹配项
+    val matched = songs.indexOfFirst { isSameAudioSong(it, currentSong) }
+    if (matched >= 0) return matched
+
+    // 3. 权威游标合法时兜底保底
+    if (preferredIndex in songs.indices) return preferredIndex
+
+    return -1
 }

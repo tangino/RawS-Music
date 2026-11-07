@@ -671,6 +671,7 @@ internal fun HomeArtworkCarousel(
                         HomeOrbitCoverFlow(
                             songs = availableSongs,
                             currentSong = currentSong,
+                            currentPlayingIndex = state.committedIndex,
                             isPlaying = isPlaying,
                             reflectionAlpha = reflectionAlpha,
                             onSelectSong = onSelectSong,
