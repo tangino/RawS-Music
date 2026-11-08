@@ -14,8 +14,8 @@ android {
         applicationId = "com.rawsmusic.extension"
         minSdk = 24
         targetSdk = 37
-        versionCode = 122
-        versionName = "2.0.8-release"
+        versionCode = 123
+        versionName = "2.0.9-release"
 
         // Match locales_config.xml. Keep default values and the four supported languages,
         // rather than shipping every dependency's unused translations.
