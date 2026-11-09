@@ -1,5 +1,7 @@
 package com.rawsmusic.core.ui.scene.pages
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -489,7 +491,24 @@ fun PodcastDetailPage(
                     PodcastEpisodeRow(
                         episode = episode,
                         onClick = {
-                            PodcastRepository.playEpisode(context, episode, sortedEpisodes, index, show = currentShow)
+                            val vUrl = episode.videoUrl ?: if (episode.isVideo) episode.audioUrl else null
+                            if (episode.isVideo && !vUrl.isNullOrBlank()) {
+                                // 视频单集：直接调起系统高清视频播放器或外部播放器
+                                runCatching {
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(Uri.parse(vUrl), "video/*")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    // 记录到历史中
+                                    PodcastStore.recordPlay(episode, currentShow)
+                                }.onFailure {
+                                    // 若无外部视频播放器，则回退走内置音频引擎
+                                    PodcastRepository.playEpisode(context, episode, sortedEpisodes, index, show = currentShow)
+                                }
+                            } else {
+                                PodcastRepository.playEpisode(context, episode, sortedEpisodes, index, show = currentShow)
+                            }
                         }
                     )
                 }
@@ -541,6 +560,22 @@ private fun PodcastEpisodeRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (episode.isVideo) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF1DB954).copy(alpha = 0.2f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "视频",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                            fontFamily = appFontFamily(),
+                        )
+                    }
+                }
                 if (episode.pubDate.isNotBlank()) {
                     Text(
                         text = episode.pubDate,

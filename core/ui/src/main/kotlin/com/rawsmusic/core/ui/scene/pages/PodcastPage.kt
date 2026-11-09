@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -78,6 +80,7 @@ import com.rawsmusic.module.online.auth.spotify.SpotifyAuthService
 import com.rawsmusic.module.online.auth.spotify.SpotifySyncReport
 import com.rawsmusic.module.online.auth.spotify.SpotifyUserProfile
 import com.rawsmusic.module.online.model.PodcastCategory
+import com.rawsmusic.module.online.model.PodcastEpisode
 import com.rawsmusic.module.online.model.PodcastHistoryItem
 import com.rawsmusic.module.online.model.PodcastShow
 import com.rawsmusic.module.online.repository.PodcastRepository
@@ -88,6 +91,7 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Search
 
 /**
  * 播客详情页面传递共享状态。
@@ -100,6 +104,8 @@ object PodcastNavHolder {
  * 播客页面 Tab 导航枚举。
  */
 private sealed class PodcastPageTab {
+    object Home : PodcastPageTab()
+    object VideoExplore : PodcastPageTab()
     object Favorites : PodcastPageTab()
     object History : PodcastPageTab()
     data class Category(val category: PodcastCategory) : PodcastPageTab()
@@ -130,9 +136,11 @@ fun PodcastPage(
     val isWideScreen = configuration.screenWidthDp >= 600
 
     val categories = remember { PodcastRepository.categories }
-    var currentTab by remember { mutableStateOf<PodcastPageTab>(PodcastPageTab.Category(categories.first())) }
+    var currentTab by remember { mutableStateOf<PodcastPageTab>(PodcastPageTab.Home) }
 
     var shows by remember { mutableStateOf<List<PodcastShow>>(emptyList()) }
+    var featuredShows by remember { mutableStateOf<List<PodcastShow>>(emptyList()) }
+    var recommendedVideos by remember { mutableStateOf<List<PodcastShow>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
     var searchQuery by remember { mutableStateOf("") }
@@ -221,7 +229,15 @@ fun PodcastPage(
     }
 
     LaunchedEffect(Unit) {
-        loadCategory(categories.first())
+        isLoading = true
+        scope.launch {
+            featuredShows = PodcastRepository.getCategoryShows(categories.first())
+            shows = featuredShows
+            isLoading = false
+        }
+        scope.launch {
+            recommendedVideos = PodcastRepository.getRecommendedVideoShows()
+        }
     }
 
     Column(
@@ -346,74 +362,102 @@ fun PodcastPage(
             }
         }
 
-        // 小胶囊分类导航条（使用 horizontalScroll，自适应小屏幕，平滑滚动绝不裁切）
+        // 小胶囊分类导航条（使用 LazyRow，完美避免宽度被挤压/裁切，支持小屏幕顺滑惯性滚动）
         AnimatedVisibility(
             visible = !isSearching,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 0. 【Spotify 账号关联/管理】胶囊
-                if (spotifyProfile == null) {
+                // 0. 【精选首页】胶囊 (Spotify 模式)
+                item {
+                    val isHomeSelected = currentTab is PodcastPageTab.Home
                     PodcastChip(
-                        label = "Spotify 登录",
-                        isSelected = false,
+                        label = "精选探索",
+                        isSelected = isHomeSelected,
                         accentColor = Color(0xFF1DB954),
-                        onClick = {
-                            val intent = Intent().setClassName(context, "com.rawsmusic.ui.settings.SpotifyLoginActivity")
-                            context.startActivity(intent)
-                        },
-                    )
-                } else {
-                    val isPremium = spotifyProfile?.product.equals("premium", ignoreCase = true)
-                    val disp = spotifyProfile?.displayName ?: "Spotify"
-                    PodcastChip(
-                        label = "$disp${if (isPremium) " 👑" else ""}",
-                        isSelected = false,
-                        accentColor = Color(0xFF1DB954),
-                        onClick = { showSpotifyDialog = true },
+                        onClick = { currentTab = PodcastPageTab.Home },
                     )
                 }
 
-                // 网页直连免白名单同步快捷入口
-                PodcastChip(
-                    label = "网页直连同步",
-                    isSelected = false,
-                    accentColor = Color(0xFF1DB954),
-                    onClick = {
-                        val intent = Intent().setClassName(context, "com.rawsmusic.ui.settings.SpotifyWebSyncActivity")
-                        context.startActivity(intent)
-                    },
-                )
+                // 视频专区胶囊
+                item {
+                    val isVideoSelected = currentTab is PodcastPageTab.VideoExplore
+                    PodcastChip(
+                        label = "视频专区",
+                        isSelected = isVideoSelected,
+                        accentColor = Color(0xFF1DB954),
+                        onClick = { currentTab = PodcastPageTab.VideoExplore },
+                    )
+                }
 
                 // 1. 【我的收藏】胶囊
-                val isFavSelected = currentTab is PodcastPageTab.Favorites
-                PodcastChip(
-                    label = if (favorites.isNotEmpty()) "我的收藏 (${favorites.size})" else "我的收藏",
-                    isSelected = isFavSelected,
-                    iconRes = if (isFavSelected) R.drawable.ic_playlist_favorite_filled else R.drawable.ic_playlist_favorite_outline,
-                    accentColor = Color(0xFFFA5252),
-                    onClick = { currentTab = PodcastPageTab.Favorites },
-                )
+                item {
+                    val isFavSelected = currentTab is PodcastPageTab.Favorites
+                    PodcastChip(
+                        label = if (favorites.isNotEmpty()) "我的收藏 (${favorites.size})" else "我的收藏",
+                        isSelected = isFavSelected,
+                        iconRes = if (isFavSelected) R.drawable.ic_playlist_favorite_filled else R.drawable.ic_playlist_favorite_outline,
+                        accentColor = Color(0xFFFA5252),
+                        onClick = { currentTab = PodcastPageTab.Favorites },
+                    )
+                }
 
                 // 2. 【播放历史】胶囊
-                val isHistSelected = currentTab is PodcastPageTab.History
-                PodcastChip(
-                    label = if (history.isNotEmpty()) "播放历史 (${history.size})" else "播放历史",
-                    isSelected = isHistSelected,
-                    iconRes = R.drawable.ic_nav_custom_recent,
-                    accentColor = Color(0xFF1DB954),
-                    onClick = { currentTab = PodcastPageTab.History },
-                )
+                item {
+                    val isHistSelected = currentTab is PodcastPageTab.History
+                    PodcastChip(
+                        label = if (history.isNotEmpty()) "播放历史 (${history.size})" else "播放历史",
+                        isSelected = isHistSelected,
+                        iconRes = R.drawable.ic_nav_custom_recent,
+                        accentColor = Color(0xFF1DB954),
+                        onClick = { currentTab = PodcastPageTab.History },
+                    )
+                }
 
-                // 3. 各大内容分类胶囊
-                categories.forEach { cat ->
+                // 3. 【Spotify 账号关联/管理】胶囊
+                item {
+                    if (spotifyProfile == null) {
+                        PodcastChip(
+                            label = "Spotify 登录",
+                            isSelected = false,
+                            accentColor = Color(0xFF1DB954),
+                            onClick = {
+                                val intent = Intent().setClassName(context, "com.rawsmusic.ui.settings.SpotifyLoginActivity")
+                                context.startActivity(intent)
+                            },
+                        )
+                    } else {
+                        val isPremium = spotifyProfile?.product.equals("premium", ignoreCase = true)
+                        val disp = spotifyProfile?.displayName ?: "Spotify"
+                        PodcastChip(
+                            label = "$disp${if (isPremium) " 👑" else ""}",
+                            isSelected = false,
+                            accentColor = Color(0xFF1DB954),
+                            onClick = { showSpotifyDialog = true },
+                        )
+                    }
+                }
+
+                // 网页直连免白名单同步快捷入口
+                item {
+                    PodcastChip(
+                        label = "网页直连同步",
+                        isSelected = false,
+                        accentColor = Color(0xFF1DB954),
+                        onClick = {
+                            val intent = Intent().setClassName(context, "com.rawsmusic.ui.settings.SpotifyWebSyncActivity")
+                            context.startActivity(intent)
+                        },
+                    )
+                }
+
+                // 4. 各大内容分类胶囊
+                items(categories) { cat ->
                     val isCatSelected = (currentTab as? PodcastPageTab.Category)?.category?.id == cat.id
                     PodcastChip(
                         label = cat.name,
@@ -426,7 +470,7 @@ fun PodcastPage(
         }
 
         // 页面主视图内容
-        val gridColumns = if (isWideScreen) 6 else 2
+        val gridColumns = resolveOnlineGridColumns()
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -444,6 +488,32 @@ fun PodcastPage(
                         hasMore = hasMoreSearch,
                         isLoadingMore = isLoadingMoreSearch,
                         onLoadMore = { loadMoreSearch() },
+                    )
+                }
+
+                // 0. 精选探索首页（Spotify Funkis Home 复合流模式：Shortcuts + 继续收听 + 推荐视频播客 + 精选货架）
+                currentTab is PodcastPageTab.Home -> {
+                    SpotifyPodcastHomeContent(
+                        featuredShows = featuredShows,
+                        recommendedVideos = recommendedVideos,
+                        favorites = favorites,
+                        history = history,
+                        isLoading = isLoading,
+                        onOpenShow = onOpenShow,
+                        onPlayEpisode = { item ->
+                            PodcastRepository.playEpisode(context, item.episode, show = item.show)
+                        },
+                        onBrowseMoreVideos = {
+                            currentTab = PodcastPageTab.VideoExplore
+                        },
+                    )
+                }
+
+                // 视频专属探索页面
+                currentTab is PodcastPageTab.VideoExplore -> {
+                    PodcastVideoExploreContent(
+                        recommendedVideos = recommendedVideos,
+                        onOpenShow = onOpenShow,
                     )
                 }
 
@@ -1263,6 +1333,549 @@ private fun PodcastShowCard(
     }
 }
 
+/**
+ * Spotify Funkis Home 风格的播客聚合流首页视图。
+ */
+@Composable
+private fun SpotifyPodcastHomeContent(
+    featuredShows: List<PodcastShow>,
+    recommendedVideos: List<PodcastShow>,
+    favorites: List<PodcastShow>,
+    history: List<PodcastHistoryItem>,
+    isLoading: Boolean,
+    onOpenShow: (PodcastShow) -> Unit,
+    onPlayEpisode: (PodcastHistoryItem) -> Unit,
+    onBrowseMoreVideos: () -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+
+    if (isLoading && featuredShows.isEmpty()) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "正在探索播客世界...",
+                fontSize = 14.sp,
+                color = colors.secondaryText,
+                fontFamily = appFontFamily(),
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 120.dp),
+    ) {
+        // 1. 【Shortcuts 快速访问网格】（展示常听与收藏的 4~6 个播客）
+        val shortcutShows = (favorites + history.map { it.show }).distinctBy { it.id }.take(6)
+        if (shortcutShows.isNotEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.podcast_section_shortcuts),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onSurface,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    // 2 列网格呈现
+                    val chunked = shortcutShows.chunked(2)
+                    chunked.forEach { rowShows ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            rowShows.forEach { show ->
+                                Box(modifier = Modifier.weight(1f)) {
+                                    PodcastShortcutCard(
+                                        show = show,
+                                        onClick = { onOpenShow(show) },
+                                    )
+                                }
+                            }
+                            if (rowShows.size == 1) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 【为你精选视频播客】横向货架（Spotify 视频推荐特色）
+        if (recommendedVideos.isNotEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp, bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.podcast_section_recommended_videos),
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.onSurface,
+                                fontFamily = appFontFamily(),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF1DB954).copy(alpha = 0.2f))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.podcast_video_badge),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                                    fontFamily = appFontFamily(),
+                                )
+                            }
+                        }
+
+                        // 标题右侧的【浏览更多】文字按钮
+                        Text(
+                            text = stringResource(R.string.podcast_browse_more),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                            fontFamily = appFontFamily(),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onBrowseMoreVideos)
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                        )
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(recommendedVideos, key = { it.id }) { vShow ->
+                            PodcastVideoCard(
+                                show = vShow,
+                                onClick = { onOpenShow(vShow) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. 【继续收听】横向货架（读取 PodcastStore.history）
+        val uncompletedHistory = history.take(8)
+        if (uncompletedHistory.isNotEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp, bottom = 8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.podcast_section_continue_listening),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onSurface,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(10.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(uncompletedHistory, key = { it.episode.id }) { item ->
+                            PodcastContinueListeningCard(
+                                item = item,
+                                onClick = { onPlayEpisode(item) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. 【热门播客专栏】推荐探索卡片组
+        if (featuredShows.isNotEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp, bottom = 8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.podcast_section_explore),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onSurface,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(10.dp))
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(featuredShows.take(10), key = { it.id }) { show ->
+                            Box(modifier = Modifier.width(140.dp)) {
+                                PodcastShowCard(
+                                    show = show,
+                                    onClick = { onOpenShow(show) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 5. 更多精选单曲与播客垂直流
+            val remainingShows = featuredShows.drop(10)
+            if (remainingShows.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "大家都在听",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onSurface,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+
+                items(remainingShows) { show ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(colors.surface.copy(alpha = if (isDark) 0.22f else 0.38f))
+                            .border(1.dp, colors.outline.copy(alpha = if (isDark) 0.08f else 0.14f), RoundedCornerShape(12.dp))
+                            .clickable { onOpenShow(show) }
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.surface),
+                        ) {
+                            BitmapImage(
+                                key = show.coverUrl,
+                                contentDescription = show.title,
+                                modifier = Modifier.fillMaxSize(),
+                                targetWidth = 120,
+                                targetHeight = 120,
+                                showDefaultArtwork = false,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = show.title,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontFamily = appFontFamily(),
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                text = show.description.ifBlank { show.publisher },
+                                fontSize = 12.sp,
+                                color = colors.secondaryText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Spotify 风格快捷访问卡片（Shortcuts Card，56dp 高度，2 列小卡片）。
+ */
+@Composable
+private fun PodcastShortcutCard(
+    show: PodcastShow,
+    onClick: () -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surface.copy(alpha = if (isDark) 0.35f else 0.55f))
+            .border(1.dp, colors.outline.copy(alpha = if (isDark) 0.08f else 0.15f), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(colors.surface),
+        ) {
+            BitmapImage(
+                key = show.coverUrl,
+                contentDescription = show.title,
+                modifier = Modifier.fillMaxSize(),
+                targetWidth = 112,
+                targetHeight = 112,
+                showDefaultArtwork = false,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = show.title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = appFontFamily(),
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+        )
+    }
+}
+
+/**
+ * Spotify 风格【视频播客（Video Podcast）】横向卡片。
+ */
+@Composable
+private fun PodcastVideoCard(
+    show: PodcastShow,
+    onClick: () -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+
+    Column(
+        modifier = Modifier
+            .width(220.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface.copy(alpha = if (isDark) 0.28f else 0.45f))
+            .border(1.dp, colors.outline.copy(alpha = if (isDark) 0.1f else 0.18f), RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+    ) {
+        // 16:9 比例视频预览槽位
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            BitmapImage(
+                key = show.coverUrl,
+                contentDescription = show.title,
+                modifier = Modifier.fillMaxSize(),
+                targetWidth = 440,
+                targetHeight = 248,
+                showDefaultArtwork = false,
+            )
+
+            // 半透明暗色渐变遮罩
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.25f))
+            )
+
+            // 绿色播放按钮
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1DB954).copy(alpha = 0.90f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "播放视频",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            // 视频徽章
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "VIDEO",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1DB954),
+                    fontFamily = appFontFamily(),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = show.title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = appFontFamily(),
+        )
+
+        Spacer(Modifier.height(2.dp))
+
+        Text(
+            text = show.description.ifBlank { show.publisher },
+            fontSize = 11.sp,
+            color = colors.secondaryText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = appFontFamily(),
+        )
+    }
+}
+
+/**
+ * Spotify 风格【继续收听（Continue Listening）】卡片（展示单集进度与剩余分钟）。
+ */
+@Composable
+private fun PodcastContinueListeningCard(
+    item: PodcastHistoryItem,
+    onClick: () -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+    val savedProgress = remember(item.episode.id) {
+        PodcastStore.getProgress(item.episode.id)
+    }
+
+    val progressFraction = if (item.episode.durationMs > 0 && savedProgress > 0) {
+        (savedProgress.toFloat() / item.episode.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0.35f // 模拟默认已收听进度
+    }
+
+    val remainingMinutes = if (item.episode.durationMs > 0) {
+        ((item.episode.durationMs - savedProgress).coerceAtLeast(0L) / 60000L).coerceAtLeast(1L)
+    } else {
+        15L
+    }
+
+    Column(
+        modifier = Modifier
+            .width(180.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surface.copy(alpha = if (isDark) 0.25f else 0.42f))
+            .border(1.dp, colors.outline.copy(alpha = if (isDark) 0.08f else 0.15f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surface),
+            ) {
+                BitmapImage(
+                    key = item.episode.coverUrl.ifBlank { item.show.coverUrl },
+                    contentDescription = item.episode.title,
+                    modifier = Modifier.fillMaxSize(),
+                    targetWidth = 100,
+                    targetHeight = 100,
+                    showDefaultArtwork = false,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.episode.title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = appFontFamily(),
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.podcast_time_remaining, remainingMinutes),
+                    fontSize = 10.sp,
+                    color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = appFontFamily(),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Spotify 标志性绿色细进度条
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(CircleShape)
+                .background(colors.outline.copy(alpha = 0.2f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(progressFraction)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1DB954))
+            )
+        }
+    }
+}
+
 private fun formatRelativeTime(timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = (now - timestamp).coerceAtLeast(0L)
@@ -1291,5 +1904,378 @@ private fun formatDuration(durationMs: Long): String {
         String.format(java.util.Locale.getDefault(), "%02d:%02d:%02d", hours, minutes % 60, seconds)
     } else {
         String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
+}
+
+/**
+ * 视频播客专属探索页面（支持搜索特定视频播客，多端自适应网格展示）。
+ */
+@Composable
+private fun PodcastVideoExploreContent(
+    recommendedVideos: List<PodcastShow>,
+    onOpenShow: (PodcastShow) -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+    val scope = rememberCoroutineScope()
+    val gridColumns = resolveOnlineGridColumns()
+
+    val quickTags = listOf("全部", "TED 演讲", "生活治愈", "时尚艺术", "数码科技", "瑜伽身心")
+    var selectedTag by remember { mutableStateOf("全部") }
+
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var displayedVideos by remember { mutableStateOf<List<PodcastShow>>(recommendedVideos) }
+    var searchResults by remember { mutableStateOf<List<PodcastShow>>(emptyList()) }
+    var isSearchingLoading by remember { mutableStateOf(false) }
+
+    fun executeVideoSearch(queryOverride: String? = null) {
+        val trimmed = (queryOverride ?: searchQuery).trim()
+        if (trimmed.isEmpty() || trimmed == "全部") {
+            isSearching = false
+            searchResults = emptyList()
+            selectedTag = "全部"
+            return
+        }
+        isSearching = true
+        isSearchingLoading = true
+        scope.launch {
+            val list = PodcastRepository.searchVideoShows(trimmed)
+            searchResults = list
+            isSearchingLoading = false
+        }
+    }
+
+    LaunchedEffect(recommendedVideos) {
+        if (!isSearching && recommendedVideos.isNotEmpty()) {
+            displayedVideos = recommendedVideos
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (displayedVideos.isEmpty()) {
+            val list = PodcastRepository.getRecommendedVideoShows()
+            if (list.isNotEmpty()) {
+                displayedVideos = list
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+    ) {
+        // 搜索栏与过滤提示
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(19.dp))
+                    .background(colors.surface.copy(alpha = if (isDark) 0.35f else 0.52f))
+                    .border(1.dp, colors.outline.copy(alpha = 0.2f), RoundedCornerShape(19.dp))
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Search,
+                        contentDescription = "搜索",
+                        tint = colors.secondaryText,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            fontSize = 13.sp,
+                            color = colors.onSurface,
+                            fontFamily = appFontFamily(),
+                        ),
+                        cursorBrush = SolidColor(if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43)),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { executeVideoSearch() }),
+                        decorationBox = { innerTextField ->
+                            if (searchQuery.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.podcast_video_search_hint),
+                                    fontSize = 12.sp,
+                                    color = colors.secondaryText.copy(alpha = 0.6f),
+                                    fontFamily = appFontFamily(),
+                                )
+                            }
+                            innerTextField()
+                        }
+                    )
+                    if (searchQuery.isNotEmpty()) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "清空",
+                            tint = colors.secondaryText,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable {
+                                    searchQuery = ""
+                                    selectedTag = "全部"
+                                    isSearching = false
+                                    searchResults = emptyList()
+                                }
+                        )
+                    }
+                }
+            }
+
+            // 搜索按钮
+            Box(
+                modifier = Modifier
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(19.dp))
+                    .background(Color(0xFF1DB954).copy(alpha = if (isDark) 0.22f else 0.14f))
+                    .clickable { executeVideoSearch() }
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "搜索",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                    fontFamily = appFontFamily(),
+                )
+            }
+        }
+
+        // 快捷分类胶囊行
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            quickTags.forEach { tag ->
+                val isSelected = selectedTag == tag
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (isSelected) {
+                                Color(0xFF1DB954).copy(alpha = if (isDark) 0.28f else 0.18f)
+                            } else {
+                                colors.surface.copy(alpha = if (isDark) 0.25f else 0.40f)
+                            }
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (isSelected) {
+                                Color(0xFF1DB954).copy(alpha = 0.6f)
+                            } else {
+                                colors.outline.copy(alpha = 0.15f)
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                        )
+                        .clickable {
+                            selectedTag = tag
+                            if (tag == "全部") {
+                                searchQuery = ""
+                                isSearching = false
+                                searchResults = emptyList()
+                            } else {
+                                val query = when (tag) {
+                                    "TED 演讲" -> "TED"
+                                    "生活治愈" -> "Hope"
+                                    "时尚艺术" -> "Fashion"
+                                    "数码科技" -> "iPhone"
+                                    "瑜伽身心" -> "Yoga"
+                                    else -> tag
+                                }
+                                searchQuery = query
+                                executeVideoSearch(query)
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = tag,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSelected) {
+                            if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43)
+                        } else {
+                            colors.secondaryText
+                        },
+                        fontFamily = appFontFamily(),
+                    )
+                }
+            }
+        }
+
+        val currentShows = if (isSearching) searchResults else displayedVideos
+
+        if (isSearchingLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "正在全网检索视频播客...",
+                    fontSize = 14.sp,
+                    color = colors.secondaryText,
+                    fontFamily = appFontFamily(),
+                )
+            }
+        } else if (currentShows.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (isSearching) stringResource(R.string.podcast_video_search_empty) else "暂无视频播客",
+                    fontSize = 14.sp,
+                    color = colors.secondaryText,
+                    fontFamily = appFontFamily(),
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(gridColumns),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentPadding = PaddingValues(vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                items(currentShows, key = { it.id }) { show ->
+                    PodcastVideoGridCard(show = show, onClick = { onOpenShow(show) })
+                }
+
+                item(span = { GridItemSpan(gridColumns) }) {
+                    Spacer(modifier = Modifier.height(180.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 视频专属探索网格卡片（16:9 高清横幅比例 + 视频徽章 + 播放快捷预览）。
+ */
+@Composable
+private fun PodcastVideoGridCard(
+    show: PodcastShow,
+    onClick: () -> Unit,
+) {
+    val colors = themeColors()
+    val isDark = colors.background.luminance() < 0.5f
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface.copy(alpha = if (isDark) 0.28f else 0.45f))
+            .border(1.dp, colors.outline.copy(alpha = if (isDark) 0.1f else 0.18f), RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            BitmapImage(
+                key = show.coverUrl,
+                contentDescription = show.title,
+                modifier = Modifier.fillMaxSize(),
+                targetWidth = 440,
+                targetHeight = 248,
+                showDefaultArtwork = false,
+            )
+
+            // 半透明暗色渐变遮罩
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.25f))
+            )
+
+            // 绿色播放按钮
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1DB954).copy(alpha = 0.90f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "播放视频",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            // 视频徽章
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "VIDEO",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1DB954),
+                    fontFamily = appFontFamily(),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = show.title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = appFontFamily(),
+        )
+
+        Spacer(Modifier.height(2.dp))
+
+        Text(
+            text = show.description.ifBlank { show.publisher },
+            fontSize = 11.sp,
+            color = colors.secondaryText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontFamily = appFontFamily(),
+        )
     }
 }

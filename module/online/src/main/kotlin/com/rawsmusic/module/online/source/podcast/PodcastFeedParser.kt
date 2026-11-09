@@ -37,6 +37,8 @@ object PodcastFeedParser {
             var durationMs = 0L
             var coverUrl = defaultCoverUrl
             var audioUrl: String? = null
+            var isVideo = false
+            var videoUrl: String? = null
             var guid = ""
 
             while (eventType != XmlPullParser.END_DOCUMENT && episodes.size < limit) {
@@ -52,6 +54,8 @@ object PodcastFeedParser {
                             durationMs = 0L
                             coverUrl = defaultCoverUrl
                             audioUrl = null
+                            isVideo = false
+                            videoUrl = null
                             guid = ""
                         } else if (insideItem) {
                             when {
@@ -93,8 +97,22 @@ object PodcastFeedParser {
                                     val url = parser.getAttributeValue(null, "url")
                                         ?: parser.getAttributeValue(null, "URL")
                                         ?: parser.getAttributeValue(null, "href")
-                                    if (!url.isNullOrBlank() && (audioUrl == null || url.contains(".mp3") || url.contains(".m4a"))) {
-                                        audioUrl = url.trim()
+                                    val type = parser.getAttributeValue(null, "type") ?: ""
+                                    if (!url.isNullOrBlank()) {
+                                        val trimmedUrl = url.trim()
+                                        if (type.contains("video", ignoreCase = true) ||
+                                            trimmedUrl.endsWith(".mp4", ignoreCase = true) ||
+                                            trimmedUrl.endsWith(".m4v", ignoreCase = true) ||
+                                            trimmedUrl.endsWith(".mov", ignoreCase = true)
+                                        ) {
+                                            isVideo = true
+                                            videoUrl = trimmedUrl
+                                            if (audioUrl == null) {
+                                                audioUrl = trimmedUrl
+                                            }
+                                        } else if (audioUrl == null || trimmedUrl.contains(".mp3") || trimmedUrl.contains(".m4a")) {
+                                            audioUrl = trimmedUrl
+                                        }
                                     }
                                 }
                                 tagName.equals("image", ignoreCase = true) -> {
@@ -123,6 +141,8 @@ object PodcastFeedParser {
                                         durationMs = durationMs,
                                         coverUrl = coverUrl.ifBlank { defaultCoverUrl },
                                         audioUrl = audioUrl,
+                                        isVideo = isVideo,
+                                        videoUrl = videoUrl,
                                     )
                                 )
                             }

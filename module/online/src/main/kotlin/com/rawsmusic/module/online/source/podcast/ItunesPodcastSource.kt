@@ -209,6 +209,9 @@ object ItunesPodcastSource {
                     val durationMs = item.optLong("trackTimeMillis", 0L)
                     val description = item.optString("description")
                     val artworkUrl = item.optString("artworkUrl600", item.optString("artworkUrl160", show.coverUrl))
+                    val isVideo = episodeUrl.endsWith(".mp4", ignoreCase = true) ||
+                        episodeUrl.endsWith(".m4v", ignoreCase = true) ||
+                        episodeUrl.endsWith(".mov", ignoreCase = true)
 
                     episodes.add(
                         PodcastEpisode(
@@ -221,6 +224,8 @@ object ItunesPodcastSource {
                             durationMs = durationMs,
                             coverUrl = artworkUrl.ifBlank { show.coverUrl },
                             audioUrl = episodeUrl,
+                            isVideo = isVideo,
+                            videoUrl = if (isVideo) episodeUrl else null,
                         )
                     )
                 }

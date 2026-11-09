@@ -299,6 +299,10 @@ private val homeCategoryTransitionScenes = setOf(
     NavScene.ONLINE_PLAYLIST_DETAIL,
     NavScene.ONLINE_ARTIST_DETAIL,
     NavScene.PLAYLIST_DETAIL_PAGE,
+    NavScene.PODCAST,
+    NavScene.PODCAST_DETAIL,
+    NavScene.GUESS_YOU_LIKE,
+    NavScene.DAILY_RECOMMEND,
 )
 
 private fun shouldAnimate(from: NavScene, to: NavScene): Boolean {
@@ -344,9 +348,9 @@ private fun allowsContentBackDrag(from: NavScene, to: NavScene): Boolean {
     if (from in settingsScenes || to in settingsScenes) return false
     // SEARCH owns a horizontally scrollable filter rail. SceneTransitionHost observes at Initial
     // pass, so allowing content-wide back there races the LazyRow before it can establish scroll
-    // ownership. Keep SEARCH on the same policy as SOURCE_IMPORT: children own interior drags and
-    // scene navigation remains available from the system-style edge only.
-    if (from == NavScene.SOURCE_IMPORT || from == NavScene.SEARCH) return false
+    // ownership. Keep SEARCH on the same policy as SOURCE_IMPORT and PODCAST: children own interior
+    // drags and scene navigation remains available from the system-style edge only.
+    if (from == NavScene.SOURCE_IMPORT || from == NavScene.SEARCH || from == NavScene.PODCAST) return false
     return from != to
 }
 

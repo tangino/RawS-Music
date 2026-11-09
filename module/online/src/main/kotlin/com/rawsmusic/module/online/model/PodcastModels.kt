@@ -21,6 +21,7 @@ data class PodcastShow(
     val feedUrl: String? = null,
     val sourceType: PodcastSourceType = PodcastSourceType.SPOTIFY,
     val category: String = "热门推荐",
+    val isVideo: Boolean = false,
 )
 
 /**
@@ -36,6 +37,8 @@ data class PodcastEpisode(
     val durationMs: Long = 0L,
     val coverUrl: String,
     val audioUrl: String? = null,
+    val isVideo: Boolean = false,
+    val videoUrl: String? = null,
 )
 
 /**

@@ -34,6 +34,17 @@
     <string name="podcast_favorites_empty">暂无收藏的播客</string>
     <string name="podcast_view_show">查看专辑</string>
     <string name="podcast_clear_history">清空历史</string>
+    <string name="podcast_section_shortcuts">常听与收藏</string>
+    <string name="podcast_section_continue_listening">继续收听</string>
+    <string name="podcast_section_recommended_videos">为你精选视频播客</string>
+    <string name="podcast_browse_more">浏览更多</string>
+    <string name="podcast_video_explore_title">视频播客探索</string>
+    <string name="podcast_video_search_hint">搜索特定视频播客...</string>
+    <string name="podcast_video_search_empty">未搜到相关视频播客</string>
+    <string name="podcast_section_explore">发现播客</string>
+    <string name="podcast_time_remaining">还剩 %1$d 分钟</string>
+    <string name="podcast_video_badge">视频</string>
+    <string name="podcast_video_preview_title">视频播客放映厅</string>
     <string name="online_tab_plaza">歌单广场</string>
     <string name="online_tab_artists">歌手库</string>
     <string name="online_tab_search">全网搜歌</string>

@@ -18,6 +18,7 @@ object PodcastStore {
     private const val TAG = "PodcastStore"
     private const val KEY_FAVORITES = "podcast_favorites_v1"
     private const val KEY_HISTORY = "podcast_history_v1"
+    private const val KEY_PROGRESS_PREFIX = "podcast_progress_"
     private const val MAX_HISTORY_SIZE = 300
 
     private val gson by lazy { Gson() }
@@ -176,6 +177,22 @@ object PodcastStore {
         if (current.removeAll { it.episode.id == episodeId }) {
             saveHistory(current)
         }
+    }
+
+    /**
+     * 保存单集播放断点进度（毫秒）。
+     */
+    fun saveProgress(episodeId: String, positionMs: Long) {
+        if (episodeId.isBlank() || positionMs <= 0L) return
+        mmkv.encode("$KEY_PROGRESS_PREFIX$episodeId", positionMs)
+    }
+
+    /**
+     * 获取单集播放断点进度（毫秒），若无则返回 0L。
+     */
+    fun getProgress(episodeId: String): Long {
+        if (episodeId.isBlank()) return 0L
+        return mmkv.decodeLong("$KEY_PROGRESS_PREFIX$episodeId", 0L)
     }
 }
 
