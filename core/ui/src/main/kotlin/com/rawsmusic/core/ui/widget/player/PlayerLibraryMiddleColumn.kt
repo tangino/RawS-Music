@@ -221,7 +221,9 @@ fun PlayerLibraryMiddleColumn(
         allLibrarySongs,
     ) {
         val entry = currentPlayedPlaylist
-        if (queueSongs.size <= 1 && entry != null && entry.isOnline && entry.id.isNotBlank()) {
+        if (queueSongs.size <= 1 && entry != null && entry.isOnline && entry.id.isNotBlank() &&
+            entry.id != "daily_recommend" && entry.id != "guess_you_like"
+        ) {
             val loaded = withContext(Dispatchers.IO) {
                 val platform = OnlinePlatform.entries.firstOrNull {
                     it.id.equals(entry.platformId, ignoreCase = true)

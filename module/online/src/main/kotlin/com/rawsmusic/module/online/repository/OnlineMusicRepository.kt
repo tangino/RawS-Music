@@ -1,11 +1,13 @@
 package com.rawsmusic.module.online.repository
 
 import android.util.LruCache
+import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.online.model.OnlineLeaderboard
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.model.OnlinePlaylistTag
 import com.rawsmusic.module.online.model.OnlineSongItem
+import com.rawsmusic.module.online.recommend.GuessLikeOptimizer
 import com.rawsmusic.module.online.source.OnlinePlatformSource
 import com.rawsmusic.module.online.source.netease.NeteaseMusicSource
 import com.rawsmusic.module.online.source.qq.QQMusicSource
@@ -24,6 +26,8 @@ import kotlinx.coroutines.CancellationException
 class OnlineMusicRepository private constructor() {
 
     companion object {
+        private const val TAG = "OnlineMusicRepository"
+
         @Volatile
         private var instance: OnlineMusicRepository? = null
 
@@ -135,21 +139,87 @@ class OnlineMusicRepository private constructor() {
     }
 
     /**
-     * 获取个性化推荐 / 猜你喜欢歌曲列表（如 QQ 音乐私人雷达）
+     * 获取个性化推荐 / 猜你喜欢歌曲列表（借鉴 QTMusic 多轮召回与动态种子补全机制）。
+     * 自动拦截已曝光歌曲，并在单次召回不足时动态轮转种子进行多轮并发补齐，确保 0% 界面重复率。
      */
     suspend fun getRecommendSongs(
         page: Int = 1,
         pageSize: Int = 20,
         platform: OnlinePlatform = _currentPlatform.value,
         seedSongMids: List<String> = emptyList(),
-        favSongMids: List<String> = com.rawsmusic.module.online.recommend.GuessLikeOptimizer.getFavoriteSeeds(),
+        favSongMids: List<String> = emptyList(),
     ): Result<List<OnlineSongItem>> {
         return resultOf {
-            val rawList = getSource(platform).getRecommendSongs(page, pageSize, seedSongMids, favSongMids)
-            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.optimizeRecommendations(
-                candidates = rawList,
-                currentSeedId = seedSongMids.firstOrNull(),
-            )
+            val collected = mutableListOf<OnlineSongItem>()
+            val collectedIds = HashSet<String>()
+            val source = getSource(platform)
+            var currentSeedList = seedSongMids
+            val usedSeedMids = HashSet<String>()
+
+            // 最多执行 3 轮动态召回补齐，彻底解决服务端雷达模型单次返回高度重合的问题
+            var attempt = 0
+            while (collected.size < pageSize && attempt < 3) {
+                attempt++
+                val dynamicFavSeeds = if (favSongMids.isNotEmpty() && attempt == 1) {
+                    favSongMids
+                } else {
+                    GuessLikeOptimizer.getDynamicFavoriteSeeds(count = 5, excludeMids = usedSeedMids)
+                }
+                usedSeedMids.addAll(dynamicFavSeeds)
+
+                val rawBatch = try {
+                    source.getRecommendSongs(
+                        page = page + attempt - 1,
+                        pageSize = pageSize,
+                        seedSongMids = currentSeedList,
+                        favSongMids = dynamicFavSeeds,
+                    )
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "第 $attempt 轮推荐召回异常: ${e.message}")
+                    emptyList()
+                }
+
+                if (rawBatch.isEmpty() && collected.isNotEmpty()) break
+
+                // 本地严格过滤：过滤抑制项、冷却歌手、已曝光滑窗、相同歌名指纹
+                val optimized = GuessLikeOptimizer.optimizeRecommendations(
+                    candidates = rawBatch,
+                    currentSeedId = currentSeedList.firstOrNull(),
+                    filterExposed = true,
+                )
+
+                for (song in optimized) {
+                    if (collectedIds.add(song.id)) {
+                        collected.add(song)
+                        if (collected.size >= pageSize) break
+                    }
+                }
+
+                // 为下一轮尝试提供新锚点（如果有收集到新歌，取其中一首作为新锚点）
+                if (collected.isNotEmpty()) {
+                    currentSeedList = listOf(collected.last().id)
+                }
+            }
+
+            // 兜底：若经过多轮严格去重后仍然数量过少（极端情况），放宽已曝光限制以确保有歌可听
+            if (collected.size < pageSize / 2) {
+                val fallbackRaw = source.getRecommendSongs(page, pageSize, seedSongMids, favSongMids)
+                val fallbackOptimized = GuessLikeOptimizer.optimizeRecommendations(
+                    candidates = fallbackRaw,
+                    currentSeedId = seedSongMids.firstOrNull(),
+                    filterExposed = false,
+                )
+                for (song in fallbackOptimized) {
+                    if (collectedIds.add(song.id)) {
+                        collected.add(song)
+                        if (collected.size >= pageSize) break
+                    }
+                }
+            }
+
+            // 自动将本批次确认为已曝光，防止下一次“换一批”或自动追加时出现重复
+            GuessLikeOptimizer.recordSongsExposed(collected)
+            collected
         }
     }
 

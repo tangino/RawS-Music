@@ -51,6 +51,43 @@ object OnlinePlaybackLauncher {
 
     private const val TAG = "OnlineSource"
 
+    init {
+        com.rawsmusic.module.online.recommend.GuessLikeOptimizer.setFavoriteSeedsProvider {
+            runCatching {
+                val app = com.rawsmusic.core.common.CoreInit.getApp()
+                val favKeys = com.rawsmusic.module.data.prefs.PlaylistStore.getInstance(app).favoriteSongKeys()
+                favKeys.mapNotNull { key ->
+                    when {
+                        key.startsWith("qq_") -> key.removePrefix("qq_")
+                        key.length in 10..24 && key.all { it.isLetterOrDigit() } -> key
+                        else -> null
+                    }
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        // 监听在线播放控制器切歌事件，自动更新当前播放歌单卡片（非歌单内容清除卡片）
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            var lastRemoteId: String? = null
+            MusicSourcePlaybackController.snapshot.collect { snapshot ->
+                val current = snapshot.currentItem
+                if (current != null && current.remoteId != lastRemoteId) {
+                    lastRemoteId = current.remoteId
+                    if (isRadioMode || current.sourceId == "podcast" || snapshot.originalPlatform == "podcast") {
+                        com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
+                    } else {
+                        val artist = current.artists.joinToString(", ")
+                        com.rawsmusic.core.common.prefs.PlayedPlaylistManager.updateCurrentSong(
+                            title = current.title,
+                            artist = artist,
+                            coverUrl = current.artworkUrl,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * 为在线歌曲找出可播放的候选（不播放）。
      *
@@ -280,6 +317,8 @@ object OnlinePlaybackLauncher {
 
         val playResult = play(context = context, item = item, queue = queue, index = index)
         if (playResult is OnlinePlayResult.Started) {
+            // 猜你喜欢电台属于非歌单内容，彻底清除当前播放歌单卡片信息
+            com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
             startRadioWatermarkMonitor(context.applicationContext)
             // 若用户点击的正好是队列后三首（低水位），立刻静默拉取下一批曲目进行无缝续杯追加
             if (queue.isNotEmpty() && index >= queue.size - 3) {
@@ -335,6 +374,8 @@ object OnlinePlaybackLauncher {
         val playResult = playQueue(context, songs, startIndex = 0)
         if (playResult is OnlinePlayResult.Started) {
             isRadioMode = true
+            // 猜你喜欢电台属于非歌单内容，彻底清除当前播放歌单卡片信息
+            com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
             startRadioWatermarkMonitor(context.applicationContext)
         }
         return playResult
@@ -496,6 +537,8 @@ object OnlinePlaybackLauncher {
                     lastTrackArtist = currentTrack.artists.joinToString(", ")
                     trackStartTimeMs = System.currentTimeMillis()
                     com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongPlayedInRadio(currentTrack.remoteId)
+                    // 确保电台切歌时当前播放歌单保持清空状态
+                    com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
                 }
 
                 // 2. 低水位线自动无限续杯（还剩 3 首以下自动拉取）

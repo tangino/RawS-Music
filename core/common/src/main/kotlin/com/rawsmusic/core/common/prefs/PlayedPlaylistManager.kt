@@ -46,8 +46,11 @@ object PlayedPlaylistManager {
         lastPlayedSongArtist: String? = null,
     ) {
         if (id.isBlank() || name.isBlank()) return
-        // 严格歌单校验：非歌单内容（歌手、专辑、单曲等）绝不进入播放歌单卡片
-        if (id.startsWith("artist_") || id.startsWith("album_") || name.contains("热门歌曲") || name.contains("单曲搜索")) {
+        // 严格歌单校验：非歌单内容（歌手、专辑、单曲、每日推荐、猜你喜欢、播客等）绝不进入播放歌单卡片，必须清除当前播放歌单
+        if (id.startsWith("artist_") || id.startsWith("album_") || id.startsWith("podcast_") ||
+            id == "daily_recommend" || id == "guess_you_like" ||
+            name.contains("热门歌曲") || name.contains("单曲搜索") || name.contains("每日推荐") || name.contains("猜你喜欢")
+        ) {
             recordNonPlaylistPlayed()
             return
         }
@@ -82,6 +85,23 @@ object PlayedPlaylistManager {
         }
         _currentPlaylist.value = newEntry
         saveEntry(KEY_CURRENT, newEntry)
+    }
+
+    /**
+     * 更新当前播放歌单中正在播放的曲目信息（切歌时无缝刷新，不重置歌单归属）。
+     */
+    fun updateCurrentSong(title: String?, artist: String?, coverUrl: String? = null) {
+        val current = _currentPlaylist.value ?: return
+        if (title.isNullOrBlank() && artist.isNullOrBlank()) return
+        if (current.lastPlayedSongTitle == title && current.lastPlayedSongArtist == artist) return
+        val updated = current.copy(
+            lastPlayedSongTitle = title ?: current.lastPlayedSongTitle,
+            lastPlayedSongArtist = artist ?: current.lastPlayedSongArtist,
+            coverUrl = coverUrl?.takeIf { it.isNotBlank() } ?: current.coverUrl,
+            lastPlayedTimeMs = System.currentTimeMillis(),
+        )
+        _currentPlaylist.value = updated
+        saveEntry(KEY_CURRENT, updated)
     }
 
     /**

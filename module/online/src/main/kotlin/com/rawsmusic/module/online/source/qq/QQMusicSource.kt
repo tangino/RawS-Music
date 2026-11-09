@@ -1489,6 +1489,20 @@ class QQMusicSource(
                 })
             }
             put("EntranceSongs", entranceArr)
+
+            // 借鉴 QTMusic RadioRequest：向服务端带入已知已曝光歌曲 ID，在召回源头剔除重复
+            val exposedIds = com.rawsmusic.module.online.recommend.GuessLikeOptimizer.getRecentExposedMids(20)
+            if (exposedIds.isNotEmpty()) {
+                val songIdsArr = JSONArray()
+                exposedIds.forEach { mid ->
+                    songIdsArr.put(JSONObject().apply {
+                        put("mid", mid)
+                        put("songmid", mid)
+                    })
+                }
+                put("song_ids", songIdsArr)
+                put("BaseSongIds", songIdsArr)
+            }
         }
 
         val radarObj = JSONObject().apply {

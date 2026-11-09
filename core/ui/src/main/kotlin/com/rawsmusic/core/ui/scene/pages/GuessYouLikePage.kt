@@ -113,9 +113,9 @@ internal fun GuessYouLikePage(
     var songs by remember { mutableStateOf<List<OnlineSongItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var isStartingRadio by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
     val playbackSnapshot by MusicSourcePlaybackController.snapshot.collectAsState()
-    val listState = rememberLazyListState()
 
     fun loadRecommendSongs(page: Int) {
         scope.launch {
@@ -136,7 +136,13 @@ internal fun GuessYouLikePage(
                     pageSize = 30,
                     seedSongMids = if (currentSeed.isNotBlank()) listOf(currentSeed) else emptyList(),
                 )
-                songs = result.getOrNull() ?: emptyList()
+                val newSongs = result.getOrNull() ?: emptyList()
+                if (newSongs.isNotEmpty()) {
+                    songs = newSongs
+                    if (page > 1) {
+                        listState.animateScrollToItem(0)
+                    }
+                }
             } catch (e: Exception) {
                 com.rawsmusic.core.common.utils.AppLogger.e("GuessYouLikePage", "加载推荐失败", e)
             } finally {
@@ -427,6 +433,9 @@ internal fun GuessYouLikePage(
                     Button(
                         onClick = {
                             if (!isLoading) {
+                                if (songs.isNotEmpty()) {
+                                    com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongsExposed(songs)
+                                }
                                 pageIndex++
                             }
                         },
@@ -772,6 +781,9 @@ internal fun GuessYouLikePage(
                             Button(
                                 onClick = {
                                     if (!isLoading) {
+                                        if (songs.isNotEmpty()) {
+                                            com.rawsmusic.module.online.recommend.GuessLikeOptimizer.recordSongsExposed(songs)
+                                        }
                                         pageIndex++
                                     }
                                 },

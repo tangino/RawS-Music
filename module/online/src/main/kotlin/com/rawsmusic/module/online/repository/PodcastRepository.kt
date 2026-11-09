@@ -261,6 +261,8 @@ object PodcastRepository {
                 sourceTag = "podcast",
                 autoPlay = true,
             )
+            // 播客非歌单，彻底清空当前播放歌单卡片信息
+            com.rawsmusic.core.common.prefs.PlayedPlaylistManager.recordNonPlaylistPlayed()
             AppNoticeBus.post("正在播放: ${episode.title}", AppNoticeIcon.PLAYLIST)
             // 自动同步记录到播客播放历史
             val targetShow = show ?: PodcastShow(

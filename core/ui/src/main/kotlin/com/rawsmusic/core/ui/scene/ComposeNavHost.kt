@@ -488,6 +488,8 @@ fun ComposeNavHost(
 
             NavScene.DAILY_RECOMMEND -> DailyRecommendPage(
                 onBack = onBack,
+                currentSong = data.miniPlayerSong ?: data.currentSong,
+                currentCoverPath = data.miniPlayerCoverPath,
                 modifier = Modifier.fillMaxSize(),
             )
 

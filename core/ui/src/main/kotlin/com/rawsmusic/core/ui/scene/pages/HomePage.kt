@@ -665,6 +665,8 @@ private fun HomePageContent(
                 onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
                 onPlay = {
                     if (dailyRecommendData.songs.isNotEmpty()) {
+                        // 每日推荐非歌单，彻底清空当前播放歌单卡片信息
+                        PlayedPlaylistManager.recordNonPlaylistPlayed()
                         coroutineScope.launch {
                             OnlinePlaybackLauncher.play(
                                 context = context,
@@ -1021,11 +1023,17 @@ private fun HomeCardSlotRow(
                                     )
                                 } else {
                                     if (target.isOnline) {
-                                        val platform = OnlinePlatform.fromId(target.platformId.orEmpty()) ?: OnlinePlatform.NETEASE
-                                        onNavigatePlaylist(
-                                            NavScene.ONLINE_PLAYLIST_DETAIL,
-                                            onlinePlaylistDetailArgument(platform, target.id)
-                                        )
+                                        if (target.id == "daily_recommend") {
+                                            onNavigate(NavScene.DAILY_RECOMMEND)
+                                        } else if (target.id == "guess_you_like") {
+                                            onNavigate(NavScene.GUESS_YOU_LIKE)
+                                        } else {
+                                            val platform = OnlinePlatform.fromId(target.platformId.orEmpty()) ?: OnlinePlatform.NETEASE
+                                            onNavigatePlaylist(
+                                                NavScene.ONLINE_PLAYLIST_DETAIL,
+                                                onlinePlaylistDetailArgument(platform, target.id)
+                                            )
+                                        }
                                     } else {
                                         onNavigatePlaylist(NavScene.PLAYLIST_DETAIL_PAGE, target.id)
                                     }
@@ -2097,6 +2105,8 @@ internal fun rememberHomeVirtualListProviderSpec(
                                 onClick = { onNavigate(NavScene.DAILY_RECOMMEND) },
                                 onPlay = {
                                     if (dailyRecommendData.songs.isNotEmpty()) {
+                                        // 每日推荐非歌单，彻底清空当前播放歌单卡片信息
+                                        PlayedPlaylistManager.recordNonPlaylistPlayed()
                                         coroutineScope.launch {
                                             OnlinePlaybackLauncher.play(
                                                 context = context,
