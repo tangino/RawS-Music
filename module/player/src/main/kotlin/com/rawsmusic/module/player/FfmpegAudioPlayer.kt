@@ -4312,6 +4312,8 @@ class FfmpegAudioPlayer(private val context: Context) {
 
             AppLogger.i(TAG, "Streaming loop init: manualCrossfadeMs=$crossfadeDurationMs autoCrossfade=$automaticCrossfadeEnabled nextSongPath=$nextSongPath, _durationMs=$_durationMs, prefillBytes=$prefillBytesWritten")
 
+            var consecutiveStreamingTimeouts = 0
+
             while (isPlaying.get() && !isReleased.get()) {
                 if (consumePendingCrossfadeSeekHandoff(generation)) {
                     rb = ringBuffer ?: break
@@ -4598,12 +4600,16 @@ class FfmpegAudioPlayer(private val context: Context) {
                     if (readMs > 100) {
                         AppLogger.w(TAG, "Streaming: rb.readWithTimeout took ${"%.1f".format(readMs)}ms, rbAvail=${rb.available()}B decoderDone=$decoderDone")
                     }
-                    if (read == -1) {
+                    if (read > 0) {
+                        consecutiveStreamingTimeouts = 0
+                    } else if (read == -1) {
+                        consecutiveStreamingTimeouts++
                         // 超时，检查是否仍在播放
                         if (!isPlaying.get()) break
                         // 解码器已完成且 buffer 为空 → 真正的 EOF
-                        if (decoderDone && rb.available() == 0) {
-                            AppLogger.i(TAG, "Streaming: decoderDone + buffer empty → EOF")
+                        // 若网络断流导致连续 3 次超时（6 秒无数据），强制视为 EOF 触发上层优雅恢复/切歌，杜绝静音死锁
+                        if ((decoderDone && rb.available() == 0) || consecutiveStreamingTimeouts >= 3) {
+                            AppLogger.i(TAG, "Streaming: decoderDone=$decoderDone timeouts=$consecutiveStreamingTimeouts → EOF")
                             read = 0  // 落入下方 read <= 0 EOF 处理
                         } else {
                             continue

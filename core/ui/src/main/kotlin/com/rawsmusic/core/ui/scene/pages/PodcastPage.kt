@@ -39,6 +39,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -369,7 +370,7 @@ fun PodcastPage(
         ) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 32.dp, top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1349,6 +1350,8 @@ private fun SpotifyPodcastHomeContent(
 ) {
     val colors = themeColors()
     val isDark = colors.background.luminance() < 0.5f
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     if (isLoading && featuredShows.isEmpty()) {
         Box(
@@ -1425,7 +1428,6 @@ private fun SpotifyPodcastHomeContent(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1454,31 +1456,51 @@ private fun SpotifyPodcastHomeContent(
                             }
                         }
 
-                        // 标题右侧的【浏览更多】文字按钮
-                        Text(
-                            text = stringResource(R.string.podcast_browse_more),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
-                            fontFamily = appFontFamily(),
+                        Spacer(Modifier.width(12.dp))
+
+                        // 标题右侧的【浏览更多 >】操作按钮（紧贴标题右边，平板与小屏设备均清晰可见，直达视频专区）
+                        Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF1DB954).copy(alpha = if (isDark) 0.18f else 0.12f))
+                                .border(1.dp, Color(0xFF1DB954).copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                                 .clickable(onClick = onBrowseMoreVideos)
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                        )
+                                .padding(horizontal = 9.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.podcast_browse_more),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                                fontFamily = appFontFamily(),
+                            )
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = stringResource(R.string.podcast_browse_more),
+                                tint = if (isDark) Color(0xFF1DB954) else Color(0xFF0F9D43),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(10.dp))
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(recommendedVideos, key = { it.id }) { vShow ->
                             PodcastVideoCard(
                                 show = vShow,
                                 onClick = { onOpenShow(vShow) },
+                                onPlayVideo = {
+                                    scope.launch {
+                                        PodcastRepository.playLatestEpisode(context, vShow)
+                                    }
+                                },
                             )
                         }
                     }
@@ -1507,7 +1529,7 @@ private fun SpotifyPodcastHomeContent(
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(uncompletedHistory, key = { it.episode.id }) { item ->
@@ -1541,7 +1563,7 @@ private fun SpotifyPodcastHomeContent(
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(featuredShows.take(10), key = { it.id }) { show ->
@@ -1684,6 +1706,7 @@ private fun PodcastShortcutCard(
 private fun PodcastVideoCard(
     show: PodcastShow,
     onClick: () -> Unit,
+    onPlayVideo: (() -> Unit)? = null,
 ) {
     val colors = themeColors()
     val isDark = colors.background.luminance() < 0.5f
@@ -1722,12 +1745,15 @@ private fun PodcastVideoCard(
                     .background(Color.Black.copy(alpha = 0.25f))
             )
 
-            // 绿色播放按钮
+            // 绿色播放按钮（支持单独点击起播视频）
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF1DB954).copy(alpha = 0.90f)),
+                    .background(Color(0xFF1DB954).copy(alpha = 0.92f))
+                    .clickable {
+                        onPlayVideo?.invoke() ?: onClick()
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1908,6 +1934,20 @@ private fun formatDuration(durationMs: Long): String {
 }
 
 /**
+ * 视频专属网格卡片列数计算（专为 16:9 横幅视频卡片优化，大屏展示 3~4 列，视野极其开阔饱满）。
+ */
+@Composable
+private fun resolveVideoGridColumns(): Int {
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    return when {
+        widthDp >= 1200 -> 4
+        widthDp >= 800 -> 3
+        widthDp >= 550 -> 3
+        else -> 2
+    }
+}
+
+/**
  * 视频播客专属探索页面（支持搜索特定视频播客，多端自适应网格展示）。
  */
 @Composable
@@ -1917,10 +1957,11 @@ private fun PodcastVideoExploreContent(
 ) {
     val colors = themeColors()
     val isDark = colors.background.luminance() < 0.5f
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val gridColumns = resolveOnlineGridColumns()
+    val gridColumns = resolveVideoGridColumns()
 
-    val quickTags = listOf("全部", "TED 演讲", "生活治愈", "时尚艺术", "数码科技", "瑜伽身心")
+    val quickTags = listOf("全部", "TED演讲", "科技数码", "深度访谈", "宇宙自然", "时尚生活", "文化艺术")
     var selectedTag by remember { mutableStateOf("全部") }
 
     var searchQuery by remember { mutableStateOf("") }
@@ -2058,15 +2099,16 @@ private fun PodcastVideoExploreContent(
             }
         }
 
-        // 快捷分类胶囊行
-        Row(
+        // 快捷分类胶囊行（使用 LazyRow，支持小屏/宽屏平滑惯性滚动，绝不贴边裁切）
+        LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 10.dp),
+            contentPadding = PaddingValues(end = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            quickTags.forEach { tag ->
+            items(quickTags) { tag ->
                 val isSelected = selectedTag == tag
                 Box(
                     modifier = Modifier
@@ -2094,19 +2136,48 @@ private fun PodcastVideoExploreContent(
                                 isSearching = false
                                 searchResults = emptyList()
                             } else {
-                                val query = when (tag) {
-                                    "TED 演讲" -> "TED"
-                                    "生活治愈" -> "Hope"
-                                    "时尚艺术" -> "Fashion"
-                                    "数码科技" -> "iPhone"
-                                    "瑜伽身心" -> "Yoga"
+                                isSearching = true
+                                isSearchingLoading = false
+                                val filterWord = when (tag) {
+                                    "TED演讲" -> "TED"
+                                    "科技数码" -> "科技"
+                                    "深度访谈" -> "访谈"
+                                    "宇宙自然" -> "宇宙"
+                                    "时尚生活" -> "时尚"
+                                    "文化艺术" -> "文化"
                                     else -> tag
                                 }
-                                searchQuery = query
-                                executeVideoSearch(query)
+                                val localMatched = displayedVideos.filter {
+                                    it.category.contains(tag) || it.category.contains(filterWord) ||
+                                    it.title.contains(filterWord, ignoreCase = true) ||
+                                    it.description.contains(filterWord, ignoreCase = true)
+                                }
+                                searchResults = localMatched
+
+                                // 异步全网补充检索该分类的更多超清视频播客
+                                scope.launch {
+                                    val queryWord = when (tag) {
+                                        "TED演讲" -> "TED talks video"
+                                        "科技数码" -> "Tech video podcast"
+                                        "深度访谈" -> "Interview video podcast"
+                                        "宇宙自然" -> "NASA video"
+                                        "时尚生活" -> "Fashion video podcast"
+                                        "文化艺术" -> "Art video podcast"
+                                        else -> "$tag video"
+                                    }
+                                    val netShows = PodcastRepository.searchVideoShows(queryWord)
+                                    if (selectedTag == tag && netShows.isNotEmpty()) {
+                                        val seen = localMatched.map { it.id }.toMutableSet()
+                                        val combined = localMatched.toMutableList()
+                                        netShows.forEach { ns ->
+                                            if (seen.add(ns.id)) combined.add(ns)
+                                        }
+                                        searchResults = combined
+                                    }
+                                }
                             }
                         }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -2160,12 +2231,20 @@ private fun PodcastVideoExploreContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f),
-                contentPadding = PaddingValues(vertical = 10.dp),
+                contentPadding = PaddingValues(vertical = 10.dp, horizontal = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(currentShows, key = { it.id }) { show ->
-                    PodcastVideoGridCard(show = show, onClick = { onOpenShow(show) })
+                    PodcastVideoGridCard(
+                        show = show,
+                        onClick = { onOpenShow(show) },
+                        onPlayVideo = {
+                            scope.launch {
+                                PodcastRepository.playLatestEpisode(context, show)
+                            }
+                        },
+                    )
                 }
 
                 item(span = { GridItemSpan(gridColumns) }) {
@@ -2183,6 +2262,7 @@ private fun PodcastVideoExploreContent(
 private fun PodcastVideoGridCard(
     show: PodcastShow,
     onClick: () -> Unit,
+    onPlayVideo: (() -> Unit)? = null,
 ) {
     val colors = themeColors()
     val isDark = colors.background.luminance() < 0.5f
@@ -2220,12 +2300,15 @@ private fun PodcastVideoGridCard(
                     .background(Color.Black.copy(alpha = 0.25f))
             )
 
-            // 绿色播放按钮
+            // 绿色播放按钮（支持单独点击直接起播最新视频）
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF1DB954).copy(alpha = 0.90f)),
+                    .background(Color(0xFF1DB954).copy(alpha = 0.92f))
+                    .clickable {
+                        onPlayVideo?.invoke() ?: onClick()
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -2241,9 +2324,9 @@ private fun PodcastVideoGridCard(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color.Black.copy(alpha = 0.70f))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = 0.70f))
+                .padding(horizontal = 5.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = "VIDEO",

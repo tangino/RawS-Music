@@ -1847,22 +1847,45 @@ class PlayerController private constructor(context: Context) {
                     // 2. 切歌冷却与物理进度合理性检查：自然完成必然在曲目末尾，新歌刚切歌或刚起播绝不可能自然完成
                     val currentPos = maxOf(_position.value, ffmpegPlayer.positionMs)
                     val totalDur = _duration.value.takeIf { it > 0 } ?: cur.duration.takeIf { it > 0 } ?: ffmpegPlayer.durationMs
+
                     val reachedTail = if (totalDur > 0L) {
-                        // 播放进度已达总时长的 90% 以上，或距离尾声不足 15 秒，均视为自然播放结束
-                        (currentPos >= totalDur * 0.90f) || (totalDur >= 5_000L && currentPos >= totalDur - 15_000L)
+                        // 播放进度已达总时长的 85% 以上（网络流存在转码/元数据时长偏差），或距离尾声不足 15 秒，均视为自然播放结束
+                        (currentPos >= totalDur * 0.85f) || (totalDur >= 5_000L && currentPos >= totalDur - 15_000L)
                     } else false
-                    val isPremature = _playState.value == PlayState.PREPARING ||
-                        elapsedSinceSwitch < 2_000L ||
-                        (!reachedTail && (
-                            (totalDur >= 8_000L && currentPos < (totalDur - 5_000L)) ||
-                            (totalDur > 3_000L && currentPos <= 2_000L)
-                        ))
+
+                    val isTransientSwitch = _playState.value == PlayState.PREPARING && elapsedSinceSwitch < 1_500L
+                    if (isTransientSwitch) {
+                        AppLogger.w(
+                            TAG,
+                            "Ignoring transient COMPLETED during track switch/preparation: elapsed=${elapsedSinceSwitch}ms song=${cur.title}"
+                        )
+                        return@launch
+                    }
+
+                    val isPremature = !reachedTail && (
+                        (totalDur >= 8_000L && currentPos < (totalDur - 5_000L)) ||
+                        (totalDur > 3_000L && currentPos <= 2_000L)
+                    )
+
                     if (isPremature) {
                         AppLogger.w(
                             TAG,
-                            "Ignoring premature COMPLETED: currentPos=$currentPos totalDur=$totalDur elapsedSinceSwitch=${elapsedSinceSwitch}ms state=${_playState.value} song=${cur.title}"
+                            "Handling premature COMPLETED: isOnline=$isOnline currentPos=$currentPos totalDur=$totalDur elapsedSinceSwitch=${elapsedSinceSwitch}ms state=${_playState.value} song=${cur.title}"
                         )
-                        return@launch
+                        if (isOnline) {
+                            // 网络歌曲中途被中断到达 EOF（网络波动/服务端关闭连接）
+                            // 严禁粗暴 return 丢弃事件导致 UI 死锁停留在 PLAYING。直接作为曲目完成推进下一首
+                            AppLogger.i(TAG, "Online song Premature EOF detected, advancing to next song gracefully: ${cur.title}")
+                            backendStateControlCoordinator.onStateChanged(
+                                PlayerBackendStateControlCoordinator.BackendState.COMPLETED
+                            )
+                            return@launch
+                        } else {
+                            // 本地曲目异常早熟，同步状态为 PAUSED 停止，彻底防止 UI 按钮死锁在 PLAYING
+                            AppLogger.w(TAG, "Premature COMPLETED for local track, forcing PAUSED: ${cur.title}")
+                            _playState.value = PlayState.PAUSED
+                            return@launch
+                        }
                     }
                 }
                 if (state == FfmpegAudioPlayer.State.ERROR) {
@@ -1872,8 +1895,11 @@ class PlayerController private constructor(context: Context) {
                     }
                     val cur = _currentSong.value
                     if (cur != null && com.rawsmusic.core.common.model.isOnlineSongKey(cur.path)) {
-                        AppLogger.w(TAG, "Ignoring backend ERROR while online song is resolving/preparing: ${cur.title}")
-                        return@launch
+                        // 仅在 PREPARING 准备阶段允许短暂容错第三方源解析；一旦在正常播放中途发生 ERROR，严禁吞掉事件
+                        if (_playState.value == PlayState.PREPARING && elapsedSinceSwitch < 4_000L) {
+                            AppLogger.w(TAG, "Ignoring transient backend ERROR while online song is resolving/preparing: ${cur.title}")
+                            return@launch
+                        }
                     }
                 }
                 backendStateControlCoordinator.onStateChanged(currentBackendState.toBackendControlState())

@@ -43,7 +43,7 @@ object OnlineAudioFileCache {
     const val MAX_CACHE_BYTES = 1_024L * 1_024L * 1_024L
     const val MAX_SINGLE_FILE_BYTES = 768L * 1_024L * 1_024L
     const val RESERVED_FREE_BYTES = 96L * 1_024L * 1_024L
-    const val MIN_VALID_BYTES = 4L * 1_024L
+    const val MIN_VALID_BYTES = 128L * 1_024L
     const val CONNECT_TIMEOUT_MS = 12_000
     const val READ_TIMEOUT_MS = 30_000
     const val MAX_REDIRECTS = 6
@@ -80,9 +80,12 @@ object OnlineAudioFileCache {
             val files = cacheDir.listFiles { _, name -> name.startsWith("$cacheKey.") && !name.endsWith(".part") }
             if (files != null && files.isNotEmpty()) {
                 val validFile = files.firstOrNull { file ->
-                    file.isFile &&
-                        file.length() >= MIN_VALID_BYTES &&
-                        now - file.lastModified() in 0..CACHE_TTL_MS
+                    if (file.isFile && file.length() < MIN_VALID_BYTES) {
+                        file.delete()
+                        false
+                    } else {
+                        file.isFile && now - file.lastModified() in 0..CACHE_TTL_MS
+                    }
                 }
                 if (validFile != null) {
                     validFile.setLastModified(now)
@@ -275,6 +278,11 @@ object OnlineAudioFileCache {
                         }
                         output.flush()
                     }
+                }
+                if (totalBytes > 0L && downloaded < totalBytes) {
+                    throw java.io.IOException(
+                        "在线播放音频下载不完整 (Premature EOF): downloaded=$downloaded, expected=$totalBytes"
+                    )
                 }
                 onProgress(100, downloaded, if (totalBytes > 0L) totalBytes else downloaded)
                 AppLogger.i(
