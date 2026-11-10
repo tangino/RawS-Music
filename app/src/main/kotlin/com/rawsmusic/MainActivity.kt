@@ -1827,6 +1827,12 @@ class MainActivity : ComponentActivity() {
                 relativeSongs = carouselRelativeSongs,
             )
         }
+        androidx.compose.runtime.LaunchedEffect(canonicalCurrentSong) {
+            val song = canonicalCurrentSong
+            if (song != null && miniPlayerCoordinator.currentSong != song) {
+                miniPlayerCoordinator.updateSong(song)
+            }
+        }
         // 监听扫描状态（首次运行不再自动弹文件夹选择器，直接进入歌曲列表触发 MediaStore 扫描）
         val scanStatus by com.rawsmusic.module.scanner.ScanStateBus.status.collectAsState()
         androidx.compose.runtime.LaunchedEffect(scanStatus.state, scanStatus.timeMs, scanStatus.progress) {
@@ -2295,14 +2301,15 @@ class MainActivity : ComponentActivity() {
             songs = songs,
             currentPlayingIndex = currentPlayingIndex,
             currentSong = canonicalCurrentSong,
-            miniPlayerSong = miniPlayerCoordinator.currentSong ?: canonicalCurrentSong,
+            miniPlayerSong = canonicalCurrentSong ?: miniPlayerCoordinator.currentSong,
             queueSongs = playbackQueue.songs,
             queueCurrentIndex = playbackQueue.currentIndex,
             homeCarouselSongs = playbackQueue.songs.ifEmpty { listOfNotNull(canonicalCurrentSong) },
             homeCarouselCurrentIndex = playbackQueue.currentIndex.takeIf { it in playbackQueue.songs.indices }
                 ?: if (canonicalCurrentSong != null) 0 else -1,
-            miniPlayerTitle = miniPlayerCoordinator.title,
-            miniPlayerArtist = miniPlayerCoordinator.artist,
+            miniPlayerTitle = canonicalCurrentSong?.title?.ifBlank { miniPlayerCoordinator.title }
+                ?: miniPlayerCoordinator.title.ifBlank { getString(R.string.no_music_playing) },
+            miniPlayerArtist = canonicalCurrentSong?.artist ?: miniPlayerCoordinator.artist,
             miniPlayerLyric = lyricsCoordinator.currentLyricText,
             miniPlayerLyricTranslation = lyricsCoordinator.currentLyricTranslation,
             lyricSong = lyricsCoordinator.lyricSong,
@@ -2313,7 +2320,8 @@ class MainActivity : ComponentActivity() {
             playbackPositionMs = playbackPositionMs,
             playbackDurationMs = playbackDurationMs,
             nextSongTitle = nextSongTitle,
-            miniPlayerCoverPath = miniPlayerCoordinator.coverPath,
+            miniPlayerCoverPath = canonicalCurrentSong?.let { resolveSongCoverForCompose(it) }?.takeIf { it.isNotBlank() }
+                ?: miniPlayerCoordinator.coverPath,
             playerReturnRevealIndex = playerReturnRevealIndex,
             // List artwork remains ordinary MAIN content throughout collapse. PLAYER -> MAIN
             // is already hard-wired to the MiniPlayer endpoint, so hiding the current list cover

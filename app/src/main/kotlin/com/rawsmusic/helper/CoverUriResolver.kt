@@ -105,6 +105,21 @@ class CoverUriResolver(
             return albumArtPath
         }
 
+        val isOnlineTrack = com.rawsmusic.core.common.model.isOnlineAudioPath(song.path) ||
+            com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
+            song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+
+        if (isOnlineTrack && song.title.isNotBlank()) {
+            val cachedOnline = com.rawsmusic.module.online.sync.OnlineArtworkResolver.getCachedArtworkUrl(song.title, song.artist)
+            if (!cachedOnline.isNullOrBlank() &&
+                !com.rawsmusic.core.ui.widget.bitmaps.RemoteArtworkDownloader.isPlaceholderUrl(cachedOnline)
+            ) {
+                coverKeyCache[cacheKey] = cachedOnline
+                return cachedOnline
+            }
+            com.rawsmusic.module.online.sync.OnlineArtworkResolver.requestArtworkResolution(song.title, song.artist, song.path)
+        }
+
         return ""
     }
 

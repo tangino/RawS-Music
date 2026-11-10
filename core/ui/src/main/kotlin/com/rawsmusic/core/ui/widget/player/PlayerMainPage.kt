@@ -2,6 +2,7 @@ package com.rawsmusic.core.ui.widget.player
 
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.rawsmusic.core.ui.widget.bitmaps.DefaultAlbumArtwork
 
 import android.graphics.Bitmap
 import androidx.annotation.DrawableRes
@@ -1193,7 +1194,7 @@ private fun AlbumArtCard(
     // current wrapper, the player endpoint must stay mounted too.
     val hasRetainedArtwork = visibleArtworkBitmap != null ||
         artworkTransitionState.foregroundCurrentKey().isNotBlank()
-    val hasArtworkVisual = hasCover || hasRetainedArtwork || !videoCoverUri.isNullOrBlank()
+    val hasArtworkVisual = hasCover || hasRetainedArtwork || !videoCoverUri.isNullOrBlank() || currentSong != null
     val playbackHolderScale by animateFloatAsState(
         targetValue = if (hasArtworkVisual && !artworkPlaybackActive) {
             STANDARD_PLAYER_ARTWORK_PAUSED_HOLDER_SCALE
@@ -1613,6 +1614,20 @@ private fun AlbumArtCard(
                         scaleY = playbackHolderScale
                     }
             ) {
+            if (currentSong != null && visibleArtworkBitmap == null) {
+                DefaultAlbumArtwork(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(STANDARD_PLAYER_ARTWORK_CONTENT_INSET_DP.dp)
+                        .graphicsLayer {
+                            scaleX = STANDARD_PLAYER_ARTWORK_CONTENT_SCALE
+                            scaleY = STANDARD_PLAYER_ARTWORK_CONTENT_SCALE
+                            alpha = artworkAlpha
+                        }
+                        .clip(RoundedCornerShape(artworkCornerRadiusDp.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            }
             AlbumArtworkSpectrumOverlay(
                 spectrum = resolvedAudioSpectrum,
                 visible = behindVisible,

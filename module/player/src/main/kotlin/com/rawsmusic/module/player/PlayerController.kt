@@ -1975,9 +1975,9 @@ class PlayerController private constructor(context: Context) {
                         }
                     }
 
-                    val songs: List<AudioFile>
-                    val newIndex: Int
-                    val song: AudioFile
+                    var songs: List<AudioFile>
+                    var newIndex: Int
+                    var song: AudioFile
                     val rendererDeferred = deferred?.takeIf {
                         rendererSourceMatches(it.song.path, newPath)
                     }
@@ -2031,9 +2031,9 @@ class PlayerController private constructor(context: Context) {
                                     if (idx >= 0) songs else songs + onlineFallbackSong
                                 } else listOf(onlineFallbackSong)
                                 val fallbackIndex = fallbackQueue.indexOfFirst { samePlaybackItem(it, onlineFallbackSong) }.coerceAtLeast(0)
-                                _queue.value = PlayQueue(songs = fallbackQueue, currentIndex = fallbackIndex)
-                                _currentSong.value = onlineFallbackSong
-                                return@withLock
+                                songs = fallbackQueue
+                                newIndex = fallbackIndex
+                                song = onlineFallbackSong
                             } else {
                                 AppLogger.w(TAG, "TRACK_STARTED renderer item missing from queue path=$newPath")
                                 return@withLock
@@ -5912,6 +5912,16 @@ class PlayerController private constructor(context: Context) {
      * carry the online encoding marker, so even an all-online imported playlist remains a local
      * playlist and may use the local-file fast path.
      */
+    private fun isLocalPhysicalSourceAvailable(path: String): Boolean {
+        if (path.isBlank()) return false
+        if (path.startsWith("content://", ignoreCase = true)) {
+            return runCatching {
+                context.contentResolver.openFileDescriptor(android.net.Uri.parse(path), "r")?.use { true } ?: false
+            }.getOrDefault(false)
+        }
+        return java.io.File(path).exists()
+    }
+
     private fun isPureOnlineQueue(songs: List<AudioFile>): Boolean =
         songs.isNotEmpty() &&
             songs.all { com.rawsmusic.core.common.model.isOnlineSongKey(it.path) } &&
@@ -6221,7 +6231,7 @@ class PlayerController private constructor(context: Context) {
             !playbackPath.startsWith("http://", ignoreCase = true) &&
             !playbackPath.startsWith("https://", ignoreCase = true) &&
             !playbackPath.startsWith("online://", ignoreCase = true) &&
-            java.io.File(playbackPath).exists()
+            isLocalPhysicalSourceAvailable(playbackPath)
         if (isPhysicalLocalPlayback) {
             MusicSourcePlaybackController.resetForLocalPlayback()
         }
@@ -6285,12 +6295,14 @@ class PlayerController private constructor(context: Context) {
 
         val isOnlineTrack = com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
             song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+        val isPhysicalSourceAvailable = isLocalPhysicalSourceAvailable(playbackPath)
         val playbackIsRemoteUrl = !isPhysicalLocalPlayback && (playbackPath.startsWith("http://") || playbackPath.startsWith("https://") || isOnlineTrack)
         val semanticIsRemoteUrl = !isPhysicalLocalPlayback && (song.path.startsWith("http://") || song.path.startsWith("https://") || isOnlineTrack)
-        if (playbackPath.isBlank() || (!playbackIsRemoteUrl && !java.io.File(playbackPath).exists())) {
-            // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频或跨设备迁移）：
-            // 具备混合歌单特征：不直接静默跳过导致旧歌曲卡住播放，立即停止旧播放并平滑降级为在线全网寻源试听
-            if (song.title.isNotBlank()) {
+        if (playbackPath.isBlank() || (!playbackIsRemoteUrl && !isPhysicalSourceAvailable)) {
+            // 只有当歌曲原本就是在线网络曲（如在线收藏歌单中的虚拟条目或远程流），
+            // 在本地没有缓存物理文件时，才允许降级为在线全网寻源试听。
+            // 严禁将纯本地曲目（!isOnlineTrack）静默篡改为 online:// 去消耗流量网络寻源！
+            if (isOnlineTrack && song.title.isNotBlank()) {
                 AppLogger.i(TAG, "playInternal: local file not found at '$playbackPath', smoothly falling back to online streaming for '${song.title}'")
                 ffmpegPlayer.stop()
                 MusicSourcePlaybackController.stop()
@@ -6322,6 +6334,7 @@ class PlayerController private constructor(context: Context) {
                 queue = queue,
                 index = index,
             )
+            com.rawsmusic.core.common.ui.AppNoticeBus.error("本地文件不存在：${song.title.ifBlank { song.path }}")
             if (
                 unavailableResult ==
                 PlayerBackendStateControlCoordinator.UnavailableSourceResult.STOPPED_FAILURE_FUSE

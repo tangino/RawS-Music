@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -58,7 +59,10 @@ import com.rawsmusic.core.ui.widget.virtuallist.rememberComposeVirtualListState
 import com.rawsmusic.core.ui.widget.virtuallist.stableVirtualListHash64
 import com.rawsmusic.core.ui.widget.virtuallist.retainedMappedList
 import com.rawsmusic.module.data.prefs.CollectionSortPreferences
+import com.rawsmusic.module.data.repository.MusicRepository
 import com.rawsmusic.module.data.repository.sourceFolderDirectory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
@@ -90,6 +94,11 @@ fun FoldersPage(
         key1 = songs,
     ) {
         value = LibrarySceneGroupingWarmup.loadFolders(songs)
+    }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            MusicRepository.purgeMissingLocalFilesSuspend()
+        }
     }
     var sortOrder by remember {
         mutableStateOf(
@@ -299,9 +308,25 @@ internal data class FolderGroupUi(
 internal fun List<AudioFile>.toFolderGroups(): List<FolderGroupUi> {
     return asSequence()
         .filter { it.path.isNotBlank() }
+        .filter { song ->
+            val p = song.path
+            if (p.startsWith("content://", ignoreCase = true) ||
+                p.startsWith("http://", ignoreCase = true) ||
+                p.startsWith("https://", ignoreCase = true) ||
+                p.startsWith("online://", ignoreCase = true)
+            ) {
+                true
+            } else {
+                java.io.File(p).exists()
+            }
+        }
         .groupBy { song -> sourceFolderDirectory(song.path) }
         .filterKeys { it.isNotBlank() }
-        .map { (folderPath, folderSongs) ->
+        .mapNotNull { (folderPath, folderSongs) ->
+            if (folderSongs.isEmpty()) return@mapNotNull null
+            if (folderPath.startsWith("/") && !folderPath.contains(":") && !java.io.File(folderPath).exists()) {
+                return@mapNotNull null
+            }
             val folder = File(folderPath)
             val orderedSongs = folderSongs.sortedWith(
                 compareBy<AudioFile> { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }

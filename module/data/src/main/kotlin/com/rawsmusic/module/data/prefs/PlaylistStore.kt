@@ -522,7 +522,11 @@ class PlaylistStore private constructor(private val context: Context) {
             } else {
                 val matched = byIdentity[stored.key]
                     ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
-                    ?: stored.toAudioFile().takeIf { File(it.path).exists() }
+                    ?: stored.toAudioFile().takeIf {
+                        val p = it.path
+                        if (p.startsWith("content://", ignoreCase = true)) true
+                        else File(p).exists()
+                    }
                     ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
                 if (matched != null) {
                     // 若本地物理文件存在但无内嵌封面，尝试利用在线缓存或在线寻源补齐封面
@@ -540,9 +544,8 @@ class PlaylistStore private constructor(private val context: Context) {
                         matched
                     }
                 } else {
-                    // 本地物理音频文件在当前设备不存在（例如云同步还原后尚未下载本地音频）：
-                    // 具备混合歌单特征：不丢弃歌曲条目，平滑降级为可在线寻源试听的网络虚拟歌曲（保留完整元数据）
-                    val virtualId = if (stored.id > 0) stored.id.toString() else "${stored.title}_${stored.artist}".hashCode().toString()
+                    // 本地歌曲未在曲库中精确索引（例如正在重新扫描中或路径调整）：
+                    // 必须保留其原有的本地音频身份，绝不能篡改成 online:// 强行联网寻源！
                     val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                     val cleanedArtPath = stored.albumArtPath.takeIf {
                         it.startsWith("http://", true) || it.startsWith("https://", true)
@@ -554,7 +557,6 @@ class PlaylistStore private constructor(private val context: Context) {
                     }
 
                     stored.toAudioFile().copy(
-                        path = "online://netease/$virtualId",
                         albumArtPath = cleanedArtPath
                     )
                 }

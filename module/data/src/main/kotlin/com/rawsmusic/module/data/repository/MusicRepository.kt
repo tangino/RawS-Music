@@ -759,6 +759,26 @@ object MusicRepository {
         }
     }
 
+    suspend fun purgeMissingLocalFilesSuspend(): Int {
+        val currentSongs = _songs.value
+        val missing = currentSongs.filter { song ->
+            val p = song.path
+            if (p.isBlank() || p.startsWith("content://", ignoreCase = true) ||
+                p.startsWith("http://", ignoreCase = true) || p.startsWith("https://", ignoreCase = true) ||
+                p.startsWith("online://", ignoreCase = true)
+            ) {
+                false
+            } else {
+                !java.io.File(p).exists()
+            }
+        }
+        if (missing.isNotEmpty()) {
+            AppLogger.i(TAG, "purgeMissingLocalFilesSuspend: purging ${missing.size} missing local tracks from database")
+            deleteSongsSuspend(missing, refreshLibrary = true)
+        }
+        return missing.size
+    }
+
     fun deleteSongFromDevice(context: android.content.Context, song: AudioFile): Boolean {
         var deleted = false
         if (song.id > 0) {
