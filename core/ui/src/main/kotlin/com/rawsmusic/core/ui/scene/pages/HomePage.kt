@@ -1017,8 +1017,13 @@ private fun HomeCardSlotRow(
                                     PlayedPlaylistManager.previousPlaylist.value
                                 }
                                 if (target == null) {
+                                    val noticeRes = if (card.scene == NavScene.CURRENT_PLAYLIST) {
+                                        R.string.no_current_playlist_notice
+                                    } else {
+                                        R.string.no_previous_playlist_notice
+                                    }
                                     AppNoticeBus.post(
-                                        context.getString(R.string.no_played_playlist_notice),
+                                        context.getString(noticeRes),
                                         AppNoticeIcon.PLAYLIST,
                                     )
                                 } else {
@@ -1336,7 +1341,13 @@ private fun LibraryTile(
             isPlayedScene -> {
                 playedInfo?.let {
                     if (it.trackCount > 0) "${it.name} · ${it.trackCount}" else it.name
-                } ?: stringResource(R.string.no_played_playlist_notice)
+                } ?: stringResource(
+                    if (scene == NavScene.CURRENT_PLAYLIST) {
+                        R.string.no_current_playlist_notice
+                    } else {
+                        R.string.no_previous_playlist_notice
+                    }
+                )
             }
             isHistoryScene -> {
                 if (historyList.isNotEmpty()) {

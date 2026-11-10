@@ -56,4 +56,6 @@
     <string name="nav_scene_current_playlist">Current Playlist</string>
     <string name="nav_scene_previous_playlist">Previous Playlist</string>
     <string name="no_played_playlist_notice">No playlist history available</string>
+    <string name="no_current_playlist_notice">No playlist currently playing</string>
+    <string name="no_previous_playlist_notice">No previous playlist record</string>
 </resources>

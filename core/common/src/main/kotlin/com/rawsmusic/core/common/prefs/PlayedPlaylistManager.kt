@@ -78,10 +78,6 @@ object PlayedPlaylistManager {
         if (current != null) {
             _previousPlaylist.value = current
             saveEntry(KEY_PREVIOUS, current)
-        } else if (_previousPlaylist.value?.id == id && _previousPlaylist.value?.isOnline == isOnline) {
-            // 如果原本没有当前播放歌单，但上次播放歌单恰好是该歌单，则将上次播放置空，避免双卡片重复
-            _previousPlaylist.value = null
-            saveEntry(KEY_PREVIOUS, null)
         }
         _currentPlaylist.value = newEntry
         saveEntry(KEY_CURRENT, newEntry)
