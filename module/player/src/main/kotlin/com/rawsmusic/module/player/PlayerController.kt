@@ -2023,10 +2023,24 @@ class PlayerController private constructor(context: Context) {
                         newIndex = requestedIndex.takeIf { it >= 0 }
                             ?: songs.indexOfFirst { rendererSourceMatches(it.path, newPath) }
                         if (newIndex < 0) {
-                            AppLogger.w(TAG, "TRACK_STARTED renderer item missing from queue path=$newPath")
-                            return@withLock
+                            val onlineFallbackSong = (latestRequested ?: _currentSong.value)
+                                ?.takeIf { com.rawsmusic.core.common.model.isOnlineSongKey(it.path) || rendererSourceMatches(it.path, newPath) }
+                            if (onlineFallbackSong != null) {
+                                val fallbackQueue = if (songs.isNotEmpty()) {
+                                    val idx = songs.indexOfFirst { samePlaybackItem(it, onlineFallbackSong) }
+                                    if (idx >= 0) songs else songs + onlineFallbackSong
+                                } else listOf(onlineFallbackSong)
+                                val fallbackIndex = fallbackQueue.indexOfFirst { samePlaybackItem(it, onlineFallbackSong) }.coerceAtLeast(0)
+                                _queue.value = PlayQueue(songs = fallbackQueue, currentIndex = fallbackIndex)
+                                _currentSong.value = onlineFallbackSong
+                                return@withLock
+                            } else {
+                                AppLogger.w(TAG, "TRACK_STARTED renderer item missing from queue path=$newPath")
+                                return@withLock
+                            }
+                        } else {
+                            song = songs[newIndex]
                         }
-                        song = songs[newIndex]
                     }
 
                     // One renderer-confirmed snapshot. StateFlow equality suppresses unchanged
@@ -5846,6 +5860,12 @@ class PlayerController private constructor(context: Context) {
         )
         _playbackSourceOverride.value = override
         _currentSong.value = song
+        if (queue.isNotEmpty()) {
+            _queue.value = PlayQueue(
+                songs = queue,
+                currentIndex = index.coerceIn(0, queue.lastIndex)
+            )
+        }
         smForceTransition(PlayState.PREPARING, "online_stream_resolved_start")
         play(song, queue, index)
     }
@@ -6009,7 +6029,11 @@ class PlayerController private constructor(context: Context) {
         }
         pausedSelectionPendingStart = false
         lastTrackSwitchAtMs = SystemClock.elapsedRealtime()
-        if (!deferPublicCommitToRenderer) pendingRendererUiCommit = null
+        if (!deferPublicCommitToRenderer) {
+            if (pendingRendererUiCommit?.let { samePlaybackItem(it.song, song) } != true) {
+                pendingRendererUiCommit = null
+            }
+        }
         try {
             com.rawsmusic.core.common.prefs.PlayHistoryManager.recordSong(song)
         } catch (_: Throwable) {}
