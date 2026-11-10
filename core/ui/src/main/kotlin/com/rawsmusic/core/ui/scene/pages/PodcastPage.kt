@@ -370,7 +370,7 @@ fun PodcastPage(
         ) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 32.dp, top = 6.dp, bottom = 6.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 40.dp, top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1489,7 +1489,7 @@ private fun SpotifyPodcastHomeContent(
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 40.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(recommendedVideos, key = { it.id }) { vShow ->
@@ -1529,7 +1529,7 @@ private fun SpotifyPodcastHomeContent(
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 40.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(uncompletedHistory, key = { it.episode.id }) { item ->
@@ -1563,7 +1563,7 @@ private fun SpotifyPodcastHomeContent(
 
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 32.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 40.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(featuredShows.take(10), key = { it.id }) { show ->
@@ -2104,7 +2104,7 @@ private fun PodcastVideoExploreContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 10.dp),
-            contentPadding = PaddingValues(end = 24.dp),
+            contentPadding = PaddingValues(end = 40.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
