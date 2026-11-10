@@ -151,24 +151,44 @@ internal fun DailyRecommendPage(
     val isWideScreen = configuration.screenWidthDp >= 600
     val listState = rememberLazyListState()
 
-    val activePlayingTitle = playbackSnapshot.currentItem?.title
+    // 核心规则：只能以每日推荐列表中当前播放的歌曲作为 Header 背景！
+    // 1. 严格检查当前发声播放的歌曲（从底层 snapshot 或 currentSong）是否真正属于当前每日推荐（dailyData.songs）列表；
+    // 2. 属于该列表时，Header 封面使用正在播放的该歌曲封面（随自动切歌或点击切歌动态更新）；
+    // 3. 不属于该列表时（或未播放），绝对不展示外部歌曲封面，仅使用每日推荐列表自身的首曲封面作为默认展示。
+    val snapshotItem = playbackSnapshot.currentItem
+    val playingRemoteId = snapshotItem?.remoteId?.takeIf { it.isNotBlank() }
+    val playingTitle = snapshotItem?.title?.takeIf { it.isNotBlank() }
+        ?: currentSong?.title?.takeIf { it.isNotBlank() }
+    val playingArtist = snapshotItem?.artists?.firstOrNull()?.takeIf { it.isNotBlank() }
+        ?: currentSong?.artist?.takeIf { it.isNotBlank() }
+
+    val matchedPlayingSongInList = if (!playingRemoteId.isNullOrBlank() || !playingTitle.isNullOrBlank()) {
+        dailyData.songs.firstOrNull { song ->
+            (playingRemoteId != null && (song.id == playingRemoteId || song.id.equals(playingRemoteId, ignoreCase = true))) ||
+            (playingTitle != null && song.title.equals(playingTitle, ignoreCase = true) &&
+                (playingArtist.isNullOrBlank() || song.artist.isBlank() || song.artist.equals(playingArtist, ignoreCase = true)))
+        }
+    } else null
+
+    val activePlayingTitle = matchedPlayingSongInList?.title
+
     val currentArtwork = remember(
+        matchedPlayingSongInList,
         currentCoverPath,
         currentSong,
-        playbackSnapshot.currentItem,
+        snapshotItem,
         dailyData.songs,
     ) {
-        val fromNavCover = currentCoverPath?.takeIf { it.isNotBlank() }
-        val fromNavSong = currentSong.resolvePlaybackArtworkKey()?.takeIf { it.isNotBlank() }
-        val snapshotItem = playbackSnapshot.currentItem
-        val fromSnapshot = snapshotItem?.artworkUrl?.takeIf { it.isNotBlank() }
-        val matchedInList = dailyData.songs.firstOrNull { it.id == snapshotItem?.remoteId || it.title.equals(snapshotItem?.title, ignoreCase = true) }
-        val fromListMatched = matchedInList?.coverUrl?.takeIf { it.isNotBlank() }
-        val fromFirstSong = if (activePlayingTitle.isNullOrBlank()) {
+        if (matchedPlayingSongInList != null) {
+            // 当前确实在播放每日推荐中的这首歌：优先高清 coverUrl，后备底栏或快照封面
+            matchedPlayingSongInList.coverUrl?.takeIf { it.isNotBlank() }
+                ?: currentCoverPath?.takeIf { it.isNotBlank() }
+                ?: currentSong.resolvePlaybackArtworkKey()?.takeIf { it.isNotBlank() }
+                ?: snapshotItem?.artworkUrl?.takeIf { it.isNotBlank() }
+        } else {
+            // 当前未播放每日推荐歌曲：严格禁止使用外部播放歌曲，只取每日推荐自身的首曲封面作为默认背景
             dailyData.songs.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
-        } else null
-
-        fromListMatched ?: fromNavCover ?: fromNavSong ?: fromSnapshot ?: fromFirstSong
+        }
     }
     val hasArtwork = currentArtwork != null
 

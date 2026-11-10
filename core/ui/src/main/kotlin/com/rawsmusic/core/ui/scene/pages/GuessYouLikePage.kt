@@ -177,31 +177,38 @@ internal fun GuessYouLikePage(
         }
     }
 
-    // 权威封面与当前播放曲目实时推导：
-    // 优先从底层真正发声播放的歌曲（currentSong / playbackSnapshot）获取歌名，并在当前推荐列表中匹配对应的 coverUrl。
-    // 无论自动切歌还是点击切歌，切到第 2 首或第 N 首时，Header 封面立即随之精准更新！
-    val activePlayingTitle = currentSong?.title?.takeIf { it.isNotBlank() }
-        ?: playbackSnapshot.currentItem?.title?.takeIf { it.isNotBlank() }
+    // 核心规则：只能以猜你喜欢列表中当前播放的歌曲作为 Header 背景！
+    // 1. 严格检查当前发声播放的歌曲（从底层 snapshot 或 currentSong）是否真正属于当前猜你喜欢（songs）列表；
+    // 2. 属于该列表时，Header 封面使用正在播放的该歌曲封面（随自动切歌或点击切歌动态更新）；
+    // 3. 不属于该列表时（或未播放），绝对不展示外部歌曲封面，仅使用猜你喜欢列表自身的首曲封面作为默认展示。
+    val snapshotItem = playbackSnapshot.currentItem
+    val playingRemoteId = snapshotItem?.remoteId?.takeIf { it.isNotBlank() }
+    val playingTitle = snapshotItem?.title?.takeIf { it.isNotBlank() }
+        ?: currentSong?.title?.takeIf { it.isNotBlank() }
+    val playingArtist = snapshotItem?.artists?.firstOrNull()?.takeIf { it.isNotBlank() }
+        ?: currentSong?.artist?.takeIf { it.isNotBlank() }
 
-    val currentArtwork = remember(currentSong, currentCoverPath, activePlayingTitle, playbackSnapshot.currentItem, songs) {
-        // 1. 核心：根据当前真正播放的歌名，从推荐列表精准匹配第 2 首或正在播放歌曲的原始高清 coverUrl
-        val fromListMatched = if (!activePlayingTitle.isNullOrBlank()) {
-            songs.firstOrNull { it.title.equals(activePlayingTitle, ignoreCase = true) }?.coverUrl?.takeIf { it.isNotBlank() }
-        } else null
+    val matchedPlayingSongInList = if (!playingRemoteId.isNullOrBlank() || !playingTitle.isNullOrBlank()) {
+        songs.firstOrNull { song ->
+            (playingRemoteId != null && (song.id == playingRemoteId || song.id.equals(playingRemoteId, ignoreCase = true))) ||
+            (playingTitle != null && song.title.equals(playingTitle, ignoreCase = true) &&
+                (playingArtist.isNullOrBlank() || song.artist.isBlank() || song.artist.equals(playingArtist, ignoreCase = true)))
+        }
+    } else null
 
-        // 2. 底层播放通道（迷你播放条 MiniPlayer）下发的实时有效封面路径
-        val fromNavCover = currentCoverPath?.takeIf { it.isNotBlank() }
-        val fromNavSong = currentSong.resolvePlaybackArtworkKey(null)?.takeIf { it.isNotBlank() }
+    val activePlayingTitle = matchedPlayingSongInList?.title
 
-        // 3. 在线快照中携带的 artworkUrl
-        val fromSnapshot = playbackSnapshot.currentItem?.artworkUrl?.takeIf { it.isNotBlank() }
-
-        // 4. 只有当没有歌曲在发声播放（播放器完全空闲）时，才取推荐列表首曲作为未起播默认背景
-        val fromFirstSong = if (activePlayingTitle.isNullOrBlank()) {
+    val currentArtwork = remember(matchedPlayingSongInList, currentCoverPath, currentSong, snapshotItem, songs) {
+        if (matchedPlayingSongInList != null) {
+            // 当前确实在播放猜你喜欢中的这首歌：优先高清 coverUrl，后备底栏或快照封面
+            matchedPlayingSongInList.coverUrl?.takeIf { it.isNotBlank() }
+                ?: currentCoverPath?.takeIf { it.isNotBlank() }
+                ?: currentSong.resolvePlaybackArtworkKey(null)?.takeIf { it.isNotBlank() }
+                ?: snapshotItem?.artworkUrl?.takeIf { it.isNotBlank() }
+        } else {
+            // 当前未播放猜你喜欢歌曲：严格禁止使用外部播放歌曲，只取猜你喜欢自身的首曲封面作为默认背景
             songs.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
-        } else null
-
-        fromListMatched ?: fromNavCover ?: fromNavSong ?: fromSnapshot ?: fromFirstSong
+        }
     }
     val hasArtwork = currentArtwork != null
     val configuration = LocalConfiguration.current
