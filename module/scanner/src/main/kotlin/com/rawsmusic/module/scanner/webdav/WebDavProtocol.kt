@@ -16,6 +16,45 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.xml.parsers.SAXParserFactory
 
 internal object WebDavUrlTools {
+    fun toSafeHttpUrl(url: String): HttpUrl? {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return null
+        trimmed.toHttpUrlOrNull()?.let { return it }
+        val withScheme = if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
+            "http://$trimmed"
+        } else trimmed
+        withScheme.toHttpUrlOrNull()?.let { return it }
+
+        return try {
+            val uri = java.net.URI(withScheme)
+            uri.toASCIIString().toHttpUrlOrNull()
+        } catch (_: Exception) {
+            try {
+                val schemeEnd = withScheme.indexOf("://")
+                if (schemeEnd > 0) {
+                    val scheme = withScheme.substring(0, schemeEnd)
+                    val rest = withScheme.substring(schemeEnd + 3)
+                    val slashIdx = rest.indexOf('/')
+                    if (slashIdx >= 0) {
+                        val hostPort = rest.substring(0, slashIdx)
+                        val rawPathAndQuery = rest.substring(slashIdx)
+                        val rawPath = rawPathAndQuery.substringBefore('?')
+                        val rawQuery = if (rawPathAndQuery.contains('?')) rawPathAndQuery.substringAfter('?') else null
+                        val encodedSegments = rawPath.split('/').joinToString("/") { seg ->
+                            if (seg.isEmpty()) "" else java.net.URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
+                        }
+                        val finalUrl = "$scheme://$hostPort$encodedSegments" + (rawQuery?.let { "?$it" } ?: "")
+                        finalUrl.toHttpUrlOrNull()
+                    } else {
+                        "$scheme://$rest".toHttpUrlOrNull()
+                    }
+                } else null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     fun normalizeCollectionUrl(value: String): String = normalize(value, directory = true)
 
     fun normalizeResourceUrl(value: String): String = normalize(value, directory = false)
@@ -26,7 +65,7 @@ internal object WebDavUrlTools {
         if (!raw.startsWith("http://", true) && !raw.startsWith("https://", true)) {
             raw = "http://$raw"
         }
-        val parsed = raw.toHttpUrlOrNull() ?: throw IllegalArgumentException("无效的 WebDAV 地址")
+        val parsed = toSafeHttpUrl(raw) ?: throw IllegalArgumentException("无效的 WebDAV 地址: $raw")
         val path = parsed.encodedPath.ifBlank { "/" }
         val normalizedPath = when {
             directory && !path.endsWith('/') -> "$path/"
@@ -37,18 +76,24 @@ internal object WebDavUrlTools {
     }
 
     fun resolveHref(baseUrl: String, href: String, directoryHint: Boolean? = null): String {
-        val base = normalizeCollectionUrl(baseUrl).toHttpUrlOrNull()
-            ?: throw IllegalArgumentException("无效的 WebDAV 基础地址")
+        val base = toSafeHttpUrl(normalizeCollectionUrl(baseUrl))
+            ?: throw IllegalArgumentException("无效的 WebDAV 基础地址: $baseUrl")
         val candidate = href.trim().replace(" ", "%20")
-        val resolved = candidate.toHttpUrlOrNull() ?: base.resolve(candidate)
+        val resolved = toSafeHttpUrl(candidate) ?: base.resolve(candidate)
+            ?: run {
+                val encodedCandidate = candidate.split('/').joinToString("/") { seg ->
+                    if (seg.isEmpty()) "" else java.net.URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
+                }
+                base.resolve(encodedCandidate)
+            }
             ?: throw IllegalArgumentException("服务器返回了无效 href: $href")
         val directory = directoryHint ?: resolved.encodedPath.endsWith('/')
         return normalize(resolved.toString(), directory)
     }
 
     fun resolveChild(baseUrl: String, child: String, directory: Boolean): String {
-        val base = normalizeCollectionUrl(baseUrl).toHttpUrlOrNull()
-            ?: throw IllegalArgumentException("无效的 WebDAV 基础地址")
+        val base = toSafeHttpUrl(normalizeCollectionUrl(baseUrl))
+            ?: throw IllegalArgumentException("无效的 WebDAV 基础地址: $baseUrl")
         val clean = child.trim().trim('/')
         val builder = base.newBuilder()
         if (clean.isNotEmpty()) builder.addPathSegments(clean)
@@ -58,8 +103,8 @@ internal object WebDavUrlTools {
     }
 
     fun parentWithinRoot(rootUrl: String, currentUrl: String): String? {
-        val root = normalizeCollectionUrl(rootUrl).toHttpUrlOrNull() ?: return null
-        val current = normalizeCollectionUrl(currentUrl).toHttpUrlOrNull() ?: return null
+        val root = toSafeHttpUrl(normalizeCollectionUrl(rootUrl)) ?: return null
+        val current = toSafeHttpUrl(normalizeCollectionUrl(currentUrl)) ?: return null
         if (!sameOrigin(root, current)) return null
         val rootPath = root.encodedPath.ensureDirectoryPath()
         val currentPath = current.encodedPath.ensureDirectoryPath()
@@ -73,7 +118,7 @@ internal object WebDavUrlTools {
     }
 
     fun identity(url: String): String {
-        val parsed = url.toHttpUrlOrNull() ?: return url.trimEnd('/')
+        val parsed = toSafeHttpUrl(url) ?: return url.trimEnd('/')
         return buildString {
             append(parsed.scheme.lowercase(Locale.ROOT))
             append("://")
@@ -91,8 +136,8 @@ internal object WebDavUrlTools {
      * allowed, but HTTPS -> HTTP downgrade and cross-host absolute hrefs never inherit secrets.
      */
     fun isCredentialSafeTarget(configUrl: String, targetUrl: String): Boolean {
-        val configured = normalizeCollectionUrl(configUrl).toHttpUrlOrNull() ?: return false
-        val target = targetUrl.toHttpUrlOrNull() ?: return false
+        val configured = toSafeHttpUrl(normalizeCollectionUrl(configUrl)) ?: return false
+        val target = toSafeHttpUrl(targetUrl) ?: return false
         if (!configured.host.equals(target.host, true)) return false
         if (configured.scheme.equals("https", true) && !target.scheme.equals("https", true)) return false
         if (configured.scheme.equals(target.scheme, true)) return configured.port == target.port
@@ -104,15 +149,18 @@ internal object WebDavUrlTools {
 
     fun isWithinConfiguredRoot(configUrl: String, targetUrl: String): Boolean {
         if (!isCredentialSafeTarget(configUrl, targetUrl)) return false
-        val configured = normalizeCollectionUrl(configUrl).toHttpUrlOrNull() ?: return false
-        val target = targetUrl.toHttpUrlOrNull() ?: return false
+        val configured = toSafeHttpUrl(normalizeCollectionUrl(configUrl)) ?: return false
+        val target = toSafeHttpUrl(targetUrl) ?: return false
         val rootPath = configured.encodedPath.ensureDirectoryPath()
         val targetPath = target.encodedPath
-        return targetPath == rootPath.trimEnd('/') || targetPath.startsWith(rootPath)
+        val rootDecoded = runCatching { java.net.URLDecoder.decode(rootPath, "UTF-8") }.getOrDefault(rootPath).ensureDirectoryPath()
+        val targetDecoded = runCatching { java.net.URLDecoder.decode(targetPath, "UTF-8") }.getOrDefault(targetPath)
+        return targetPath == rootPath.trimEnd('/') || targetPath.startsWith(rootPath) ||
+            targetDecoded == rootDecoded.trimEnd('/') || targetDecoded.startsWith(rootDecoded)
     }
 
     fun stripUserInfo(url: String): String {
-        val parsed = url.toHttpUrlOrNull() ?: return url
+        val parsed = toSafeHttpUrl(url) ?: return url
         if (parsed.username.isEmpty() && parsed.password.isEmpty()) return parsed.toString()
         return parsed.newBuilder().username("").password("").build().toString()
     }

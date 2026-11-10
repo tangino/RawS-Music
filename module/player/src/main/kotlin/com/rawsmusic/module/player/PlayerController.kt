@@ -6033,6 +6033,9 @@ class PlayerController private constructor(context: Context) {
         index: Int = 0,
         deferPublicCommitToRenderer: Boolean = false,
     ) {
+        if (song.path.startsWith("http://", true) || song.path.startsWith("https://", true)) {
+            com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.registerIfConfigured(song.path)
+        }
         if (song.format.equals("SACD-ISO", true)) {
             com.rawsmusic.core.common.sacd.SacdIsoSourceRegistry.register(song.path,
                 if (song.channelCount > 2) 1 else 0)

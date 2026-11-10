@@ -2246,30 +2246,162 @@ object AppPreferences {
             set(value) { kv.encode("platform_auth_last_qr_login_at", value) }
     }
 
+    data class WebDavDirectory(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        val name: String = "",
+        val url: String = "",
+        val username: String = "",
+        val password: String = "",
+        val authMode: Int = 0,
+        val extraHeadersText: String = "",
+        val lastUrl: String = "",
+    )
+
     object WebDav {
+        private const val KEY_DIRECTORIES = "webdav_directories_json"
+        private const val KEY_ACTIVE_DIR_ID = "webdav_active_dir_id"
+
+        var activeDirectoryId: String
+            get() = kv.decodeString(KEY_ACTIVE_DIR_ID, "") ?: ""
+            set(value) { kv.encode(KEY_ACTIVE_DIR_ID, value) }
+
+        fun getDirectories(): List<WebDavDirectory> {
+            val json = kv.decodeString(KEY_DIRECTORIES, "") ?: ""
+            if (json.isNotBlank()) {
+                val parsed = runCatching {
+                    val type = object : TypeToken<List<WebDavDirectory>>() {}.type
+                    gson.fromJson<List<WebDavDirectory>>(json, type)
+                }.getOrNull()
+                if (!parsed.isNullOrEmpty()) return parsed
+            }
+            // 首次迁移：如果旧配置有 url，自动生成一个默认目录
+            val legacyUrl = kv.decodeString("webdav_url", "") ?: ""
+            if (legacyUrl.isNotBlank()) {
+                val defaultDir = WebDavDirectory(
+                    name = "默认目录",
+                    url = legacyUrl,
+                    username = kv.decodeString("webdav_username", "") ?: "",
+                    password = kv.decodeString("webdav_password", "") ?: "",
+                    authMode = kv.decodeInt("webdav_auth_mode", 0),
+                    extraHeadersText = kv.decodeString("webdav_extra_headers", "") ?: "",
+                    lastUrl = kv.decodeString("webdav_last_url", "") ?: "",
+                )
+                saveDirectories(listOf(defaultDir))
+                activeDirectoryId = defaultDir.id
+                return listOf(defaultDir)
+            }
+            return emptyList()
+        }
+
+        fun saveDirectories(list: List<WebDavDirectory>) {
+            kv.encode(KEY_DIRECTORIES, gson.toJson(list))
+        }
+
+        fun getActiveDirectory(): WebDavDirectory? {
+            val list = getDirectories()
+            if (list.isEmpty()) return null
+            val activeId = activeDirectoryId
+            return list.firstOrNull { it.id == activeId } ?: list.first()
+        }
+
+        fun setActiveDirectory(id: String) {
+            val list = getDirectories()
+            val target = list.firstOrNull { it.id == id } ?: return
+            activeDirectoryId = target.id
+            // 同步旧键值以向下兼容
+            kv.encode("webdav_url", target.url)
+            kv.encode("webdav_username", target.username)
+            kv.encode("webdav_password", target.password)
+            kv.encode("webdav_auth_mode", target.authMode)
+            kv.encode("webdav_extra_headers", target.extraHeadersText)
+            kv.encode("webdav_last_url", target.lastUrl)
+        }
+
+        fun addOrUpdateDirectory(dir: WebDavDirectory) {
+            val list = getDirectories().toMutableList()
+            val idx = list.indexOfFirst { it.id == dir.id }
+            if (idx >= 0) {
+                list[idx] = dir
+            } else {
+                list.add(dir)
+            }
+            saveDirectories(list)
+            if (activeDirectoryId.isBlank() || activeDirectoryId == dir.id) {
+                setActiveDirectory(dir.id)
+            }
+        }
+
+        fun removeDirectory(id: String) {
+            val list = getDirectories().toMutableList()
+            list.removeAll { it.id == id }
+            saveDirectories(list)
+            if (activeDirectoryId == id) {
+                val next = list.firstOrNull()
+                if (next != null) {
+                    setActiveDirectory(next.id)
+                } else {
+                    activeDirectoryId = ""
+                    kv.encode("webdav_url", "")
+                    kv.encode("webdav_username", "")
+                    kv.encode("webdav_password", "")
+                    kv.encode("webdav_last_url", "")
+                }
+            }
+        }
+
         var url: String
             get() = kv.decodeString("webdav_url", "") ?: ""
-            set(value) { kv.encode("webdav_url", value) }
+            set(value) {
+                kv.encode("webdav_url", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(url = value))
+                }
+            }
 
         var username: String
             get() = kv.decodeString("webdav_username", "") ?: ""
-            set(value) { kv.encode("webdav_username", value) }
+            set(value) {
+                kv.encode("webdav_username", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(username = value))
+                }
+            }
 
         var password: String
             get() = kv.decodeString("webdav_password", "") ?: ""
-            set(value) { kv.encode("webdav_password", value) }
+            set(value) {
+                kv.encode("webdav_password", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(password = value))
+                }
+            }
 
         var lastUrl: String
             get() = kv.decodeString("webdav_last_url", "") ?: ""
-            set(value) { kv.encode("webdav_last_url", value) }
+            set(value) {
+                kv.encode("webdav_last_url", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(lastUrl = value))
+                }
+            }
 
         var authMode: Int
             get() = kv.decodeInt("webdav_auth_mode", 0)
-            set(value) { kv.encode("webdav_auth_mode", value) }
+            set(value) {
+                kv.encode("webdav_auth_mode", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(authMode = value))
+                }
+            }
 
         var extraHeadersText: String
             get() = kv.decodeString("webdav_extra_headers", "") ?: ""
-            set(value) { kv.encode("webdav_extra_headers", value) }
+            set(value) {
+                kv.encode("webdav_extra_headers", value)
+                getActiveDirectory()?.let { active ->
+                    addOrUpdateDirectory(active.copy(extraHeadersText = value))
+                }
+            }
     }
 
     object Source {
