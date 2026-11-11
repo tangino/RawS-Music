@@ -1860,11 +1860,20 @@ class QQMusicSource(
                 if (authst.isNotBlank()) put("authst", authst)
             }
 
+            val extObj = JSONObject().apply {
+                put("has_login", if (cleanUin.isNotBlank() && cleanUin != "0") "1" else "0")
+                put("is_20_style", "1")
+                put("nopack_people", "1")
+            }
+
             val feedParam = JSONObject().apply {
                 put("direction", refreshSeed % 2)
+                put("x_page_type", 1)
+                put("s_num", 0)
                 put("client_time", System.currentTimeMillis() / 1000)
                 put("has_login", if (cleanUin.isNotBlank() && cleanUin != "0") 1 else 0)
                 put("is_20_style", 1)
+                put("ext", extObj)
             }
 
             val recomFeedReq = JSONObject().apply {
@@ -1883,12 +1892,15 @@ class QQMusicSource(
             val vShelf = feedData?.optJSONArray("v_shelf") ?: feedData?.optJSONArray("Shelfs")
 
             if (vShelf != null && vShelf.length() > 0) {
-                val feedPlaylists = mutableListOf<OnlinePlaylist>()
+                // 按货架（Shelf）维度分类收集歌单，用于后续执行跨货架多样性轮询采样
+                val shelfBuckets = linkedMapOf<String, MutableList<OnlinePlaylist>>()
+
                 for (s in 0 until vShelf.length()) {
                     val shelfObj = vShelf.optJSONObject(s) ?: continue
                     val shelfTitle = shelfObj.optString("title_content").ifBlank {
-                        shelfObj.optString("title_template").ifBlank { "专属私荐" }
+                        shelfObj.optString("title_template").ifBlank { "专属私荐 ${s + 1}" }
                     }
+                    val currentShelfList = shelfBuckets.getOrPut(shelfTitle) { mutableListOf() }
 
                     // 收集该 Shelf 下的所有卡片
                     val cards = mutableListOf<JSONObject>()
@@ -1912,25 +1924,49 @@ class QQMusicSource(
                     }
 
                     for (card in cards) {
-                        // 提取歌单唯一 ID
-                        val dissId = card.optString("id").ifBlank {
+                        // 1. 提取歌单唯一 ID
+                        var dissId = card.optString("id").ifBlank {
                             card.optString("jumpID").ifBlank {
                                 card.optString("subid").ifBlank {
                                     card.optLong("id").takeIf { it > 0 }?.toString().orEmpty()
                                 }
                             }
                         }
-                        // 过滤非数字歌单 ID（例如跳转 webview 或纯活动 banner 的非歌单卡片）
+
+                        // 2. 增强容错：若未直接给出数字 ID，尝试从 scheme、jump_url 或 url 中提取
+                        if (dissId.isBlank() || !dissId.all { it.isDigit() }) {
+                            val candidateStr = card.optString("scheme").ifBlank {
+                                card.optString("jump_url").ifBlank {
+                                    card.optString("url")
+                                }
+                            }
+                            val matched = Regex("""(?:id|dissid|disstid|tid)=(\d+)""").find(candidateStr)?.groupValues?.get(1)
+                            if (!matched.isNullOrBlank()) {
+                                dissId = matched
+                            }
+                        }
+
+                        // 过滤非歌单或非法 ID
                         if (dissId.isBlank() || dissId == "0" || !dissId.all { it.isDigit() }) continue
 
                         val title = card.optString("title")
                         if (title.isBlank()) continue
 
-                        val cover = formatQQImg(card.optString("cover"))
-                        val playCount = card.optLong("cnt", card.optLong("count", 0L))
                         val subTitle = card.optString("subtitle").ifBlank {
                             card.optString("subTitle").ifBlank { shelfTitle }
                         }
+
+                        // 明确过滤“每日30首”等日推单曲集（按标题、描述及官方类型 510/500/10002 排除）
+                        val textForDaily = "$title $subTitle".lowercase()
+                        val isDaily30 = listOf("每日30首", "每日三十首", "今日私享30首", "今日私享 30 首", "每日推荐30首", "今日30首").any { it in textForDaily } ||
+                                card.optInt("subType") == 510 ||
+                                card.optInt("type") == 500 ||
+                                card.optString("cardid") == "10002" ||
+                                card.optJSONObject("extra_info")?.optString("cardid") == "10002"
+                        if (isDaily30) continue
+
+                        val cover = formatQQImg(card.optString("cover"))
+                        val playCount = card.optLong("cnt", card.optLong("count", 0L))
 
                         // 创建者
                         var creator = ""
@@ -1939,7 +1975,7 @@ class QQMusicSource(
                             creator = users.optJSONObject(0)?.optString("name").orEmpty()
                         }
 
-                        feedPlaylists.add(
+                        currentShelfList.add(
                             OnlinePlaylist(
                                 id = dissId,
                                 platform = OnlinePlatform.QQ,
@@ -1955,17 +1991,43 @@ class QQMusicSource(
                     }
                 }
 
-                if (feedPlaylists.isNotEmpty()) {
-                    val batchSize = 6
-                    val distinctPlaylists = feedPlaylists.distinctBy { it.id }
-                    val total = distinctPlaylists.size
-                    val startIndex = (refreshSeed * batchSize) % total
-                    for (i in 0 until minOf(batchSize, total)) {
-                        result.add(distinctPlaylists[(startIndex + i) % total])
+                // 跨货架轮询交织采样算法（Round-Robin Shelf Interleaving）
+                // 100% 忠实呈现官方推荐引擎为该用户计算出的各个专属货架，绝不掺杂公共分类池无关歌单
+                val diversified = mutableListOf<OnlinePlaylist>()
+                val existingIds = mutableSetOf<String>()
+                val maxItemsPerShelf = shelfBuckets.values.maxOfOrNull { it.size } ?: 0
+
+                for (round in 0 until maxItemsPerShelf) {
+                    for ((_, bucket) in shelfBuckets) {
+                        if (bucket.isEmpty()) continue
+                        val index = (round + refreshSeed) % bucket.size
+                        val candidate = bucket[index]
+                        if (existingIds.add(candidate.id)) {
+                            diversified.add(candidate)
+                            if (diversified.size >= 6) break
+                        }
                     }
+                    if (diversified.size >= 6) break
+                }
+
+                // 若交织后仍不足 6 个，继续从官方各货架的候选池中顺延补齐，确保所有歌单均为纯正专属推荐
+                if (diversified.size < 6) {
+                    for ((_, bucket) in shelfBuckets) {
+                        for (item in bucket) {
+                            if (existingIds.add(item.id)) {
+                                diversified.add(item)
+                                if (diversified.size >= 6) break
+                            }
+                        }
+                        if (diversified.size >= 6) break
+                    }
+                }
+
+                if (diversified.isNotEmpty()) {
+                    result.addAll(diversified)
                     com.rawsmusic.core.common.utils.AppLogger.d(
                         "QQMusicSource",
-                        "从 RecommendFeed 官方私荐接口成功提取到 ${result.size} 个歌单（总候选池: $total）"
+                        "官方专属私荐采样成功: 从 ${shelfBuckets.size} 个专属货架提取到 ${result.size} 个歌单"
                     )
                 }
             }
@@ -2012,6 +2074,8 @@ class QQMusicSource(
                         val dissId = item.optString("content_id").ifBlank { item.optLong("content_id").toString() }
                         if (dissId.isBlank() || dissId == "0") continue
                         val title = item.optString("title")
+                        if (title.isBlank()) continue
+                        if (listOf("每日30首", "每日三十首", "今日私享30首", "今日私享 30 首", "每日推荐30首").any { it in title }) continue
                         val cover = formatQQImg(item.optString("cover"))
                         val listenNum = item.optLong("listen_num")
                         val creator = item.optString("username")
