@@ -25,7 +25,6 @@ internal class DecoderPathResolver(
         tag = tag,
     )
 
-    @Synchronized
     fun resolve(path: String): String {
         val sanitizedPath = WebDavPlaybackCredentialResolver.sanitizeUrlIfConfigured(path) ?: path
         val registeredTransport = RemoteHttpStreamRegistry.lookup(sanitizedPath)?.resolveUrl(sanitizedPath)
@@ -39,6 +38,13 @@ internal class DecoderPathResolver(
         }
         val resolvedPath = if (transportPath.startsWith("content://")) {
             resolveContentUri(transportPath)
+        } else if (transportPath.startsWith("http://", true) || transportPath.startsWith("https://", true)) {
+            val existingCached = WebDavPlaybackCredentialResolver.findCachedPath(context, sanitizedPath)
+            if (!existingCached.isNullOrBlank()) {
+                existingCached
+            } else {
+                WebDavPlaybackCredentialResolver.toSafeUrl(transportPath) ?: transportPath
+            }
         } else {
             transportPath
         }
@@ -50,10 +56,9 @@ internal class DecoderPathResolver(
 
     /**
      * Slow safety fallback for WebDAV origins that FFmpeg cannot consume directly.
-     * Normal WebDAV playback must stay on direct HTTP; this is called only after a real
-     * decoder-open failure so large non-Range objects are not downloaded before every play.
+     * WebDAV cache safety and deduplication is handled by WebDavPlaybackCache's fine-grained key lock.
+     * Intentionally not synchronized on DecoderPathResolver to avoid blocking close() or resolve() during playback switching.
      */
-    @Synchronized
     fun resolveWebDavCacheFallback(path: String): String? {
         val sanitizedPath = WebDavPlaybackCredentialResolver.sanitizeUrlIfConfigured(path) ?: return null
         return WebDavPlaybackCredentialResolver.cachePath(context, sanitizedPath)
@@ -63,9 +68,12 @@ internal class DecoderPathResolver(
         return try {
             val uri = android.net.Uri.parse(path)
             val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return path
-            activePfds.add(pfd)
             val fdPath = "/proc/self/fd/${pfd.fd}"
-            AppLogger.d(tag, "SAF: resolved content:// to fd path: $fdPath activePfds=${activePfds.size}")
+            val count = synchronized(activePfds) {
+                activePfds.add(pfd)
+                activePfds.size
+            }
+            AppLogger.d(tag, "SAF: resolved content:// to fd path: $fdPath activePfds=$count")
             fdPath
         } catch (e: Exception) {
             AppLogger.w(tag, "SAF: failed to resolve content:// URI: $path", e)
@@ -73,11 +81,13 @@ internal class DecoderPathResolver(
         }
     }
 
-    @Synchronized
     fun close(reason: String) {
-        if (activePfds.isEmpty()) return
-        val pfds = activePfds.toList()
-        activePfds.clear()
+        val pfds = synchronized(activePfds) {
+            if (activePfds.isEmpty()) return
+            val list = activePfds.toList()
+            activePfds.clear()
+            list
+        }
         for (pfd in pfds) {
             runCatching { pfd.close() }
                 .onFailure { AppLogger.w(tag, "SAF: close PFD failed reason=$reason", it) }

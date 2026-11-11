@@ -1,6 +1,7 @@
 package com.rawsmusic.module.scanner.webdav
 
 import android.util.Log
+import okhttp3.Call
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.Credentials
@@ -42,8 +43,9 @@ data class WebDavItem(
 ) {
     val fileName: String
         get() = displayName.ifBlank {
-            resolvedUrl.toHttpUrlOrNull()?.pathSegments?.lastOrNull { it.isNotBlank() }
+            val segment = WebDavUrlTools.toSafeHttpUrl(resolvedUrl)?.pathSegments?.lastOrNull { it.isNotBlank() }
                 ?: href.trimEnd('/').substringAfterLast('/')
+            runCatching { java.net.URLDecoder.decode(segment, "UTF-8") }.getOrDefault(segment)
         }
 }
 
@@ -75,6 +77,11 @@ class WebDavClient {
         private const val TAG = "WebDavClient"
         private const val USER_AGENT = "RawSMusic/1.0"
         private const val AUTH_PROBE_FRESH_MS = 120_000L
+        private val KNOWN_MEDIA_AND_FILE_EXTENSIONS = setOf(
+            "flac", "mp3", "wav", "m4a", "ogg", "aac", "dsf", "dff", "ape", "wma", "opus",
+            "alac", "aiff", "aif", "mid", "midi", "cue", "lrc", "txt", "log",
+            "jpg", "jpeg", "png", "webp", "bmp", "gif", "svg", "json", "xml", "nfo"
+        )
     }
 
     private val digestAuth = WebDavDigestAuth()
@@ -174,15 +181,31 @@ class WebDavClient {
                 val selfIdentity = WebDavUrlTools.identity(finalUrl)
                 val items = WebDavMultiStatusParser.parse(xml)
                     .mapNotNull { parsed ->
+                        val rawHref = parsed.href.trim()
+                        val fileNameCandidate = parsed.displayName.ifBlank {
+                            rawHref.trimEnd('/').substringAfterLast('/')
+                        }
+                        val ext = fileNameCandidate.substringAfterLast('.', "").lowercase()
+                        val isKnownFileExt = ext in KNOWN_MEDIA_AND_FILE_EXTENSIONS
+                        val isExplicitTrailingSlash = rawHref.endsWith('/')
+
+                        val effectiveIsDir = when {
+                            isExplicitTrailingSlash -> true
+                            isKnownFileExt -> false
+                            parsed.isDirectory -> true
+                            else -> false
+                        }
+
                         val resolved = runCatching {
-                            WebDavUrlTools.resolveHref(finalUrl, parsed.href, parsed.isDirectory)
+                            WebDavUrlTools.resolveHref(finalUrl, parsed.href, effectiveIsDir)
                         }.onFailure {
                             Log.w(TAG, "Ignoring invalid DAV href=${parsed.href}", it)
                         }.getOrNull() ?: return@mapNotNull null
+
                         WebDavItem(
                             href = parsed.href,
                             displayName = parsed.displayName,
-                            isDirectory = parsed.isDirectory,
+                            isDirectory = effectiveIsDir,
                             size = parsed.size,
                             lastModified = parsed.lastModified,
                             contentType = parsed.contentType,
@@ -253,7 +276,7 @@ class WebDavClient {
     ): Map<String, String> {
         val rawUrl = WebDavUrlTools.stripUserInfo(canonicalizeResourceUrl(targetUrl))
         if (!WebDavUrlTools.isCredentialSafeTarget(config.url, rawUrl)) return emptyMap()
-        val parsed = rawUrl.toHttpUrlOrNull() ?: return emptyMap()
+        val parsed = WebDavUrlTools.toSafeHttpUrl(rawUrl) ?: return emptyMap()
         val origin = WebDavUrlTools.origin(parsed)
 
         if (refreshAuthentication && shouldRefreshAuthentication(config, origin)) {
@@ -273,9 +296,6 @@ class WebDavClient {
             if (config.username.isBlank()) return@buildMap
 
             when {
-                config.authMode == AuthMode.BASIC || knownScheme.equals("Basic", true) -> {
-                    put("Authorization", Credentials.basic(config.username, config.password))
-                }
                 config.authMode == AuthMode.DIGEST || knownScheme.equals("Digest", true) -> {
                     val challenge = digestChallengeByOrigin[origin]?.challenge ?: return@buildMap
                     val getRequest = Request.Builder().url(parsed).get().build()
@@ -283,12 +303,17 @@ class WebDavClient {
                         put("Authorization", it)
                     }
                 }
+                config.authMode == AuthMode.BASIC || knownScheme.equals("Basic", true) || config.authMode == AuthMode.AUTO -> {
+                    put("Authorization", Credentials.basic(config.username, config.password))
+                }
             }
         }
     }
 
-    fun getParentUrl(currentUrl: String, config: WebDavConfig): String? =
-        WebDavUrlTools.parentWithinRoot(config.url, currentUrl)
+    fun getParentUrl(currentUrl: String, config: WebDavConfig): String? {
+        if (currentUrl.isBlank() || config.url.isBlank()) return null
+        return runCatching { WebDavUrlTools.parentWithinRoot(config.url, currentUrl) }.getOrNull()
+    }
 
     fun createDirectory(config: WebDavConfig, path: String): Boolean {
         val url = canonicalizeCollectionUrl(path)
@@ -331,6 +356,24 @@ class WebDavClient {
     }
 
     /**
+     * Creates a streaming WebDAV resource call for the local playback cache.
+     * Callers can register and cancel the Call when playback changes or skips.
+     */
+    internal fun openStreamingCall(
+        config: WebDavConfig,
+        remotePath: String,
+        rangeHeader: String? = null,
+        headOnly: Boolean = false,
+    ): Call {
+        val url = canonicalizeResourceUrl(remotePath)
+        val builder = requestBuilder(url, config)
+            .header("Accept-Encoding", "identity")
+        rangeHeader?.takeIf { it.isNotBlank() }?.let { builder.header("Range", it) }
+        val request = if (headOnly) builder.head().build() else builder.get().build()
+        return streamingHttpClient.newCall(request)
+    }
+
+    /**
      * Opens a streaming WebDAV resource request for the local range bridge. The returned response
      * owns the network body and must be closed by the caller. Range is forwarded verbatim so FFmpeg
      * can seek without downloading the whole object first.
@@ -341,12 +384,7 @@ class WebDavClient {
         rangeHeader: String?,
         headOnly: Boolean,
     ): Response {
-        val url = canonicalizeResourceUrl(remotePath)
-        val builder = requestBuilder(url, config)
-            .header("Accept-Encoding", "identity")
-        rangeHeader?.takeIf { it.isNotBlank() }?.let { builder.header("Range", it) }
-        val request = if (headOnly) builder.head().build() else builder.get().build()
-        return streamingHttpClient.newCall(request).execute()
+        return openStreamingCall(config, remotePath, rangeHeader, headOnly).execute()
     }
 
     fun exists(config: WebDavConfig, path: String): Boolean {
@@ -395,11 +433,11 @@ class WebDavClient {
                 .filterKeys { !it.equals("User-Agent", true) }
                 .forEach { (name, value) -> builder.header(name, value) }
         }
-        val knownScheme = url.toHttpUrlOrNull()?.let(WebDavUrlTools::origin)?.let(lastAuthSchemeByOrigin::get)
+        val knownScheme = WebDavUrlTools.toSafeHttpUrl(url)?.let(WebDavUrlTools::origin)?.let(lastAuthSchemeByOrigin::get)
         if (
             credentialSafe &&
             config.username.isNotBlank() &&
-            (config.authMode == AuthMode.BASIC || knownScheme.equals("Basic", true))
+            (config.authMode == AuthMode.BASIC || config.authMode == AuthMode.AUTO || knownScheme.equals("Basic", true))
         ) {
             builder.header("Authorization", Credentials.basic(config.username, config.password))
         }
@@ -457,7 +495,7 @@ class WebDavClient {
     }
 
     private fun refreshAuthentication(config: WebDavConfig, targetUrl: String) {
-        val parsed = targetUrl.toHttpUrlOrNull() ?: return
+        val parsed = WebDavUrlTools.toSafeHttpUrl(targetUrl) ?: return
         val origin = WebDavUrlTools.origin(parsed)
         runCatching {
             var needsPropfind = false

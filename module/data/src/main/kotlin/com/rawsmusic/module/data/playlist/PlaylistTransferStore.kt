@@ -60,6 +60,46 @@ object PlaylistTransferStore {
 
     private const val TAG = "PlaylistTransfer"
 
+    /** 导出歌单为纯文本内容，每一首歌一行，格式为 "歌名 - 歌手"（若无歌手则仅为 "歌名"）。 */
+    fun exportPlainText(playlist: UserPlaylist): String =
+        playlist.songs.joinToString("\n") { song ->
+            formatSongLine(song.title, song.artist)
+        }
+
+    /** 导出歌曲列表为纯文本内容，每一首歌一行，格式为 "歌名 - 歌手"。 */
+    fun exportPlainText(songs: List<AudioFile>): String =
+        songs.joinToString("\n") { song ->
+            formatSongLine(song.title, song.artist)
+        }
+
+    /** 格式化单行歌曲：歌名 - 歌手。若歌手为空或未知，则仅保留歌名。 */
+    fun formatSongLine(title: String, artist: String): String {
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        return if (cleanArtist.isNotBlank() && cleanArtist != "未知歌手" && cleanArtist != "<unknown>" && cleanArtist != "Unknown") {
+            "$cleanTitle - $cleanArtist"
+        } else {
+            cleanTitle
+        }
+    }
+
+    /** 导出纯文本文件（落在 `cacheDir/playlist_exports`），返回文件句柄。 */
+    suspend fun exportPlainText(context: Context, playlist: UserPlaylist, content: String? = null): File? =
+        withContext(Dispatchers.IO) {
+            try {
+                val directory = File(context.cacheDir, PlaylistM3u8Codec.EXPORT_DIR).apply { mkdirs() }
+                val fileName = PlaylistM3u8Codec.sanitizeFileName(playlist.name.ifBlank { "playlist" }) + ".txt"
+                val file = File(directory, fileName)
+                file.writeText(content ?: exportPlainText(playlist), Charsets.UTF_8)
+                file
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                AppLogger.e(TAG, "导出 TXT 失败：${playlist.name}", error)
+                null
+            }
+        }
+
     /** 导出歌单为 M3U8 文件（落在 `cacheDir/playlist_exports`），返回文件句柄。 */
     suspend fun exportM3u8(context: Context, playlist: UserPlaylist): File? =
         PlaylistM3u8Codec.writeExportFile(context, playlist)
@@ -168,6 +208,26 @@ object PlaylistTransferStore {
             putExtra(Intent.EXTRA_SUBJECT, title)
             putExtra(Intent.EXTRA_TEXT, "$title\n(来自 RawS-Music)")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(intent, chooserTitle).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    }
+
+    /**
+     * 调起系统 Sharesheet 直接分享纯文本内容。
+     */
+    fun sharePlainText(
+        context: Context,
+        text: String,
+        title: String,
+        chooserTitle: String = "分享歌单纯文本",
+    ) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_TEXT, text)
         }
         val chooser = Intent.createChooser(intent, chooserTitle).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

@@ -42,6 +42,7 @@ internal class PlayerMetadataEnrichmentCoordinator(
                 while (attempt < REMOTE_CACHE_MAX_ATTEMPTS) {
                     val enriched = runCatching { callbacks.enrichRemoteCachedSong(song) }.getOrNull()
                     if (enriched != null) {
+                        runCatching { MusicRepository.updateSong(enriched) }
                         withContext(Dispatchers.Main) {
                             if (sameItem(callbacks.currentSong(), song)) {
                                 callbacks.setCurrentSong(enriched)

@@ -38,21 +38,65 @@ class QQMusicSource(
     }
 
     /**
+     * 计算 QQ 音乐鉴权网关所需的 g_tk 防篡改哈希令牌
+     */
+    private fun calculateGtk(key: String): Long {
+        if (key.isBlank()) return 5381L
+        var hash = 5381L
+        for (element in key) {
+            hash += (hash shl 5) + element.code.toLong()
+        }
+        return hash and 0x7fffffffL
+    }
+
+    /**
      * 向 QQ 音乐 musicu.fcg 发送通用网关请求
      */
-    private suspend fun postMusicU(payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun postMusicU(
+        payload: JSONObject,
+        uin: String = "",
+        authKey: String = ""
+    ): JSONObject = withContext(Dispatchers.IO) {
         val mediaType = "application/json; charset=utf-8".toMediaType()
         val body = payload.toString().toRequestBody(mediaType)
 
+        val qqAccount = com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.QQ)
+        val rawCookie = cookieProvider?.invoke()?.takeIf { it.isNotBlank() }
+            ?: qqAccount?.toCookieHeader().orEmpty()
+
+        val cleanUin = uin.ifBlank {
+            qqAccount?.userId?.replace("^o0*".toRegex(), "")
+                ?: Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(rawCookie)?.groupValues?.get(1).orEmpty()
+        }
+
+        val effectiveAuthKey = authKey.ifBlank {
+            qqAccount?.cookies?.get("qm_keyst")
+                ?: qqAccount?.tokens?.get("key")
+                ?: qqAccount?.cookies?.get("qqmusic_key")
+                ?: qqAccount?.cookies?.get("psrf_musickey_id")
+                ?: Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(rawCookie)?.groupValues?.get(1).orEmpty()
+        }
+
+        val urlBuilder = StringBuilder("https://u.y.qq.com/cgi-bin/musicu.fcg")
+        val queryParams = mutableListOf<String>()
+        if (effectiveAuthKey.isNotBlank()) {
+            queryParams.add("g_tk=${calculateGtk(effectiveAuthKey)}")
+        }
+        if (cleanUin.isNotBlank() && cleanUin != "0") {
+            queryParams.add("uin=$cleanUin")
+        }
+        if (queryParams.isNotEmpty()) {
+            urlBuilder.append("?").append(queryParams.joinToString("&"))
+        }
+
         val requestBuilder = Request.Builder()
-            .url("https://u.y.qq.com/cgi-bin/musicu.fcg")
+            .url(urlBuilder.toString())
             .header("User-Agent", userAgent)
             .header("Referer", "https://y.qq.com/")
+            .header("Origin", "https://y.qq.com")
 
-        val rawCookie = cookieProvider?.invoke()?.takeIf { it.isNotBlank() }
-            ?: com.rawsmusic.module.online.auth.PlatformAccountManager.getCookieHeader(OnlinePlatform.QQ).takeIf { it.isNotBlank() }
-        rawCookie?.let { cookie ->
-            val cleanCookie = cookie.replace("\r", "").replace("\n", "")
+        if (rawCookie.isNotBlank()) {
+            val cleanCookie = rawCookie.replace("\r", "").replace("\n", "")
             requestBuilder.header("Cookie", cleanCookie)
         }
 
@@ -1774,6 +1818,286 @@ class QQMusicSource(
             songs = parsedSongs,
             isFromLogin = isLogin
         )
+    }
+
+    /**
+     * 获取 QQ 音乐“你的私荐歌单”（包含个性化推荐、编辑推荐与换一批）。
+     *
+     * @param refreshSeed 刷新种子/偏移，用于连续点击“换一批”时轮换不同的私荐歌单。
+     */
+    suspend fun getPrivateRecommendPlaylists(refreshSeed: Int = 0): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+        val qqAccount = com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.QQ)
+        val cookieStr = cookieProvider?.invoke()?.takeIf { it.isNotBlank() } ?: qqAccount?.toCookieHeader().orEmpty()
+        val rawUserId = qqAccount?.userId.orEmpty()
+        val cleanUin = rawUserId.replace("^o0*".toRegex(), "").ifBlank {
+            Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(cookieStr)?.groupValues?.get(1).orEmpty()
+        }
+        val uinLong = cleanUin.toLongOrNull() ?: 0L
+        val authst = qqAccount?.tokens?.get("key")
+            ?: qqAccount?.cookies?.get("qm_keyst")
+            ?: qqAccount?.cookies?.get("qqmusic_key")
+            ?: qqAccount?.cookies?.get("psrf_musickey_id")
+            ?: qqAccount?.cookies?.get("authst")
+            ?: Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)?.groupValues?.get(1)?.trim().orEmpty()
+
+        com.rawsmusic.core.common.utils.AppLogger.d(
+            "QQMusicSource",
+            "获取私荐歌单: uin=$cleanUin (uinLong=$uinLong), hasAuthst=${authst.isNotBlank()}, seed=$refreshSeed"
+        )
+
+        val result = mutableListOf<OnlinePlaylist>()
+
+        // 1. 优先通过官方客户端个性化私荐接口 music.recommend.RecommendFeed.get_recommend_feed 拉取专属画像歌单
+        try {
+            val commObj = JSONObject().apply {
+                put("ct", 24)
+                put("cv", 4747474)
+                if (uinLong > 0L) {
+                    put("uin", uinLong)
+                } else if (cleanUin.isNotBlank() && cleanUin != "0") {
+                    put("uin", cleanUin)
+                }
+                if (authst.isNotBlank()) put("authst", authst)
+            }
+
+            val feedParam = JSONObject().apply {
+                put("direction", refreshSeed % 2)
+                put("client_time", System.currentTimeMillis() / 1000)
+                put("has_login", if (cleanUin.isNotBlank() && cleanUin != "0") 1 else 0)
+                put("is_20_style", 1)
+            }
+
+            val recomFeedReq = JSONObject().apply {
+                put("module", "music.recommend.RecommendFeed")
+                put("method", "get_recommend_feed")
+                put("param", feedParam)
+            }
+
+            val payload = JSONObject().apply {
+                put("comm", commObj)
+                put("recomFeed", recomFeedReq)
+            }
+
+            val resp = postMusicU(payload, uin = cleanUin, authKey = authst)
+            val feedData = resp.optJSONObject("recomFeed")?.optJSONObject("data")
+            val vShelf = feedData?.optJSONArray("v_shelf") ?: feedData?.optJSONArray("Shelfs")
+
+            if (vShelf != null && vShelf.length() > 0) {
+                val feedPlaylists = mutableListOf<OnlinePlaylist>()
+                for (s in 0 until vShelf.length()) {
+                    val shelfObj = vShelf.optJSONObject(s) ?: continue
+                    val shelfTitle = shelfObj.optString("title_content").ifBlank {
+                        shelfObj.optString("title_template").ifBlank { "专属私荐" }
+                    }
+
+                    // 收集该 Shelf 下的所有卡片
+                    val cards = mutableListOf<JSONObject>()
+                    val vCardDirect = shelfObj.optJSONArray("v_card")
+                    if (vCardDirect != null) {
+                        for (c in 0 until vCardDirect.length()) {
+                            vCardDirect.optJSONObject(c)?.let { cards.add(it) }
+                        }
+                    }
+                    val vNiche = shelfObj.optJSONArray("v_niche")
+                    if (vNiche != null) {
+                        for (n in 0 until vNiche.length()) {
+                            val nicheObj = vNiche.optJSONObject(n) ?: continue
+                            val nicheCards = nicheObj.optJSONArray("v_card")
+                            if (nicheCards != null) {
+                                for (nc in 0 until nicheCards.length()) {
+                                    nicheCards.optJSONObject(nc)?.let { cards.add(it) }
+                                }
+                            }
+                        }
+                    }
+
+                    for (card in cards) {
+                        // 提取歌单唯一 ID
+                        val dissId = card.optString("id").ifBlank {
+                            card.optString("jumpID").ifBlank {
+                                card.optString("subid").ifBlank {
+                                    card.optLong("id").takeIf { it > 0 }?.toString().orEmpty()
+                                }
+                            }
+                        }
+                        // 过滤非数字歌单 ID（例如跳转 webview 或纯活动 banner 的非歌单卡片）
+                        if (dissId.isBlank() || dissId == "0" || !dissId.all { it.isDigit() }) continue
+
+                        val title = card.optString("title")
+                        if (title.isBlank()) continue
+
+                        val cover = formatQQImg(card.optString("cover"))
+                        val playCount = card.optLong("cnt", card.optLong("count", 0L))
+                        val subTitle = card.optString("subtitle").ifBlank {
+                            card.optString("subTitle").ifBlank { shelfTitle }
+                        }
+
+                        // 创建者
+                        var creator = ""
+                        val users = card.optJSONArray("v_user")
+                        if (users != null && users.length() > 0) {
+                            creator = users.optJSONObject(0)?.optString("name").orEmpty()
+                        }
+
+                        feedPlaylists.add(
+                            OnlinePlaylist(
+                                id = dissId,
+                                platform = OnlinePlatform.QQ,
+                                title = title,
+                                coverUrl = cover,
+                                playCount = playCount,
+                                trackCount = 0,
+                                creatorName = creator,
+                                description = subTitle,
+                                customGroup = "QQ"
+                            )
+                        )
+                    }
+                }
+
+                if (feedPlaylists.isNotEmpty()) {
+                    val batchSize = 6
+                    val distinctPlaylists = feedPlaylists.distinctBy { it.id }
+                    val total = distinctPlaylists.size
+                    val startIndex = (refreshSeed * batchSize) % total
+                    for (i in 0 until minOf(batchSize, total)) {
+                        result.add(distinctPlaylists[(startIndex + i) % total])
+                    }
+                    com.rawsmusic.core.common.utils.AppLogger.d(
+                        "QQMusicSource",
+                        "从 RecommendFeed 官方私荐接口成功提取到 ${result.size} 个歌单（总候选池: $total）"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            com.rawsmusic.core.common.utils.AppLogger.w(
+                "QQMusicSource",
+                "RecommendFeed 官方私荐接口调用异常，尝试降级 HotRecommendServer: ${e.message}"
+            )
+        }
+
+        // 2. 若官方客户端私荐未命中，降级通过 HotRecommendServer 拉取
+        if (result.isEmpty()) {
+            try {
+                val commObj = JSONObject().apply {
+                    put("ct", 24)
+                    put("cv", 0)
+                    if (uinLong > 0L) {
+                        put("uin", uinLong)
+                    } else if (cleanUin.isNotBlank() && cleanUin != "0") {
+                        put("uin", cleanUin)
+                    }
+                    if (authst.isNotBlank()) put("authst", authst)
+                }
+                val recomReq = JSONObject().apply {
+                    put("module", "playlist.HotRecommendServer")
+                    put("method", "get_hot_recommend")
+                    put("param", JSONObject().apply {
+                        put("async", 1)
+                        put("cmd", 2)
+                    })
+                }
+                val payload = JSONObject().apply {
+                    put("comm", commObj)
+                    put("recomPlaylist", recomReq)
+                }
+                val resp = postMusicU(payload, uin = cleanUin, authKey = authst)
+                val vHot = resp.optJSONObject("recomPlaylist")?.optJSONObject("data")?.optJSONArray("v_hot")
+                if (vHot != null && vHot.length() > 0) {
+                    val batchSize = 6
+                    val total = vHot.length()
+                    val startIndex = (refreshSeed * batchSize) % total
+                    for (i in 0 until minOf(batchSize, total)) {
+                        val item = vHot.optJSONObject((startIndex + i) % total) ?: continue
+                        val dissId = item.optString("content_id").ifBlank { item.optLong("content_id").toString() }
+                        if (dissId.isBlank() || dissId == "0") continue
+                        val title = item.optString("title")
+                        val cover = formatQQImg(item.optString("cover"))
+                        val listenNum = item.optLong("listen_num")
+                        val creator = item.optString("username")
+                        val rcmdDesc = item.optString("rcmdcontent").ifBlank {
+                            item.optString("rcmdtemplate").ifBlank { "专属私荐" }
+                        }
+                        result.add(
+                            OnlinePlaylist(
+                                id = dissId,
+                                platform = OnlinePlatform.QQ,
+                                title = title,
+                                coverUrl = cover,
+                                playCount = listenNum,
+                                trackCount = 0,
+                                creatorName = creator,
+                                description = rcmdDesc,
+                                customGroup = "QQ"
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                com.rawsmusic.core.common.utils.AppLogger.w("QQMusicSource", "HotRecommendServer 获取私荐失败，尝试备选接口: ${e.message}")
+            }
+        }
+
+        // 3. 若前两层均未取足，使用 fcg_get_diss_by_tag 进行兜底补充
+        if (result.isEmpty()) {
+            try {
+                val pageSize = 6
+                val sin = (refreshSeed * pageSize) % 120
+                val ein = sin + pageSize - 1
+                val gtkParam = if (authst.isNotBlank()) "&g_tk=${calculateGtk(authst)}" else ""
+                val uinParam = if (cleanUin.isNotBlank() && cleanUin != "0") "&uin=$cleanUin" else ""
+                val url = "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg" +
+                        "?sin=$sin&ein=$ein&categoryId=10000000&sortId=5&format=json&inCharset=utf8&outCharset=utf-8$gtkParam$uinParam"
+
+                val requestBuilder = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", userAgent)
+                    .header("Referer", "https://y.qq.com/")
+                    .header("Host", "c.y.qq.com")
+
+                if (cookieStr.isNotBlank()) {
+                    requestBuilder.header("Cookie", cookieStr)
+                }
+
+                val response = client.newCall(requestBuilder.build()).execute()
+                val bodyStr = response.body?.string().orEmpty()
+                if (bodyStr.isNotBlank()) {
+                    val root = JSONObject(bodyStr)
+                    val dataObj = root.optJSONObject("data")
+                    val listArr = dataObj?.optJSONArray("list")
+                    if (listArr != null) {
+                        for (i in 0 until listArr.length()) {
+                            val item = listArr.optJSONObject(i) ?: continue
+                            val dissid = item.optString("dissid")
+                            if (dissid.isBlank()) continue
+                            val dissname = item.optString("dissname")
+                            val imgurl = formatQQImg(item.optString("imgurl").ifEmpty { item.optString("cover") })
+                            val listennum = item.optLong("listennum")
+                            val creatorObj = item.optJSONObject("creator")
+                            val creatorName = creatorObj?.optString("name")
+                            val songNum = item.optInt("song_count")
+                            result.add(
+                                OnlinePlaylist(
+                                    id = dissid,
+                                    platform = OnlinePlatform.QQ,
+                                    title = dissname,
+                                    coverUrl = imgurl,
+                                    playCount = listennum,
+                                    trackCount = songNum,
+                                    creatorName = creatorName,
+                                    description = "QQ音乐 · 专属私荐",
+                                    customGroup = "QQ"
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                com.rawsmusic.core.common.utils.AppLogger.e("QQMusicSource", "获取私荐歌单异常: ${e.message}", e)
+            }
+        }
+
+        result
     }
 }
 

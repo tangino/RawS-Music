@@ -9,7 +9,13 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -39,6 +45,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -55,6 +62,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -114,8 +122,11 @@ import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.repository.MusicRepository
 import com.rawsmusic.module.data.repository.SongAttitudeRepository
 import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.model.OnlinePlaylist
+import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
 import com.rawsmusic.module.online.playback.OnlineSourceMediaMapper
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
+import com.rawsmusic.module.online.repository.QQPrivateRecommendRepository
 import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
 import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
@@ -158,6 +169,15 @@ fun PlaylistScreen(
     // 当前播放歌单 & 上次播放歌单
     val currentPlayedPlaylist by PlayedPlaylistManager.currentPlaylist.collectAsState()
     val previousPlayedPlaylist by PlayedPlaylistManager.previousPlaylist.collectAsState()
+
+    // QQ 音乐私荐歌单
+    val qqPrivateRepo = remember { QQPrivateRecommendRepository.getInstance() }
+    val privatePlaylists by qqPrivateRepo.playlists.collectAsState()
+    val isPrivateRefreshing by qqPrivateRepo.isRefreshing.collectAsState()
+
+    LaunchedEffect(Unit) {
+        qqPrivateRepo.loadIfNeeded()
+    }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -415,6 +435,8 @@ fun PlaylistScreen(
         currentKugouList,
         currentKuwoList,
         currentMiguList,
+        privatePlaylists,
+        isPrivateRefreshing,
     ) {
         buildList<PlaylistVirtualItem> {
             // 1. 本地歌单
@@ -489,6 +511,26 @@ fun PlaylistScreen(
                         }
                     }
                 }
+
+                // 3. QQ 音乐私荐歌单（紧随 QQ 音乐收藏歌单之后排布）
+                if (platform == OnlinePlatform.QQ) {
+                    val shouldShowPrivate = (selectedPlaylistGroup in listOf("ALL", "QQ") || selectedPlaylistGroup.startsWith("GRP:")) && privatePlaylists.isNotEmpty()
+                    if (shouldShowPrivate) {
+                        val isPrivateCollapsed = collapsedGroups.contains("QQ_PRIVATE_RECOMMEND")
+                        add(PlaylistVirtualItem.PrivateRecommendHeader(isRefreshing = isPrivateRefreshing, isCollapsed = isPrivateCollapsed))
+                        if (!isPrivateCollapsed) {
+                            if (useTabletLayout) {
+                                privatePlaylists.chunked(2).forEach { chunk ->
+                                    add(PlaylistVirtualItem.PrivateRecommendRow(chunk))
+                                }
+                            } else {
+                                privatePlaylists.forEach { pl ->
+                                    add(PlaylistVirtualItem.PrivateRecommendRow(listOf(pl)))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -501,6 +543,8 @@ fun PlaylistScreen(
                 is PlaylistVirtualItem.LocalPlaylistRow -> 3000000L + item.playlists.fold(17L) { acc, pl -> acc * 31L + pl.id.hashCode() }
                 is PlaylistVirtualItem.OnlineSectionHeader -> 4000000L + item.platform.name.hashCode() * 31L + if (item.isCollapsed) 1L else 0L
                 is PlaylistVirtualItem.OnlinePlaylistRow -> 5000000L + item.entities.fold(17L) { acc, e -> acc * 31L + e.remoteId.hashCode() }
+                is PlaylistVirtualItem.PrivateRecommendHeader -> 6000000L + (if (item.isRefreshing) 10L else 0L) + (if (item.isCollapsed) 1L else 0L)
+                is PlaylistVirtualItem.PrivateRecommendRow -> 7000000L + item.playlists.fold(17L) { acc, pl -> acc * 31L + pl.id.hashCode() }
             }
             AudioFile(
                 id = Long.MIN_VALUE / 4L + identity,
@@ -523,16 +567,19 @@ fun PlaylistScreen(
         disTitle,
         dislikedKeys,
         disFirstCover,
+        isPrivateRefreshing,
     ) {
         VirtualListCustomProvider(
             itemHeight = { song, index ->
                 val rowIndex = song.encodingFormat.removePrefix(PLAYLIST_VIRTUAL_ITEM_PREFIX).toIntOrNull() ?: index
                 when (virtualRows.getOrNull(rowIndex)) {
                     is PlaylistVirtualItem.LocalSectionHeader,
-                    is PlaylistVirtualItem.OnlineSectionHeader -> 50.dp
+                    is PlaylistVirtualItem.OnlineSectionHeader,
+                    is PlaylistVirtualItem.PrivateRecommendHeader -> 50.dp
                     is PlaylistVirtualItem.AttitudeRow,
                     is PlaylistVirtualItem.LocalPlaylistRow,
-                    is PlaylistVirtualItem.OnlinePlaylistRow -> 88.dp
+                    is PlaylistVirtualItem.OnlinePlaylistRow,
+                    is PlaylistVirtualItem.PrivateRecommendRow -> 88.dp
                     null -> null
                 }
             },
@@ -717,6 +764,84 @@ fun PlaylistScreen(
                                     onClick = { onOnlinePlaylistClick(item.platform, op.remoteId) },
                                     onPlay = { onPlayOnlinePlaylist(op) },
                                     onShowActions = { groupChrome.onlinePlaylistActionsTarget = op },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        is PlaylistVirtualItem.PrivateRecommendHeader -> {
+                            PrivateRecommendSectionHeader(
+                                isRefreshing = item.isRefreshing,
+                                isCollapsed = item.isCollapsed,
+                                onToggleCollapse = {
+                                    collapsedGroups = if (item.isCollapsed) collapsedGroups - "QQ_PRIVATE_RECOMMEND" else collapsedGroups + "QQ_PRIVATE_RECOMMEND"
+                                },
+                                onRefresh = {
+                                    if (!item.isRefreshing) {
+                                        scope.launch {
+                                            qqPrivateRepo.refresh()
+                                            AppNoticeBus.post(context.getString(R.string.playlist_private_recommend_refreshed), AppNoticeIcon.PLAYLIST)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        is PlaylistVirtualItem.PrivateRecommendRow -> {
+                            val playPrivate: (OnlinePlaylist) -> Unit = { pl ->
+                                scope.launch {
+                                    AppNoticeBus.post("正在获取在线歌单...", AppNoticeIcon.PLAYLIST)
+                                    val repo = OnlineMusicRepository.getInstance()
+                                    repo.getPlaylistDetail(pl.id, OnlinePlatform.QQ).onSuccess { (_, songs) ->
+                                        if (songs.isNotEmpty()) {
+                                            val first = songs.first()
+                                            OnlinePlaybackLauncher.play(context, first, queue = songs, index = 0)
+                                            PlayedPlaylistManager.recordPlayedPlaylist(
+                                                id = pl.id,
+                                                name = pl.title,
+                                                isOnline = true,
+                                                platformId = "qq",
+                                                coverUrl = pl.coverUrl,
+                                                trackCount = songs.size,
+                                                lastPlayedSongTitle = first.title,
+                                                lastPlayedSongArtist = first.artist,
+                                            )
+                                        } else {
+                                            AppNoticeBus.error("在线歌单曲目为空")
+                                        }
+                                    }.onFailure {
+                                        AppNoticeBus.error("获取歌单失败: ${it.localizedMessage}")
+                                    }
+                                }
+                            }
+                            if (useTabletLayout) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    val pl1 = item.playlists[0]
+                                    PrivateRecommendPlaylistItemCard(
+                                        playlist = pl1,
+                                        onClick = { onOnlinePlaylistClick(OnlinePlatform.QQ, pl1.id) },
+                                        onPlay = { playPrivate(pl1) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (item.playlists.size > 1) {
+                                        val pl2 = item.playlists[1]
+                                        PrivateRecommendPlaylistItemCard(
+                                            playlist = pl2,
+                                            onClick = { onOnlinePlaylistClick(OnlinePlatform.QQ, pl2.id) },
+                                            onPlay = { playPrivate(pl2) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    } else {
+                                        Spacer(Modifier.weight(1f))
+                                    }
+                                }
+                            } else {
+                                val pl = item.playlists[0]
+                                PrivateRecommendPlaylistItemCard(
+                                    playlist = pl,
+                                    onClick = { onOnlinePlaylistClick(OnlinePlatform.QQ, pl.id) },
+                                    onPlay = { playPrivate(pl) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -2051,6 +2176,238 @@ private fun OnlinePlaylistItemCard(
     }
 }
 
+@Composable
+private fun PrivateRecommendSectionHeader(
+    isRefreshing: Boolean,
+    isCollapsed: Boolean,
+    onToggleCollapse: () -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = themeColors()
+    val brandColor = Color(0xFF1ECF96) // QQ绿
+
+    val infiniteTransition = rememberInfiniteTransition(label = "refresh_rotation")
+    val rotation by if (isRefreshing) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "spin"
+        )
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
+
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isCollapsed) -90f else 0f,
+        label = "arrow_rotation"
+    )
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(50.dp)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggleCollapse)
+                .padding(vertical = 4.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.playlist_private_recommend_title),
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = colors.onSurface,
+                fontFamily = appFontFamily()
+            )
+
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = brandColor.copy(alpha = 0.16f),
+            ) {
+                Text(
+                    text = stringResource(R.string.playlist_private_recommend_badge),
+                    color = brandColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = appFontFamily(),
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                )
+            }
+
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = colors.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .size(20.dp)
+                    .rotate(arrowRotation)
+            )
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        // “换一批” 刷新按钮
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.surface.copy(alpha = 0.35f))
+                .clickable(enabled = !isRefreshing, onClick = onRefresh)
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = stringResource(R.string.playlist_private_recommend_refresh),
+                tint = brandColor,
+                modifier = Modifier
+                    .size(14.dp)
+                    .rotate(rotation)
+            )
+            Text(
+                text = stringResource(R.string.playlist_private_recommend_refresh),
+                fontSize = 11.5.sp,
+                color = brandColor,
+                fontWeight = FontWeight.Medium,
+                fontFamily = appFontFamily()
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrivateRecommendPlaylistItemCard(
+    playlist: OnlinePlaylist,
+    onClick: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = themeColors()
+    val brandColor = Color(0xFF1ECF96) // QQ绿
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface.copy(alpha = 0.45f))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 封面
+        Box(
+            modifier = Modifier
+                .size(60.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(colors.surface.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (playlist.coverUrl.isNotBlank()) {
+                BitmapImage(
+                    key = playlist.coverUrl,
+                    contentDescription = playlist.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    targetWidth = 180,
+                    targetHeight = 180,
+                )
+            } else {
+                Icon(
+                    painter = painterResource(R.drawable.ic_music_2_fill),
+                    contentDescription = null,
+                    tint = brandColor.copy(alpha = 0.6f),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.width(14.dp))
+
+        // 标题与副标题
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = playlist.title,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface,
+                fontSize = 14.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = appFontFamily()
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = brandColor.copy(alpha = 0.16f),
+                ) {
+                    Text(
+                        text = stringResource(R.string.playlist_private_recommend_badge),
+                        color = brandColor,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = appFontFamily(),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+
+                val subtitle = buildString {
+                    if (!playlist.description.isNullOrBlank()) {
+                        append(playlist.description)
+                    } else if (playlist.playCount > 0) {
+                        append(formatPlayCount(playlist.playCount))
+                        append("次播放")
+                    } else if (playlist.trackCount > 0) {
+                        append("${playlist.trackCount} 首")
+                    } else {
+                        append("专属推荐")
+                    }
+                }
+                Text(
+                    text = subtitle,
+                    color = colors.onSurface.copy(alpha = 0.6f),
+                    fontSize = 11.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = appFontFamily()
+                )
+            }
+        }
+
+        // 快捷播放按钮
+        IconButton(
+            onClick = onPlay,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_play),
+                contentDescription = "播放全部",
+                tint = colors.primary,
+                modifier = Modifier.size(26.dp)
+            )
+        }
+    }
+}
+
+private fun formatPlayCount(count: Long): String {
+    return when {
+        count >= 100_000_000 -> String.format(java.util.Locale.CHINA, "%.1f亿", count / 100_000_000.0)
+        count >= 10_000 -> String.format(java.util.Locale.CHINA, "%.1f万", count / 10_000.0)
+        else -> count.toString()
+    }
+}
+
 /**
  * 筛选为空状态展示
  */
@@ -2277,6 +2634,15 @@ private sealed interface PlaylistVirtualItem {
         val platform: OnlinePlatform,
         val brandColor: Color,
         val entities: List<OnlinePlaylistFavoriteEntity>,
+    ) : PlaylistVirtualItem
+
+    data class PrivateRecommendHeader(
+        val isRefreshing: Boolean,
+        val isCollapsed: Boolean,
+    ) : PlaylistVirtualItem
+
+    data class PrivateRecommendRow(
+        val playlists: List<OnlinePlaylist>,
     ) : PlaylistVirtualItem
 }
 

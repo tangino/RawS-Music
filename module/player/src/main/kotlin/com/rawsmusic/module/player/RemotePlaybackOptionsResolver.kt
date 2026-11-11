@@ -15,7 +15,13 @@ internal object RemotePlaybackOptionsResolver {
     )
 
     fun lookup(vararg paths: String): Options? {
-        paths.forEach { path ->
+        val expandedPaths = paths.flatMap { p ->
+            if (p.startsWith("http://", true) || p.startsWith("https://", true)) {
+                val safe = WebDavPlaybackCredentialResolver.toSafeUrl(p)
+                if (safe != null && safe != p) listOf(p, safe) else listOf(p)
+            } else listOf(p)
+        }
+        expandedPaths.forEach { path ->
             if (path.isBlank()) return@forEach
             MusicSourceResolvedStreamRegistry.lookup(path)?.let { entry ->
                 return Options(

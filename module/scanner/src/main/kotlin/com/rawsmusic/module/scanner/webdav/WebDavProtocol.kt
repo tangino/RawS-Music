@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.xml.parsers.SAXParserFactory
 
-internal object WebDavUrlTools {
+object WebDavUrlTools {
     fun toSafeHttpUrl(url: String): HttpUrl? {
         val trimmed = url.trim()
         if (trimmed.isBlank()) return null
@@ -79,7 +79,9 @@ internal object WebDavUrlTools {
         val base = toSafeHttpUrl(normalizeCollectionUrl(baseUrl))
             ?: throw IllegalArgumentException("无效的 WebDAV 基础地址: $baseUrl")
         val candidate = href.trim().replace(" ", "%20")
-        val resolved = toSafeHttpUrl(candidate) ?: base.resolve(candidate)
+        val isAbsolute = candidate.startsWith("http://", ignoreCase = true) || candidate.startsWith("https://", ignoreCase = true)
+        val resolved = (if (isAbsolute) toSafeHttpUrl(candidate) else null)
+            ?: base.resolve(candidate)
             ?: run {
                 val encodedCandidate = candidate.split('/').joinToString("/") { seg ->
                     if (seg.isEmpty()) "" else java.net.URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
@@ -87,7 +89,12 @@ internal object WebDavUrlTools {
                 base.resolve(encodedCandidate)
             }
             ?: throw IllegalArgumentException("服务器返回了无效 href: $href")
-        val directory = directoryHint ?: resolved.encodedPath.endsWith('/')
+        val hasExt = candidate.trimEnd('/').substringAfterLast('/').contains('.')
+        val directory = when {
+            directoryHint != null -> directoryHint
+            hasExt -> false
+            else -> resolved.encodedPath.endsWith('/')
+        }
         return normalize(resolved.toString(), directory)
     }
 
@@ -103,8 +110,9 @@ internal object WebDavUrlTools {
     }
 
     fun parentWithinRoot(rootUrl: String, currentUrl: String): String? {
-        val root = toSafeHttpUrl(normalizeCollectionUrl(rootUrl)) ?: return null
-        val current = toSafeHttpUrl(normalizeCollectionUrl(currentUrl)) ?: return null
+        if (rootUrl.isBlank() || currentUrl.isBlank()) return null
+        val root = runCatching { toSafeHttpUrl(normalizeCollectionUrl(rootUrl)) }.getOrNull() ?: return null
+        val current = runCatching { toSafeHttpUrl(normalizeCollectionUrl(currentUrl)) }.getOrNull() ?: return null
         if (!sameOrigin(root, current)) return null
         val rootPath = root.encodedPath.ensureDirectoryPath()
         val currentPath = current.encodedPath.ensureDirectoryPath()

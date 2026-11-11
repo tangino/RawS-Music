@@ -60,6 +60,22 @@ object WebDavPlaybackCredentialResolver {
 
     fun sanitizeUrlIfConfigured(url: String): String? = findConfigForUrl(url)?.first
 
+    fun toSafeUrl(url: String): String? = WebDavUrlTools.toSafeHttpUrl(url)?.toString()
+
+    /**
+     * 快速检查本地是否已存在该 WebDAV 歌曲的完整播放缓存文件。
+     * 纯本地内存与文件检查，毫秒级返回，绝不产生网络请求或线程阻塞。
+     */
+    fun findCachedPath(context: Context, url: String, knownSize: Long = 0L): String? {
+        val (sanitizedUrl, config) = findConfigForUrl(url) ?: return null
+        return WebDavPlaybackCache.findCachedPath(
+            context = context,
+            config = config,
+            remoteUrl = sanitizedUrl,
+            knownSize = knownSize,
+        )
+    }
+
     fun resolve(url: String): WebDavPlaybackRequest? {
         val (sanitizedUrl, config) = findConfigForUrl(url) ?: return null
         return runCatching {
@@ -75,32 +91,23 @@ object WebDavPlaybackCredentialResolver {
                     refreshAuthentication = true,
                 )
             }
-            RemoteHttpStreamRegistry.register(
-                url = sanitizedUrl,
-                headers = req.headers,
-                userAgent = req.userAgent,
-                owner = "webdav-direct",
-                headerProvider = headerProvider,
-                urlProvider = { sanitizedUrl },
-            )
-            if (req.url != sanitizedUrl) {
+            val allAliases = listOf(
+                url,
+                sanitizedUrl,
+                req.url,
+                toSafeUrl(url).orEmpty(),
+                toSafeUrl(sanitizedUrl).orEmpty(),
+                toSafeUrl(req.url).orEmpty(),
+            ).filter { it.isNotBlank() }.distinct()
+
+            allAliases.forEach { u ->
                 RemoteHttpStreamRegistry.register(
-                    url = req.url,
+                    url = u,
                     headers = req.headers,
                     userAgent = req.userAgent,
                     owner = "webdav-direct",
                     headerProvider = headerProvider,
-                    urlProvider = { req.url },
-                )
-            }
-            if (url != sanitizedUrl) {
-                RemoteHttpStreamRegistry.register(
-                    url = url,
-                    headers = req.headers,
-                    userAgent = req.userAgent,
-                    owner = "webdav-direct",
-                    headerProvider = headerProvider,
-                    urlProvider = { sanitizedUrl },
+                    urlProvider = { toSafeUrl(u) ?: u },
                 )
             }
             req
@@ -138,17 +145,17 @@ object WebDavPlaybackCredentialResolver {
                     refreshAuthentication = true,
                 )
             }
-            RemoteHttpStreamRegistry.register(
-                url = sanitizedUrl,
-                headers = request.headers,
-                userAgent = request.userAgent,
-                owner = "webdav-persisted",
-                headerProvider = headerProvider,
-                urlProvider = { path },
-            )
-            if (request.url != sanitizedUrl) {
+            val registeredUrls = listOf(
+                url,
+                sanitizedUrl,
+                request.url,
+                toSafeUrl(url).orEmpty(),
+                toSafeUrl(sanitizedUrl).orEmpty(),
+            ).filter { it.isNotBlank() }.distinct()
+
+            registeredUrls.forEach { u ->
                 RemoteHttpStreamRegistry.register(
-                    url = request.url,
+                    url = u,
                     headers = request.headers,
                     userAgent = request.userAgent,
                     owner = "webdav-persisted",

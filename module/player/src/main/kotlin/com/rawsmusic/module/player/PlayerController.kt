@@ -856,6 +856,11 @@ class PlayerController private constructor(context: Context) {
                     automaticCrossfadeEnabled = autoEnabled && !decision.forceGapless && decision.recipe != null,
                     reason = "queue_gapless_plan:${decision.reason}"
                 )
+                plan.nextSongPath?.let { nextUrl ->
+                    if (nextUrl.startsWith("http://", true) || nextUrl.startsWith("https://", true)) {
+                        prefetchWebDavSong(nextUrl)
+                    }
+                }
                 decision.recipe?.let { recipe ->
                     AppLogger.i(
                         TAG,
@@ -869,6 +874,36 @@ class PlayerController private constructor(context: Context) {
             logWarning = { message, error -> Log.w(TAG, message, error) },
         ),
     )
+
+    private var webDavPrefetchJob: Job? = null
+
+    private fun prefetchWebDavSong(path: String) {
+        if (!path.startsWith("http://", true) && !path.startsWith("https://", true)) return
+        if (!com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.findCachedPath(context, path).isNullOrBlank()) {
+            return
+        }
+        webDavPrefetchJob?.cancel()
+        webDavPrefetchJob = scope.launch(Dispatchers.IO) {
+            try {
+                // 等待当前歌曲稳定播放至少 6 秒，且当前没有处于缓冲状态，才启动下一首预加载，绝对不与主播放争抢带宽！
+                delay(6000)
+                if (_playState.value != PlayState.PLAYING) return@launch
+                AppLogger.i(TAG, "WEBDAV_PREFETCH_START path=$path")
+                val cached = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.cachePath(context, path)
+                if (!cached.isNullOrBlank()) {
+                    AppLogger.i(TAG, "WEBDAV_PREFETCH_SUCCESS path=$path cached=$cached")
+                    withContext(Dispatchers.Main) {
+                        gaplessControlCoordinator.prepareNextSong()
+                    }
+                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                AppLogger.d(TAG, "WEBDAV_PREFETCH_CANCELLED path=$path")
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "WEBDAV_PREFETCH_FAILED path=$path", e)
+            }
+        }
+    }
+
     private val restoreControlCoordinator = PlayerRestoreControlCoordinator(
         callbacks = PlayerRestoreControlCoordinator.Callbacks(
             elapsedRealtimeMs = SystemClock::elapsedRealtime,
@@ -5837,6 +5872,8 @@ class PlayerController private constructor(context: Context) {
     }
 
     fun play(song: AudioFile, queue: List<AudioFile> = emptyList(), index: Int = 0) {
+        webDavPrefetchJob?.cancel()
+        com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelExcept(song.path)
         // A user/explicit play starts a new intent. Do not let the previous queue's failure
         // count leak into it. The internal failure-skip path uses queueControlCoordinator.next()
         // directly, so it intentionally does not pass through here.
@@ -6035,6 +6072,10 @@ class PlayerController private constructor(context: Context) {
     ) {
         if (song.path.startsWith("http://", true) || song.path.startsWith("https://", true)) {
             com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.registerIfConfigured(song.path)
+            val safe = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.toSafeUrl(song.path)
+            if (safe != null && safe != song.path) {
+                com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.registerIfConfigured(safe)
+            }
         }
         if (song.format.equals("SACD-ISO", true)) {
             com.rawsmusic.core.common.sacd.SacdIsoSourceRegistry.register(song.path,
@@ -6876,6 +6917,8 @@ class PlayerController private constructor(context: Context) {
     fun stop() = transportControlCoordinator.stop()
 
     private suspend fun stopInternal() {
+        webDavPrefetchJob?.cancel()
+        com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelAll("player_stop")
         clearPendingUiSelection()
         AppLogger.i(TAG, "stop() called usbExclusive=${_usbExclusiveActive.value}")
         savePosition()

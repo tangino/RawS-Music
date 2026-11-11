@@ -2536,6 +2536,7 @@
     <string name="webdav_switch_directory">切换</string>
     <string name="webdav_current_active">当前使用</string>
     <string name="webdav_no_directories">暂无 WebDAV 目录，请点击上方添加</string>
+    <string name="webdav_buffering_song">正在缓冲歌曲，请稍候…</string>
     <string name="scan_stage_cancelled">已取消</string>
     <string name="scan_cancelled">扫描已取消</string>
     <string name="scan_preparing">%1$s：准备扫描</string>
@@ -2690,14 +2691,26 @@
     <string name="playlist_export_title">导出歌单</string>
     <string name="playlist_export_action">导出歌单</string>
     <string name="playlist_export_format">导出格式</string>
+    <string name="playlist_export_format_txt">纯文本 (.txt)</string>
     <string name="playlist_export_format_m3u8">M3U8 播放列表 (.m3u8)</string>
     <string name="playlist_export_format_json">JSON 完整备份 (.json)</string>
     <string name="playlist_export_filename">文件名</string>
+    <string name="playlist_export_copy_text">复制文本</string>
+    <string name="playlist_export_copied_notice">已复制歌单纯文本到剪贴板（共 %1$d 首）</string>
+    <string name="playlist_export_empty_notice">歌单内暂无可导出的歌曲</string>
+    <string name="playlist_export_preview">文本预览（前 %1$d 首）：</string>
     <string name="playlist_export_save_download">保存到下载</string>
     <string name="playlist_export_share">系统分享</string>
     <string name="playlist_export_saving">正在导出…</string>
     <string name="playlist_export_success">歌单导出成功</string>
     <string name="playlist_export_failed">导出失败：%1$s</string>
+
+    <!-- QQ音乐 你的私荐歌单 -->
+    <string name="playlist_private_recommend_title">你的私荐歌单</string>
+    <string name="playlist_private_recommend_badge">专属私荐</string>
+    <string name="playlist_private_recommend_refresh">换一批</string>
+    <string name="playlist_private_recommend_refreshing">正在换一批…</string>
+    <string name="playlist_private_recommend_refreshed">已换一批私荐歌单</string>
     <string name="playlist_import_title">导入歌单</string>
     <string name="playlist_import_action">导入歌单</string>
     <string name="playlist_import_tab_link_text">链接 / 文本清单</string>

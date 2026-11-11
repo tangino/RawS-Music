@@ -4,6 +4,7 @@ import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.net.RemoteHttpStreamRegistry
 import com.rawsmusic.module.scanner.webdav.WebDavMediaScanner
+import com.rawsmusic.module.scanner.webdav.WebDavUrlTools
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -61,6 +62,7 @@ import com.rawsmusic.module.scanner.webdav.WebDavConfig
 import com.rawsmusic.module.scanner.webdav.WebDavHeaderCodec
 import com.rawsmusic.module.scanner.webdav.WebDavItem
 import com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache
+import com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver
 import com.rawsmusic.ui.songs.PlayerHolder
 import com.rawsmusic.R
 import kotlinx.coroutines.Dispatchers
@@ -70,7 +72,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * WebDAV 页面。
- * 支持多目录管理（添加/编辑/切换/移除）、目录浏览、单曲点播与曲库批量扫描导入。
+ * 一级视图：已连接的 WebDAV 目录管理（展示所有目录、右侧编辑/移除、添加目录）。
+ * 二级视图：点击目录后下钻展示真实内容（子目录浏览、音频流式播放、封面解析与曲库扫描导入）。
  */
 @Composable
 fun WebDavPageCompose(onBack: () -> Unit) {
@@ -85,12 +88,12 @@ fun WebDavPageCompose(onBack: () -> Unit) {
     var isLoading by remember { mutableStateOf(false) }
     var emptyMessage by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
-    var showDirectoryManager by remember { mutableStateOf(false) }
     var editingDirectory by remember { mutableStateOf<AppPreferences.WebDavDirectory?>(null) }
+    var pendingRemoveDir by remember { mutableStateOf<AppPreferences.WebDavDirectory?>(null) }
     var loadGeneration by remember { mutableStateOf(0L) }
 
     val directories = remember { mutableStateListOf<AppPreferences.WebDavDirectory>() }
-    var activeDir by remember { mutableStateOf<AppPreferences.WebDavDirectory?>(null) }
+    var selectedDirectory by remember { mutableStateOf<AppPreferences.WebDavDirectory?>(null) }
 
     var config by remember {
         mutableStateOf(
@@ -112,14 +115,15 @@ fun WebDavPageCompose(onBack: () -> Unit) {
     var importedCount by remember { mutableStateOf(0) }
 
     fun refreshImportedCount() {
-        importedCount = WebDavMediaScanner.getImportedWebDavSongCount(config.url)
+        importedCount = if (config.url.isNotBlank()) {
+            WebDavMediaScanner.getImportedWebDavSongCount(config.url)
+        } else 0
     }
 
     fun refreshDirectories() {
         val list = AppPreferences.WebDav.getDirectories()
         directories.clear()
         directories.addAll(list)
-        activeDir = AppPreferences.WebDav.getActiveDirectory()
     }
 
     LaunchedEffect(config.url) {
@@ -148,30 +152,91 @@ fun WebDavPageCompose(onBack: () -> Unit) {
                     isLoading = false
                     currentUrl = result.canonicalUrl
                     AppPreferences.WebDav.lastUrl = result.canonicalUrl
+                    selectedDirectory?.let { dir ->
+                        if (dir.url.isNotBlank()) {
+                            AppPreferences.WebDav.addOrUpdateDirectory(dir.copy(lastUrl = result.canonicalUrl))
+                        }
+                    }
                     items.clear()
                     items.addAll(result.items.sortedWith(compareByDescending<WebDavItem> { it.isDirectory }.thenBy { it.fileName }))
                     artworkKeyByUrl.clear()
                     scope.launch {
                         val cachedArtwork = withContext(Dispatchers.IO) {
-                            result.items.mapNotNull { item ->
-                                if (item.isDirectory || !AudioUtils.isAudioFile(item.fileName)) {
-                                    return@mapNotNull null
+                            val map = mutableMapOf<String, String>()
+                            // 1. 查找目录中的图片文件，对小于 5MB 的图片轻量缓存作为封面
+                            val imageItems = result.items.filter { 
+                                !it.isDirectory && it.fileName.substringAfterLast(".", "").lowercase() in setOf("jpg", "jpeg", "png", "webp") 
+                            }
+                            var directoryCoverKey: String? = null
+                            val primaryImage = imageItems.firstOrNull { 
+                                val lower = it.fileName.lowercase()
+                                lower.startsWith("cover") || lower.startsWith("folder") || lower.startsWith("albumart") || lower.contains("front")
+                            } ?: imageItems.firstOrNull()
+
+                            if (primaryImage != null && primaryImage.size in 1..5_000_000L) {
+                                val imagePath = runCatching {
+                                    WebDavPlaybackCache.resolve(
+                                        context = context,
+                                        client = webDavClient,
+                                        config = configSnapshot,
+                                        remoteUrl = primaryImage.resolvedUrl,
+                                        knownSize = primaryImage.size,
+                                    )
+                                }.getOrNull()
+                                if (!imagePath.isNullOrBlank()) {
+                                    directoryCoverKey = AudioFile(
+                                        path = imagePath,
+                                        fileSize = primaryImage.size,
+                                        dateModified = primaryImage.lastModified.hashCode().toLong(),
+                                    ).coverKey
+                                    map[primaryImage.resolvedUrl] = directoryCoverKey
                                 }
-                                val remoteUrl = item.resolvedUrl.takeIf { it.isNotBlank() }
-                                    ?: return@mapNotNull null
+                            }
+
+                            // 2. 为所有文件生成或关联封面 key
+                            result.items.forEach { item ->
+                                if (item.isDirectory) return@forEach
+                                val remoteUrl = item.resolvedUrl.takeIf { it.isNotBlank() } ?: return@forEach
+                                val ext = item.fileName.substringAfterLast(".", "").lowercase()
+                                val isAudio = AudioUtils.isAudioFile(item.fileName)
+                                val isImage = ext in setOf("jpg", "jpeg", "png", "webp")
+                                if (!isAudio && !isImage) return@forEach
+
                                 val cachedPath = WebDavPlaybackCache.findCachedPath(
                                     context = context,
                                     config = configSnapshot,
                                     remoteUrl = remoteUrl,
                                     knownSize = item.size,
-                                ) ?: return@mapNotNull null
-                                val key = AudioFile(
-                                    path = cachedPath,
-                                    fileSize = item.size,
-                                    dateModified = item.lastModified.hashCode().toLong(),
-                                ).coverKey
-                                remoteUrl to key
+                                )
+                                if (!cachedPath.isNullOrBlank()) {
+                                    val key = AudioFile(
+                                        path = cachedPath,
+                                        fileSize = item.size,
+                                        dateModified = item.lastModified.hashCode().toLong(),
+                                    ).coverKey
+                                    map[remoteUrl] = key
+                                    return@forEach
+                                }
+
+                                // 检查已缓存的封面文件（播放或扫描时提取并留存的封面）
+                                val safeUrl = WebDavUrlTools.toSafeHttpUrl(remoteUrl)?.toString() ?: remoteUrl
+                                val coverDir = java.io.File(context.cacheDir, "webdav_covers")
+                                val coverFile = java.io.File(coverDir, "art_${(safeUrl.hashCode().toLong() and 0xFFFFFFFFL)}.jpg")
+                                if (coverFile.exists() && coverFile.length() > 0) {
+                                    val key = AudioFile(
+                                        path = coverFile.absolutePath,
+                                        fileSize = coverFile.length(),
+                                        dateModified = coverFile.lastModified(),
+                                    ).coverKey
+                                    map[remoteUrl] = key
+                                    return@forEach
+                                }
+
+                                if (isAudio && directoryCoverKey != null) {
+                                    map[remoteUrl] = directoryCoverKey
+                                }
                             }
+                            map
                         }
                         if (requestGeneration == loadGeneration) {
                             cachedArtwork.forEach { (url, key) -> artworkKeyByUrl[url] = key }
@@ -191,9 +256,8 @@ fun WebDavPageCompose(onBack: () -> Unit) {
         }
     }
 
-    fun switchToDirectory(dir: AppPreferences.WebDavDirectory) {
+    fun switchToDirectory(dir: AppPreferences.WebDavDirectory, autoLoad: Boolean = true) {
         AppPreferences.WebDav.setActiveDirectory(dir.id)
-        refreshDirectories()
         val newConfig = WebDavConfig(
             url = dir.url,
             username = dir.username,
@@ -206,18 +270,43 @@ fun WebDavPageCompose(onBack: () -> Unit) {
             extraHeaders = WebDavHeaderCodec.parseOrEmpty(dir.extraHeadersText),
         )
         config = newConfig
-        val startUrl = dir.lastUrl.ifBlank { dir.url }
-        if (startUrl.isNotBlank()) {
-            loadDirectory(startUrl, newConfig)
-        } else {
-            items.clear()
-            currentUrl = ""
-            emptyMessage = context.getString(R.string.webdav_configure_hint)
+        selectedDirectory = dir
+        if (autoLoad) {
+            val startUrl = dir.lastUrl.ifBlank { dir.url }
+            if (startUrl.isNotBlank()) {
+                loadDirectory(startUrl, newConfig)
+            } else {
+                items.clear()
+                currentUrl = ""
+                emptyMessage = context.getString(R.string.webdav_configure_hint)
+            }
+        }
+    }
+
+    fun evictWebDavSongsFromQueue(targetUrl: String) {
+        if (targetUrl.isBlank()) return
+        val controller = PlayerHolder.controller ?: return
+        val normalized = targetUrl.trimEnd('/')
+        val queue = controller.queue.value
+        val toRemove = queue.songs.filter { song ->
+            val p = song.path.trim()
+            p.startsWith(normalized, ignoreCase = true) || p.startsWith(targetUrl, ignoreCase = true)
+        }
+        if (toRemove.isNotEmpty()) {
+            controller.removeSongsFromQueue(toRemove)
+        }
+        val current = controller.currentSong.value
+        if (current != null) {
+            val cp = current.path.trim()
+            if (cp.startsWith(normalized, ignoreCase = true) || cp.startsWith(targetUrl, ignoreCase = true)) {
+                controller.pause()
+            }
         }
     }
 
     fun removeDirectory(dir: AppPreferences.WebDavDirectory, purgeSongs: Boolean) {
         if (purgeSongs && dir.url.isNotBlank()) {
+            evictWebDavSongsFromQueue(dir.url)
             scope.launch {
                 val purged = withContext(Dispatchers.IO) {
                     WebDavMediaScanner.purgeWebDavSongs(dir.url)
@@ -232,44 +321,17 @@ fun WebDavPageCompose(onBack: () -> Unit) {
         }
         AppPreferences.WebDav.removeDirectory(dir.id)
         refreshDirectories()
-        val currentActive = AppPreferences.WebDav.getActiveDirectory()
-        if (currentActive != null) {
-            switchToDirectory(currentActive)
-        } else {
+        if (selectedDirectory?.id == dir.id) {
+            selectedDirectory = null
             items.clear()
             currentUrl = ""
             config = WebDavConfig(url = "")
-            emptyMessage = context.getString(R.string.webdav_configure_hint)
         }
     }
 
-    fun saveDirectory(
-        id: String?,
-        name: String,
-        url: String,
-        username: String,
-        password: String,
-        authMode: Int,
-        extraHeadersText: String
-    ) {
-        val targetId = id ?: java.util.UUID.randomUUID().toString()
-        val dir = AppPreferences.WebDavDirectory(
-            id = targetId,
-            name = name.ifBlank { url.substringAfter("://").substringBefore("/").ifBlank { "WebDAV" } },
-            url = url,
-            username = username,
-            password = password,
-            authMode = authMode,
-            extraHeadersText = extraHeadersText,
-        )
-        AppPreferences.WebDav.addOrUpdateDirectory(dir)
-        refreshDirectories()
-        switchToDirectory(dir)
-    }
-
-    fun scanToLibrary(targetUrl: String = currentUrl) {
+    fun scanToLibrary(targetUrl: String = currentUrl, configOverride: WebDavConfig? = null) {
         if (isScanningToLibrary) return
-        val configSnapshot = config
+        val configSnapshot = configOverride ?: config
         if (configSnapshot.url.isBlank()) {
             AppNoticeBus.error(context.getString(R.string.webdav_configure_hint))
             return
@@ -286,6 +348,7 @@ fun WebDavPageCompose(onBack: () -> Unit) {
                         client = webDavClient,
                         config = configSnapshot,
                         targetDirectoryUrl = targetUrl,
+                        context = context,
                     )
                 }
             }
@@ -293,9 +356,10 @@ fun WebDavPageCompose(onBack: () -> Unit) {
             result.fold(
                 onSuccess = { scanResult ->
                     refreshImportedCount()
+                    val count = if (scanResult.imported > 0) scanResult.imported else scanResult.totalScanned
                     if (scanResult.totalScanned > 0) {
                         AppNoticeBus.post(
-                            message = context.getString(R.string.webdav_scan_success, scanResult.totalScanned),
+                            message = context.getString(R.string.webdav_scan_success, count),
                             icon = AppNoticeIcon.SCAN,
                         )
                     } else {
@@ -314,7 +378,49 @@ fun WebDavPageCompose(onBack: () -> Unit) {
         }
     }
 
+    fun saveDirectory(
+        id: String?,
+        name: String,
+        url: String,
+        username: String,
+        password: String,
+        authMode: Int,
+        extraHeadersText: String
+    ) {
+        val isNew = (id == null)
+        val targetId = id ?: java.util.UUID.randomUUID().toString()
+        val dir = AppPreferences.WebDavDirectory(
+            id = targetId,
+            name = name.ifBlank { url.substringAfter("://").substringBefore("/").ifBlank { "WebDAV" } },
+            url = url,
+            username = username,
+            password = password,
+            authMode = authMode,
+            extraHeadersText = extraHeadersText,
+        )
+        AppPreferences.WebDav.addOrUpdateDirectory(dir)
+        refreshDirectories()
+        // 自动下钻进入该目录
+        switchToDirectory(dir, autoLoad = true)
+        // 若为新添加目录，自动触发一次曲库扫描导入
+        if (isNew) {
+            val newConfig = WebDavConfig(
+                url = dir.url,
+                username = dir.username,
+                password = dir.password,
+                authMode = when (dir.authMode) {
+                    1 -> AuthMode.BASIC
+                    2 -> AuthMode.DIGEST
+                    else -> AuthMode.AUTO
+                },
+                extraHeaders = WebDavHeaderCodec.parseOrEmpty(dir.extraHeadersText),
+            )
+            scanToLibrary(dir.url, newConfig)
+        }
+    }
+
     fun purgeLibrarySongs() {
+        evictWebDavSongsFromQueue(config.url)
         scope.launch {
             val count = withContext(Dispatchers.IO) {
                 WebDavMediaScanner.purgeWebDavSongs(config.url)
@@ -347,18 +453,53 @@ fun WebDavPageCompose(onBack: () -> Unit) {
                 )
             },
         )
-        val audioFile = AudioFile(
+        val audioItems = items.filter { !it.isDirectory && AudioUtils.isAudioFile(it.fileName) }
+        val audioQueue = audioItems.map { itItem ->
+            val p = webDavClient.buildPlaybackRequest(configSnapshot, itItem)
+            RemoteHttpStreamRegistry.register(
+                url = p.url,
+                headers = p.headers,
+                userAgent = p.userAgent,
+                owner = "webdav",
+                headerProvider = { targetUrl ->
+                    webDavClient.buildPlaybackHeaders(
+                        config = configSnapshot,
+                        targetUrl = targetUrl,
+                        refreshAuthentication = true,
+                    )
+                },
+            )
+            AudioFile(
+                id = (itItem.resolvedUrl.hashCode().toLong() and 0x7FFFFFFF),
+                path = p.url,
+                title = itItem.fileName.substringBeforeLast("."),
+                artist = selectedDirectory?.name?.ifBlank { "WebDAV" } ?: "WebDAV",
+                album = context.getString(R.string.webdav_remote_album),
+                albumArtPath = "",
+                duration = 0,
+                format = itItem.fileName.substringAfterLast(".", "").uppercase(),
+                fileSize = itItem.size,
+            )
+        }
+        val curIndex = audioItems.indexOfFirst { it.resolvedUrl == item.resolvedUrl }.coerceAtLeast(0)
+        val audioFile = audioQueue.getOrNull(curIndex) ?: AudioFile(
             id = (item.resolvedUrl.hashCode().toLong() and 0x7FFFFFFF),
             path = playback.url,
             title = item.fileName.substringBeforeLast("."),
-            artist = activeDir?.name?.ifBlank { "WebDAV" } ?: "WebDAV",
+            artist = selectedDirectory?.name?.ifBlank { "WebDAV" } ?: "WebDAV",
             album = context.getString(R.string.webdav_remote_album),
             albumArtPath = "",
             duration = 0,
             format = item.fileName.substringAfterLast(".", "").uppercase(),
             fileSize = item.size,
         )
-        PlayerHolder.controller?.play(audioFile)
+
+        val isCached = WebDavPlaybackCredentialResolver.findCachedPath(context, playback.url) != null
+        if (!isCached) {
+            AppNoticeBus.post(context.getString(R.string.webdav_buffering_song), AppNoticeIcon.DOWNLOAD)
+        }
+
+        PlayerHolder.controller?.play(audioFile, queue = audioQueue, index = curIndex)
 
         if (artworkKeyByUrl[playback.url].isNullOrBlank()) {
             scope.launch {
@@ -405,7 +546,7 @@ fun WebDavPageCompose(onBack: () -> Unit) {
             id = (item.resolvedUrl.hashCode().toLong() and 0x7FFFFFFF),
             path = playback.url,
             title = item.fileName.substringBeforeLast("."),
-            artist = activeDir?.name?.ifBlank { "WebDAV" } ?: "WebDAV",
+            artist = selectedDirectory?.name?.ifBlank { "WebDAV" } ?: "WebDAV",
             album = context.getString(R.string.webdav_remote_album),
             albumArtPath = "",
             duration = 0,
@@ -421,12 +562,21 @@ fun WebDavPageCompose(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         refreshDirectories()
-        val active = AppPreferences.WebDav.getActiveDirectory()
-        if (active != null && active.url.isNotBlank()) {
-            val startUrl = active.lastUrl.ifBlank { active.url }
-            loadDirectory(startUrl)
+    }
+
+    // 处理系统返回手势/物理按键
+    androidx.activity.compose.BackHandler {
+        if (selectedDirectory != null) {
+            val parentUrl = if (config.url.isNotBlank() && currentUrl.isNotBlank()) {
+                webDavClient.getParentUrl(currentUrl, config)
+            } else null
+            if (parentUrl != null) {
+                loadDirectory(parentUrl)
+            } else {
+                selectedDirectory = null
+            }
         } else {
-            emptyMessage = context.getString(R.string.webdav_configure_hint)
+            onBack()
         }
     }
 
@@ -438,167 +588,232 @@ fun WebDavPageCompose(onBack: () -> Unit) {
     ) {
         Spacer(Modifier.height(16.dp))
 
-        // 顶栏
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextButton(onClick = {
-                val parentUrl = webDavClient.getParentUrl(currentUrl, config)
-                if (parentUrl != null) loadDirectory(parentUrl)
-                else onBack()
-            }) {
-                Text(stringResource(R.string.webdav_back), color = colors.primary, fontSize = 14.sp)
-            }
-            Text(
-                text = activeDir?.name?.ifBlank { stringResource(R.string.webdav_title) } ?: stringResource(R.string.webdav_title),
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .padding(horizontal = 4.dp)
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { showDirectoryManager = true }) {
-                    Text(stringResource(R.string.webdav_directory_manager), color = colors.primary, fontSize = 13.sp)
+        val currentDir = selectedDirectory
+        if (currentDir == null) {
+            // ================== 一级视图：已连接的 WebDAV 目录管理 ==================
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onBack) {
+                    Text(stringResource(R.string.webdav_back), color = colors.primary, fontSize = 14.sp)
                 }
+                Text(
+                    text = stringResource(R.string.webdav_directory_manager_title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .padding(horizontal = 4.dp)
+                )
                 TextButton(onClick = {
-                    editingDirectory = activeDir
+                    editingDirectory = null
+                    showSettings = true
+                }) {
+                    Text("+ " + stringResource(R.string.webdav_add_directory), color = colors.primary, fontSize = 13.sp)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            if (directories.isEmpty()) {
+                Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            stringResource(R.string.webdav_no_directories),
+                            fontSize = 14.sp,
+                            color = colors.secondaryText
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = {
+                            editingDirectory = null
+                            showSettings = true
+                        }) {
+                            Text(stringResource(R.string.webdav_add_directory), color = colors.primary, fontSize = 14.sp)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(directories, key = { it.id }) { dir ->
+                        WebDavDirectoryCard(
+                            directory = dir,
+                            onClick = {
+                                switchToDirectory(dir, autoLoad = true)
+                            },
+                            onEdit = {
+                                editingDirectory = dir
+                                showSettings = true
+                            },
+                            onRemove = {
+                                pendingRemoveDir = dir
+                            }
+                        )
+                    }
+                }
+            }
+        } else {
+            // ================== 二级视图：下钻目录内容浏览与播放 ==================
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = {
+                    val parentUrl = if (config.url.isNotBlank() && currentUrl.isNotBlank()) {
+                        webDavClient.getParentUrl(currentUrl, config)
+                    } else null
+                    if (parentUrl != null) {
+                        loadDirectory(parentUrl)
+                    } else {
+                        selectedDirectory = null
+                    }
+                }) {
+                    Text(stringResource(R.string.webdav_back), color = colors.primary, fontSize = 14.sp)
+                }
+                Text(
+                    text = currentDir.name.ifBlank { stringResource(R.string.webdav_title) },
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .padding(horizontal = 4.dp)
+                )
+                TextButton(onClick = {
+                    editingDirectory = currentDir
                     showSettings = true
                 }) {
                     Text(stringResource(R.string.settings), color = colors.primary, fontSize = 13.sp)
                 }
             }
-        }
 
-        // 当前路径
-        if (currentUrl.isNotBlank()) {
-            Text(
-                currentUrl,
-                fontSize = 11.sp,
-                color = colors.secondaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-            )
-        }
+            // 当前路径面包屑
+            if (currentUrl.isNotBlank()) {
+                Text(
+                    currentUrl,
+                    fontSize = 11.sp,
+                    color = colors.secondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                )
+            }
 
-        // 操作栏：扫描至曲库与清理
-        if (config.url.isNotBlank()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(
-                    onClick = { scanToLibrary(currentUrl) },
-                    enabled = !isScanningToLibrary && !isLoading
+            // 操作栏：扫描至曲库与清理
+            if (config.url.isNotBlank()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isScanningToLibrary) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            color = colors.primary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(
-                        text = if (isScanningToLibrary) {
-                            stringResource(R.string.webdav_scanning_library)
-                        } else {
-                            stringResource(R.string.webdav_scan_to_library)
-                        },
-                        fontSize = 13.sp,
-                        color = if (isScanningToLibrary) colors.secondaryText else colors.primary
-                    )
-                }
-
-                if (importedCount > 0) {
                     TextButton(
-                        onClick = { purgeLibrarySongs() },
-                        enabled = !isScanningToLibrary
+                        onClick = { scanToLibrary(currentUrl) },
+                        enabled = !isScanningToLibrary && !isLoading
                     ) {
+                        if (isScanningToLibrary) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = colors.primary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         Text(
-                            text = "${stringResource(R.string.webdav_purge_songs)} ($importedCount)",
-                            fontSize = 12.sp,
-                            color = colors.secondaryText
+                            text = if (isScanningToLibrary) {
+                                stringResource(R.string.webdav_scanning_library)
+                            } else {
+                                stringResource(R.string.webdav_scan_to_library)
+                            },
+                            fontSize = 13.sp,
+                            color = if (isScanningToLibrary) colors.secondaryText else colors.primary
                         )
+                    }
+
+                    if (importedCount > 0) {
+                        TextButton(
+                            onClick = { purgeLibrarySongs() },
+                            enabled = !isScanningToLibrary
+                        ) {
+                            Text(
+                                text = "${stringResource(R.string.webdav_purge_songs)} ($importedCount)",
+                                fontSize = 12.sp,
+                                color = colors.secondaryText
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(8.dp))
 
-        // 内容
-        when {
-            isLoading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = colors.primary)
+            // 目录与文件列表内容
+            when {
+                isLoading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = colors.primary)
+                    }
                 }
-            }
-            emptyMessage.isNotBlank() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(emptyMessage, fontSize = 14.sp, color = colors.secondaryText)
+                emptyMessage.isNotBlank() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(emptyMessage, fontSize = 14.sp, color = colors.secondaryText)
+                    }
                 }
-            }
-            else -> {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    items(items) { item ->
-                        WebDavItemRow(
-                            item = item,
-                            artworkKey = artworkKeyByUrl[item.resolvedUrl],
-                            onClick = {
-                                if (item.isDirectory) {
-                                    val dirUrl = item.resolvedUrl.ifBlank {
-                                        webDavClient.buildFileUrl(currentUrl, item.href, isDirectory = true)
+                else -> {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        items(items) { item ->
+                            WebDavItemRow(
+                                item = item,
+                                artworkKey = artworkKeyByUrl[item.resolvedUrl],
+                                onClick = {
+                                    if (item.isDirectory) {
+                                        val dirUrl = item.resolvedUrl.ifBlank {
+                                            webDavClient.buildFileUrl(currentUrl, item.href, isDirectory = true)
+                                        }
+                                        loadDirectory(dirUrl)
+                                    } else if (AudioUtils.isAudioFile(item.fileName)) {
+                                        playItem(item)
                                     }
-                                    loadDirectory(dirUrl)
-                                } else if (AudioUtils.isAudioFile(item.fileName)) {
-                                    playItem(item)
+                                },
+                                onMore = {
+                                    if (!item.isDirectory && AudioUtils.isAudioFile(item.fileName)) {
+                                        addToQueue(item)
+                                    }
                                 }
-                            },
-                            onMore = {
-                                if (!item.isDirectory && AudioUtils.isAudioFile(item.fileName)) {
-                                    addToQueue(item)
-                                }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    // 目录管理对话框
-    if (showDirectoryManager) {
-        WebDavDirectoryManagerDialog(
-            directories = directories,
-            activeId = activeDir?.id.orEmpty(),
-            onDismiss = { showDirectoryManager = false },
-            onSelect = { selected ->
-                switchToDirectory(selected)
-                showDirectoryManager = false
-            },
-            onAdd = {
-                editingDirectory = null
-                showSettings = true
-            },
-            onEdit = { toEdit ->
-                editingDirectory = toEdit
-                showSettings = true
-            },
-            onRemove = { toRemove, purgeSongs ->
-                removeDirectory(toRemove, purgeSongs)
+    // 移除目录二次确认弹窗
+    if (pendingRemoveDir != null) {
+        val target = pendingRemoveDir!!
+        WebDavRemoveConfirmDialog(
+            directory = target,
+            onDismiss = { pendingRemoveDir = null },
+            onConfirm = { purgeSongs ->
+                removeDirectory(target, purgeSongs)
+                pendingRemoveDir = null
             }
         )
     }
@@ -615,7 +830,6 @@ fun WebDavPageCompose(onBack: () -> Unit) {
             onSave = { name, url, username, password, authMode, extraHeadersText ->
                 runCatching {
                     val normalizedUrl = webDavClient.canonicalizeCollectionUrl(url)
-                    val extraHeaders = WebDavHeaderCodec.parse(extraHeadersText)
                     val dirId = editingDirectory?.id
                     saveDirectory(
                         id = dirId,
@@ -638,6 +852,138 @@ fun WebDavPageCompose(onBack: () -> Unit) {
         )
     }
 }
+
+/**
+ * 已连接目录卡片，右侧带编辑与移除按钮，整卡点击下钻。
+ */
+@Composable
+private fun WebDavDirectoryCard(
+    directory: AppPreferences.WebDavDirectory,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val colors = themeColors()
+    val importedCount = remember(directory.url) {
+        if (directory.url.isNotBlank()) WebDavMediaScanner.getImportedWebDavSongCount(directory.url) else 0
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surface)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("📁", fontSize = 24.sp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = directory.name.ifBlank { stringResource(R.string.webdav_title) },
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = directory.url,
+                fontSize = 11.sp,
+                color = colors.secondaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = if (importedCount > 0) "已导入音乐库 · $importedCount 首" else "未导入音乐库 (点击进入可扫描)",
+                fontSize = 11.sp,
+                color = if (importedCount > 0) colors.primary else colors.secondaryText,
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onEdit) {
+                Text(stringResource(R.string.webdav_edit_directory), fontSize = 12.sp, color = colors.primary)
+            }
+            TextButton(onClick = onRemove) {
+                Text(stringResource(R.string.webdav_remove_directory), fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFC62828))
+            }
+        }
+    }
+}
+
+/**
+ * 移除目录的二次确认对话框
+ */
+@Composable
+private fun WebDavRemoveConfirmDialog(
+    directory: AppPreferences.WebDavDirectory,
+    onDismiss: () -> Unit,
+    onConfirm: (purgeSongs: Boolean) -> Unit,
+) {
+    val colors = themeColors()
+    var purgeSongsOnRemove by remember { mutableStateOf(true) }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(colors.surface)
+                .padding(20.dp)
+        ) {
+            Text(
+                stringResource(R.string.webdav_remove_confirm_title),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.webdav_remove_confirm_msg, directory.name.ifBlank { directory.url }),
+                fontSize = 13.sp,
+                color = colors.secondaryText
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { purgeSongsOnRemove = !purgeSongsOnRemove }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = purgeSongsOnRemove,
+                    onCheckedChange = { purgeSongsOnRemove = it }
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.webdav_remove_purge_songs),
+                    fontSize = 13.sp,
+                    color = colors.onSurface
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.settings_cancel), color = colors.secondaryText)
+                }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = {
+                    onConfirm(purgeSongsOnRemove)
+                }) {
+                    Text(stringResource(R.string.webdav_remove_directory), color = androidx.compose.ui.graphics.Color(0xFFC62828))
+                }
+            }
+        }
+    }
+}
+
+
 
 @Composable
 private fun WebDavItemRow(
@@ -662,13 +1008,23 @@ private fun WebDavItemRow(
                 modifier = Modifier.size(48.dp)
             )
         } else {
+            val ext = item.fileName.substringAfterLast(".", "").lowercase()
+            val isAudio = AudioUtils.isAudioFile(item.fileName)
+            val isImage = ext in setOf("jpg", "jpeg", "png", "webp", "bmp")
+            val isLrc = ext in setOf("lrc", "txt")
+            val defaultIcon = when {
+                isAudio -> "🎵"
+                isImage -> "🖼️"
+                isLrc -> "📝"
+                else -> "📄"
+            }
             Box(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("🎵", fontSize = 20.sp)
+                Text(defaultIcon, fontSize = 20.sp)
                 if (!artworkKey.isNullOrBlank()) {
                     BitmapImage(
                         key = artworkKey,
@@ -706,190 +1062,7 @@ private fun WebDavItemRow(
     }
 }
 
-@Composable
-private fun WebDavDirectoryManagerDialog(
-    directories: List<AppPreferences.WebDavDirectory>,
-    activeId: String,
-    onDismiss: () -> Unit,
-    onSelect: (AppPreferences.WebDavDirectory) -> Unit,
-    onAdd: () -> Unit,
-    onEdit: (AppPreferences.WebDavDirectory) -> Unit,
-    onRemove: (AppPreferences.WebDavDirectory, purgeSongs: Boolean) -> Unit,
-) {
-    val colors = themeColors()
-    var pendingRemoveDir by remember { mutableStateOf<AppPreferences.WebDavDirectory?>(null) }
-    var purgeSongsOnRemove by remember { mutableStateOf(true) }
 
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = true)
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(colors.surface)
-                .padding(20.dp)
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    stringResource(R.string.webdav_directory_manager_title),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.onSurface
-                )
-                TextButton(onClick = onAdd) {
-                    Text("+ " + stringResource(R.string.webdav_add_directory), color = colors.primary, fontSize = 14.sp)
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            if (directories.isEmpty()) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(100.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        stringResource(R.string.webdav_no_directories),
-                        fontSize = 13.sp,
-                        color = colors.secondaryText
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(directories) { dir ->
-                        val isActive = dir.id == activeId
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isActive) colors.primary.copy(alpha = 0.12f) else colors.background)
-                                .clickable { onSelect(dir) }
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = dir.name.ifBlank { stringResource(R.string.webdav_title) },
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colors.onSurface
-                                    )
-                                    if (isActive) {
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            text = stringResource(R.string.webdav_current_active),
-                                            fontSize = 10.sp,
-                                            color = colors.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = dir.url,
-                                    fontSize = 11.sp,
-                                    color = colors.secondaryText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(onClick = { onEdit(dir) }) {
-                                    Text(stringResource(R.string.webdav_edit_directory), fontSize = 12.sp, color = colors.primary)
-                                }
-                                TextButton(onClick = { pendingRemoveDir = dir }) {
-                                    Text(stringResource(R.string.webdav_remove_directory), fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFC62828))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.settings_close), color = colors.secondaryText)
-                }
-            }
-        }
-    }
-
-    if (pendingRemoveDir != null) {
-        val target = pendingRemoveDir!!
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = { pendingRemoveDir = null }
-        ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(colors.surface)
-                    .padding(20.dp)
-            ) {
-                Text(
-                    stringResource(R.string.webdav_remove_confirm_title),
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.onSurface
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.webdav_remove_confirm_msg, target.name.ifBlank { target.url }),
-                    fontSize = 13.sp,
-                    color = colors.secondaryText
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { purgeSongsOnRemove = !purgeSongsOnRemove }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = purgeSongsOnRemove,
-                        onCheckedChange = { purgeSongsOnRemove = it }
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.webdav_remove_purge_songs),
-                        fontSize = 13.sp,
-                        color = colors.onSurface
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { pendingRemoveDir = null }) {
-                        Text(stringResource(R.string.settings_cancel), color = colors.secondaryText)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    TextButton(onClick = {
-                        onRemove(target, purgeSongsOnRemove)
-                        pendingRemoveDir = null
-                    }) {
-                        Text(stringResource(R.string.webdav_remove_directory), color = androidx.compose.ui.graphics.Color(0xFFC62828))
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun WebDavSettingsDialog(

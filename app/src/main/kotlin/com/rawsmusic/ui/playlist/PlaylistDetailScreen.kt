@@ -124,8 +124,8 @@ fun PlaylistDetailScreen(
                     }
                 }
 
-                // 导出歌单入口（非多选时且非态度歌单时显示）
-                if (!multiSelectState.isActive && playlist != null && !playlist.id.startsWith("attitude:")) {
+                // 导出歌单入口（非多选时显示）
+                if (!multiSelectState.isActive && playlist != null) {
                     IconButton(
                         onClick = { exportDialog = true },
                         modifier = Modifier.size(42.dp),
@@ -286,6 +286,7 @@ fun PlaylistDetailScreen(
     if (exportDialog && playlist != null) {
         ExportPlaylistDialog(
             playlist = playlist,
+            resolvedSongs = songs,
             onDismiss = { exportDialog = false },
         )
     }

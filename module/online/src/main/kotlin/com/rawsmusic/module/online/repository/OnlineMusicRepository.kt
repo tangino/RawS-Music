@@ -66,6 +66,8 @@ class OnlineMusicRepository private constructor() {
         }
     }
 
+    fun getQQMusicSource(): QQMusicSource = qqSource
+
     /**
      * 绑定平台账号提供者，使音源网络请求自动携带登录 Cookie。
      *

@@ -1,5 +1,6 @@
 package com.rawsmusic.ui.playlist
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
@@ -76,6 +77,7 @@ enum class PlaylistExportFormat(
     val mimeType: String,
     @StringRes val labelRes: Int,
 ) {
+    TXT("txt", "text/plain", R.string.playlist_export_format_txt),
     M3U8("m3u8", "audio/x-mpegurl", R.string.playlist_export_format_m3u8),
     JSON("json", "application/json", R.string.playlist_export_format_json),
 }
@@ -83,18 +85,19 @@ enum class PlaylistExportFormat(
 /**
  * 歌单导出弹窗（Miuix 风格）。
  *
- * 支持选择 M3U8 与 JSON 两种格式，并支持保存至下载目录或调起系统分享。
+ * 支持选择 TXT（纯文本清单，每首歌一行）、M3U8 与 JSON 三种格式，并支持一键复制到剪贴板、保存至下载目录或调起系统分享。
  */
 @Composable
 fun ExportPlaylistDialog(
     playlist: UserPlaylist,
+    resolvedSongs: List<AudioFile>? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colors = themeColors()
 
-    var selectedFormat by remember { mutableStateOf(PlaylistExportFormat.M3U8) }
+    var selectedFormat by remember { mutableStateOf(PlaylistExportFormat.TXT) }
     val initialFileName = remember(playlist.name, selectedFormat) {
         val sanitized = PlaylistM3u8Codec.sanitizeFileName(playlist.name)
         val dateStr = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
@@ -102,6 +105,17 @@ fun ExportPlaylistDialog(
     }
     var fileName by remember(selectedFormat) { mutableStateOf(initialFileName) }
     var isExporting by remember { mutableStateOf(false) }
+
+    val plainTextContent = remember(playlist, resolvedSongs) {
+        if (!resolvedSongs.isNullOrEmpty()) {
+            PlaylistTransferStore.exportPlainText(resolvedSongs)
+        } else {
+            PlaylistTransferStore.exportPlainText(playlist)
+        }
+    }
+    val totalSongs = remember(playlist, resolvedSongs) {
+        resolvedSongs?.size ?: playlist.songs.size
+    }
 
     ActivityOverlayBackOwner(active = true)
     WindowDialog(
@@ -148,6 +162,88 @@ fun ExportPlaylistDialog(
                             color = if (isSelected) colors.primary else colors.secondaryText,
                             fontSize = 12.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            fontFamily = appFontFamily(),
+                        )
+                    }
+                }
+            }
+
+            // 纯文本格式专属：预览与一键复制卡片
+            if (selectedFormat == PlaylistExportFormat.TXT) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.onSurfaceVariant.copy(alpha = 0.05f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.playlist_export_preview, minOf(3, totalSongs)),
+                            color = colors.secondaryText,
+                            fontSize = 11.sp,
+                            fontFamily = appFontFamily(),
+                        )
+                        Button(
+                            onClick = {
+                                if (plainTextContent.isBlank()) {
+                                    AppNoticeBus.post(
+                                        context.getString(R.string.playlist_export_empty_notice),
+                                        AppNoticeIcon.INFO,
+                                    )
+                                } else {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText(playlist.name, plainTextContent))
+                                    AppNoticeBus.post(
+                                        context.getString(R.string.playlist_export_copied_notice, totalSongs),
+                                        AppNoticeIcon.PLAYLIST,
+                                    )
+                                    onDismiss()
+                                }
+                            },
+                            enabled = !isExporting && plainTextContent.isNotBlank(),
+                            colors = ButtonDefaults.buttonColorsPrimary(),
+                            modifier = Modifier.height(30.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.playlist_export_copy_text),
+                                fontSize = 11.sp,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                    }
+
+                    val previewLines = remember(plainTextContent) {
+                        plainTextContent.lineSequence().filter { it.isNotBlank() }.take(3).toList()
+                    }
+                    if (previewLines.isNotEmpty()) {
+                        previewLines.forEach { line ->
+                            Text(
+                                text = line,
+                                color = colors.onSurface,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                        if (totalSongs > 3) {
+                            Text(
+                                text = "… (${totalSongs} 首)",
+                                color = colors.secondaryText,
+                                fontSize = 10.sp,
+                                fontFamily = appFontFamily(),
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = stringResource(R.string.playlist_export_empty_notice),
+                            color = colors.secondaryText,
+                            fontSize = 12.sp,
                             fontFamily = appFontFamily(),
                         )
                     }
@@ -205,6 +301,7 @@ fun ExportPlaylistDialog(
                         scope.launch {
                             try {
                                 val content = when (selectedFormat) {
+                                    PlaylistExportFormat.TXT -> plainTextContent
                                     PlaylistExportFormat.M3U8 -> PlaylistM3u8Codec.encode(playlist)
                                     PlaylistExportFormat.JSON -> PlaylistTransferStore.exportJson(playlist)
                                 }
@@ -252,6 +349,7 @@ fun ExportPlaylistDialog(
                         scope.launch {
                             try {
                                 val file = when (selectedFormat) {
+                                    PlaylistExportFormat.TXT -> PlaylistTransferStore.exportPlainText(context, playlist, plainTextContent)
                                     PlaylistExportFormat.M3U8 -> PlaylistTransferStore.exportM3u8(context, playlist)
                                     PlaylistExportFormat.JSON -> PlaylistTransferStore.exportJson(context, playlist)
                                 }

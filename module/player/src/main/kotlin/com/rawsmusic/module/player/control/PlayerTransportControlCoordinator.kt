@@ -105,6 +105,7 @@ internal class PlayerTransportControlCoordinator(
 
     fun play(song: AudioFile, queue: List<AudioFile> = emptyList(), index: Int = 0) {
         if (callbacks.isReleased()) return
+        com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelExcept(song.path)
         callbacks.clearAutomaticFocusResume("explicit_play")
         val (requestedQueue, requestedIndex) = callbacks.resolveExplicitPlayQueue(song, queue, index)
         callbacks.primeSongSelectionForUi(song)

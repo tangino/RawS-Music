@@ -6,6 +6,7 @@ import com.rawsmusic.core.common.utils.OnlinePlaybackDiagnostics
 import com.rawsmusic.module.data.prefs.AppPreferences
 import android.os.SystemClock
 import com.rawsmusic.module.data.source.playback.MusicSourceResolvedStreamRegistry
+import com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver
 
 /**
  * Centralizes FFmpeg decoder open/probe policy.
@@ -28,6 +29,13 @@ internal class FFmpegDecoderOpenHelper(
                     "generation=${entry.generation} result=$duration source=item_metadata"
             )
             return duration
+        }
+        if (path.startsWith("http://", true) || path.startsWith("https://", true)) {
+            AppLogger.i(
+                tag,
+                "${OnlinePlaybackDiagnostics.PREFIX} PROBE_BYPASS kind=duration result=0 source=remote_stream"
+            )
+            return 0L
         }
         val resolvedPath = pathResolver.resolve(path)
         RemotePlaybackOptionsResolver.lookup(path, resolvedPath)?.let { options ->
@@ -158,6 +166,17 @@ internal class FFmpegDecoderOpenHelper(
         }
         val changePitch = AppPreferences.Player.playbackSpeedChangesPitch
         val options = RemotePlaybackOptionsResolver.lookup(originalPath, resolvedPath)
+            ?: run {
+                if (originalPath.startsWith("http://", true) || originalPath.startsWith("https://", true)) {
+                    WebDavPlaybackCredentialResolver.resolve(originalPath)
+                    RemotePlaybackOptionsResolver.lookup(originalPath, resolvedPath)
+                } else null
+            }
+        val safeDecoderPath = if (resolvedPath.startsWith("http://", true) || resolvedPath.startsWith("https://", true)) {
+            WebDavPlaybackCredentialResolver.toSafeUrl(resolvedPath) ?: resolvedPath
+        } else {
+            resolvedPath
+        }
         val startedAt = SystemClock.elapsedRealtime()
         if (options != null) {
             AppLogger.i(
@@ -179,7 +198,7 @@ internal class FFmpegDecoderOpenHelper(
         }
         val handle = if (options != null) {
             PlaybackDecoderBridge.openDecoder(
-                path = resolvedPath,
+                path = safeDecoderPath,
                 targetSampleRate = targetSr,
                 bitsPerSample = targetBits,
                 channels = targetCh,
@@ -191,7 +210,7 @@ internal class FFmpegDecoderOpenHelper(
             )
         } else {
             PlaybackDecoderBridge.openDecoder(
-                path = resolvedPath,
+                path = safeDecoderPath,
                 targetSampleRate = targetSr,
                 bitsPerSample = targetBits,
                 channels = targetCh,

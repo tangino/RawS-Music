@@ -287,15 +287,26 @@ object MusicRepository {
 
     // ────────────────────── 缓存管理 ──────────────────────
 
+    private fun isRemotePath(path: String): Boolean =
+        path.startsWith("http://", ignoreCase = true) ||
+        path.startsWith("https://", ignoreCase = true) ||
+        path.startsWith("webdav://", ignoreCase = true) ||
+        path.startsWith("online://", ignoreCase = true)
+
     private fun visibleSongs(songs: List<AudioFile>): List<AudioFile> {
         if (songs.all { deletionFence.isVisible(it.path, it.libraryKey()) }) return songs
         return songs.filter { deletionFence.isVisible(it.path, it.libraryKey()) }
     }
 
     private fun writableSongs(songs: List<AudioFile>): List<AudioFile> = songs.filter { song ->
-        val physicalFilePresent = !deletionFence.needsPhysicalValidation(song.path) ||
+        val isRemote = isRemotePath(song.path)
+        val physicalFilePresent = isRemote || !deletionFence.needsPhysicalValidation(song.path) ||
             File(song.path).let { it.isFile && it.canRead() }
         deletionFence.canWrite(song.path, song.libraryKey(), physicalFilePresent)
+    }
+
+    fun unfenceRemotePaths(urlPrefix: String) {
+        deletionFence.clearWithPrefix(urlPrefix)
     }
 
     private fun publishSongs(songs: List<AudioFile>) = synchronized(libraryPublicationLock) {
@@ -592,6 +603,12 @@ object MusicRepository {
         val t0 = System.currentTimeMillis()
 
         libraryMutationMutex.withLock {
+        // 对于重新扫描或显式写入的远程歌曲，优先清除历史删除栅栏
+        songs.forEach { song ->
+            if (isRemotePath(song.path)) {
+                deletionFence.clear(song.path, song.libraryKey())
+            }
+        }
         val distinctSongs = writableSongs(songs.distinctBy { it.libraryKey() })
         try {
             // 一次性载入已有文件和文件夹，避免 1000 首歌扫描时逐首/逐目录 N+1 查询。
@@ -620,7 +637,14 @@ object MusicRepository {
 
             for (song in distinctSongs) {
                 val folderPath = song.path.substringBeforeLast("/")
-                val folderId = existingFolders[folderPath]?.id ?: continue
+                var folder = existingFolders[folderPath]
+                if (folder == null) {
+                    val newFolder = EntityConverter.pathToFolderEntity(folderPath)
+                    val insertedId = folderDao.insert(newFolder)
+                    folder = newFolder.copy(id = insertedId)
+                    existingFolders[folderPath] = folder
+                }
+                val folderId = folder.id
                 val existing = existingByKey[song.libraryKey()]
                     ?: if (song.cueOffsetMs == 0L && song.cueTrackIndex == 0) existingByPath[song.path] else null
                 val entity = mergePreservedFields(EntityConverter.audioFileToFolderFile(song, folderId), existing)

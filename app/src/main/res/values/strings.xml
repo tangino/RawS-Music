@@ -2559,6 +2559,7 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="webdav_switch_directory">Switch</string>
     <string name="webdav_current_active">Current</string>
     <string name="webdav_no_directories">No WebDAV directories added yet</string>
+    <string name="webdav_buffering_song">Buffering track, please wait…</string>
     <string name="scan_stage_cancelled">Cancelled</string>
     <string name="scan_cancelled">Scan cancelled</string>
     <string name="scan_preparing">%1$s: preparing scan</string>
@@ -2713,14 +2714,26 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="playlist_export_title">Export Playlist</string>
     <string name="playlist_export_action">Export Playlist</string>
     <string name="playlist_export_format">Format</string>
+    <string name="playlist_export_format_txt">Plain Text (.txt)</string>
     <string name="playlist_export_format_m3u8">M3U8 Playlist (.m3u8)</string>
     <string name="playlist_export_format_json">JSON Backup (.json)</string>
     <string name="playlist_export_filename">File name</string>
+    <string name="playlist_export_copy_text">Copy Text</string>
+    <string name="playlist_export_copied_notice">Playlist copied to clipboard (%1$d songs)</string>
+    <string name="playlist_export_empty_notice">No songs to export</string>
+    <string name="playlist_export_preview">Preview (first %1$d songs):</string>
     <string name="playlist_export_save_download">Save to Downloads</string>
     <string name="playlist_export_share">Share</string>
     <string name="playlist_export_saving">Exporting…</string>
     <string name="playlist_export_success">Playlist exported successfully</string>
     <string name="playlist_export_failed">Failed to export playlist: %1$s</string>
+
+    <!-- Private Recommendations (QQ Music) -->
+    <string name="playlist_private_recommend_title">Your Private Recommendations</string>
+    <string name="playlist_private_recommend_badge">QQ Music</string>
+    <string name="playlist_private_recommend_refresh">Refresh</string>
+    <string name="playlist_private_recommend_refreshing">Refreshing…</string>
+    <string name="playlist_private_recommend_refreshed">Recommendations updated</string>
     <string name="playlist_import_title">Import Playlist</string>
     <string name="playlist_import_action">Import Playlist</string>
     <string name="playlist_import_tab_link_text">Link / Text</string>

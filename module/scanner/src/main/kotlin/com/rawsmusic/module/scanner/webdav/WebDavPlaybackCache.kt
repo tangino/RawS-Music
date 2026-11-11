@@ -2,6 +2,7 @@ package com.rawsmusic.module.scanner.webdav
 
 import android.content.Context
 import android.util.Log
+import okhttp3.Call
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -20,10 +21,46 @@ object WebDavPlaybackCache {
     private const val TAG = "WebDavPlaybackCache"
     private const val CACHE_DIR = "webdav_playback_v2"
     private const val MAX_CACHE_FILES = 8
-    private const val COPY_BUFFER_BYTES = 256 * 1024
-    private const val PROGRESS_STEP_BYTES = 16L * 1024L * 1024L
+    private const val COPY_BUFFER_BYTES = 512 * 1024
+    private const val PROGRESS_STEP_BYTES = 8L * 1024L * 1024L
 
     private val keyLocks = ConcurrentHashMap<String, Any>()
+    private val activeCalls = ConcurrentHashMap<String, Call>()
+
+    /**
+     * 取消所有正在进行的 WebDAV 流式传输与缓存下载。
+     * 切歌、暂停或用户退出播放时调用，确保 0 延迟释放网络带宽与执行线程。
+     */
+    fun cancelAll(reason: String = "cancelled") {
+        val calls = activeCalls.values.toList()
+        activeCalls.clear()
+        calls.forEach { call ->
+            runCatching { call.cancel() }
+        }
+        if (calls.isNotEmpty()) {
+            Log.i(TAG, "CANCELLED ${calls.size} active WebDAV download(s), reason=$reason")
+        }
+    }
+
+    /**
+     * 取消除指定目标以外的所有 WebDAV 下载任务。
+     */
+    fun cancelExcept(keepRemoteUrl: String?) {
+        val keepKey = keepRemoteUrl?.let { WebDavUrlTools.stripUserInfo(it) }
+        val entries = activeCalls.entries.toList()
+        var cancelledCount = 0
+        for ((key, call) in entries) {
+            if (keepKey != null && key.contains(keepKey)) {
+                continue
+            }
+            runCatching { call.cancel() }
+            activeCalls.remove(key)
+            cancelledCount++
+        }
+        if (cancelledCount > 0) {
+            Log.i(TAG, "CANCELLED $cancelledCount stale WebDAV download(s) except target=$keepRemoteUrl")
+        }
+    }
 
     /**
      * Returns an already-published ordinary cache file without touching the network.
@@ -92,6 +129,7 @@ object WebDavPlaybackCache {
         val marker = File(directory, "$key.complete")
         val expectedKnownSize = knownSize.coerceAtLeast(0L)
 
+        // 1. 若已有完整缓存，立刻命中返回
         if (isCompleteCache(target, marker, expectedKnownSize)) {
             target.setLastModified(System.currentTimeMillis())
             marker.setLastModified(System.currentTimeMillis())
@@ -99,90 +137,110 @@ object WebDavPlaybackCache {
             return target.absolutePath
         }
 
-        val response = client.openStreamingResponse(
+        val temp = File(directory, "$key.$extension.part")
+        val existingPartBytes = if (temp.isFile && temp.length() > 0L) temp.length() else 0L
+
+        // 2. 如果存在半途断开的临时文件，尝试发送 Range 请求断点续传
+        val rangeHeader = if (existingPartBytes > 0L) "bytes=$existingPartBytes-" else null
+        val call = client.openStreamingCall(
             config = config,
             remotePath = remoteUrl,
-            rangeHeader = "bytes=0-0",
+            rangeHeader = rangeHeader,
             headOnly = false,
         )
-        response.use { current ->
-            if (current.code == 206) {
-                val contentRange = current.header("Content-Range").orEmpty()
-                val rangeStart = contentRange
-                    .substringAfter("bytes ", "")
-                    .substringBefore('-')
-                    .toLongOrNull()
-                if (rangeStart == 0L) {
-                    Log.i(TAG, "RANGE_SUPPORTED url=${remoteUrl.safeLogUrl()}")
-                    return remoteUrl
+        activeCalls[key] = call
+        try {
+            val response = call.execute()
+            response.use { current ->
+                if (current.code != 200 && current.code != 206) {
+                    throw IOException("WebDAV playback probe failed: HTTP ${current.code}")
                 }
-                throw IOException("Invalid WebDAV Content-Range: $contentRange")
-            }
-            if (current.code != 200) {
-                throw IOException("WebDAV playback probe failed: HTTP ${current.code}")
-            }
 
-            val body = current.body ?: throw IOException("WebDAV response has no body")
-            val responseSize = current.header("Content-Length")?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-            val expectedSize = responseSize.takeIf { it > 0L } ?: expectedKnownSize
-            val temp = File(directory, "$key.$extension.part")
-            marker.delete()
-            temp.delete()
+                val body = current.body ?: throw IOException("WebDAV response has no body")
+                val isRangeResume = current.code == 206 && existingPartBytes > 0L
+                val appendMode = isRangeResume
+                val startingOffset = if (appendMode) existingPartBytes else 0L
 
-            Log.i(
-                TAG,
-                "RANGE_UNSUPPORTED_CACHE_START expected=$expectedSize url=${remoteUrl.safeLogUrl()}",
-            )
-            var copied = 0L
-            var nextProgress = PROGRESS_STEP_BYTES
-            try {
-                body.byteStream().use { input ->
-                    FileOutputStream(temp).use { output ->
-                        val buffer = ByteArray(COPY_BUFFER_BYTES)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            if (read == 0) continue
-                            output.write(buffer, 0, read)
-                            copied += read.toLong()
-                            if (copied >= nextProgress) {
-                                Log.d(TAG, "CACHE_PROGRESS bytes=$copied url=${remoteUrl.safeLogUrl()}")
-                                nextProgress += PROGRESS_STEP_BYTES
+                val contentLength = current.header("Content-Length")?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+                val totalExpectedSize = if (isRangeResume) {
+                    val cr = current.header("Content-Range")
+                    val totalFromCr = cr?.substringAfterLast('/')?.trim()?.toLongOrNull() ?: 0L
+                    if (totalFromCr > 0L) totalFromCr else (startingOffset + contentLength)
+                } else {
+                    if (contentLength > 0L) contentLength else expectedKnownSize
+                }
+
+                if (!appendMode) {
+                    marker.delete()
+                    temp.delete()
+                }
+
+                Log.i(
+                    TAG,
+                    "WEBDAV_CACHE_START resume=$appendMode offset=$startingOffset expected=$totalExpectedSize url=${remoteUrl.safeLogUrl()}",
+                )
+                var copied = startingOffset
+                var nextProgress = startingOffset + PROGRESS_STEP_BYTES
+                try {
+                    body.byteStream().use { input ->
+                        FileOutputStream(temp, appendMode).use { output ->
+                            val buffer = ByteArray(COPY_BUFFER_BYTES)
+                            while (true) {
+                                if (call.isCanceled() || Thread.currentThread().isInterrupted) {
+                                    throw IOException("WebDAV 缓存传输已取消: key=$key")
+                                }
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                if (read == 0) continue
+                                output.write(buffer, 0, read)
+                                copied += read.toLong()
+                                if (copied >= nextProgress) {
+                                    Log.d(TAG, "CACHE_PROGRESS bytes=$copied/$totalExpectedSize url=${remoteUrl.safeLogUrl()}")
+                                    nextProgress += PROGRESS_STEP_BYTES
+                                }
                             }
+                            output.fd.sync()
                         }
-                        output.fd.sync()
                     }
-                }
-                if (expectedSize > 0L && copied != expectedSize) {
-                    throw IOException("Incomplete WebDAV cache: expected=$expectedSize actual=$copied")
-                }
-                if (copied <= 0L) throw IOException("Empty WebDAV cache")
+                    if (copied <= 0L) throw IOException("Empty WebDAV cache")
+                    if (totalExpectedSize > 0L && copied < totalExpectedSize) {
+                        throw IOException("Incomplete WebDAV cache: expected at least $totalExpectedSize actual=$copied")
+                    }
 
-                if (target.exists() && !target.delete()) {
-                    throw IOException("Unable to replace stale WebDAV cache")
+                    if (target.exists() && !target.delete()) {
+                        throw IOException("Unable to replace stale WebDAV cache")
+                    }
+                    if (!temp.renameTo(target)) {
+                        throw IOException("Unable to publish WebDAV cache")
+                    }
+                    marker.writeText(target.length().toString())
+                    target.setLastModified(System.currentTimeMillis())
+                    marker.setLastModified(System.currentTimeMillis())
+                    prune(directory, keepKey = key)
+                    Log.i(TAG, "CACHE_READY bytes=${target.length()} url=${remoteUrl.safeLogUrl()}")
+                    return target.absolutePath
+                } catch (error: Throwable) {
+                    // 若被主动 cancel 或中断，保留 .part 文件以便下次切回时断点续传！绝不轻率删除！
+                    if (call.isCanceled() || Thread.currentThread().isInterrupted) {
+                        Log.i(TAG, "CACHE_INTERRUPTED preserved bytes=${temp.length()} for resume: key=$key")
+                    } else {
+                        temp.delete()
+                        marker.delete()
+                    }
+                    throw error
                 }
-                if (!temp.renameTo(target)) {
-                    throw IOException("Unable to publish WebDAV cache")
-                }
-                marker.writeText(target.length().toString())
-                target.setLastModified(System.currentTimeMillis())
-                marker.setLastModified(System.currentTimeMillis())
-                prune(directory, keepKey = key)
-                Log.i(TAG, "CACHE_READY bytes=${target.length()} url=${remoteUrl.safeLogUrl()}")
-                return target.absolutePath
-            } catch (error: Throwable) {
-                temp.delete()
-                marker.delete()
-                throw error
             }
+        } finally {
+            activeCalls.remove(key)
         }
+        throw IOException("WebDAV 缓存传输异常终止: key=$key")
     }
 
     private fun isCompleteCache(target: File, marker: File, knownSize: Long): Boolean {
         if (!target.isFile || target.length() <= 0L || !marker.isFile) return false
         val markerSize = runCatching { marker.readText().trim().toLong() }.getOrDefault(-1L)
         if (markerSize != target.length()) return false
-        return knownSize <= 0L || target.length() == knownSize
+        return true
     }
 
     private fun cacheFile(

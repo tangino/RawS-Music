@@ -2170,6 +2170,7 @@ class FfmpegAudioPlayer(private val context: Context) {
 
     fun play(path: String) {
         AppLogger.w(TAG, "=== play() called, path=$path")
+        com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelExcept(path)
         RealtimePlaybackPcmProcessorRegistry.reset("new_play_request")
         runCatching { dspEngine?.resetReverb() }
         resetUsbBitPerfectPolicyLog()
@@ -3012,6 +3013,7 @@ class FfmpegAudioPlayer(private val context: Context) {
 
     fun stop() {
         AppLogger.w(TAG, "=== stop() called")
+        com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelAll("player_stop")
         // 防爆音：若当前处于发声状态，立即将硬件输出音量置零，防止硬件 FIFO 队列截断激发出高频脉冲爆音
         if (_state == State.PLAYING || isPlaying.get()) {
             runCatching { audioTrack?.setVolume(0f) }
