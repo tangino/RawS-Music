@@ -60,26 +60,27 @@ object PlaylistTransferStore {
 
     private const val TAG = "PlaylistTransfer"
 
-    /** 导出歌单为纯文本内容，每一首歌一行，格式为 "歌名 - 歌手"（若无歌手则仅为 "歌名"）。 */
+    /** 导出歌单为纯文本内容，每一首歌一行，格式为 "歌手名 《歌曲名》"（若无歌手则仅为 "《歌曲名》"）。 */
     fun exportPlainText(playlist: UserPlaylist): String =
         playlist.songs.joinToString("\n") { song ->
             formatSongLine(song.title, song.artist)
         }
 
-    /** 导出歌曲列表为纯文本内容，每一首歌一行，格式为 "歌名 - 歌手"。 */
+    /** 导出歌曲列表为纯文本内容，每一首歌一行，格式为 "歌手名 《歌曲名》"。 */
     fun exportPlainText(songs: List<AudioFile>): String =
         songs.joinToString("\n") { song ->
             formatSongLine(song.title, song.artist)
         }
 
-    /** 格式化单行歌曲：歌名 - 歌手。若歌手为空或未知，则仅保留歌名。 */
+    /** 格式化单行歌曲：歌手名 《歌曲名》。若歌手为空或未知，则仅保留《歌曲名》。 */
     fun formatSongLine(title: String, artist: String): String {
         val cleanTitle = title.trim()
         val cleanArtist = artist.trim()
-        return if (cleanArtist.isNotBlank() && cleanArtist != "未知歌手" && cleanArtist != "<unknown>" && cleanArtist != "Unknown") {
-            "$cleanTitle - $cleanArtist"
+        val hasArtist = cleanArtist.isNotBlank() && cleanArtist != "未知歌手" && cleanArtist != "<unknown>" && cleanArtist != "Unknown"
+        return if (hasArtist) {
+            "$cleanArtist 《$cleanTitle》"
         } else {
-            cleanTitle
+            "《$cleanTitle》"
         }
     }
 
@@ -309,6 +310,12 @@ object PlaylistTransferStore {
             // 剥离可能存在的行首序号，如 "1. "、"01. "、"1、"、"#1 "
             val line = rawLine.replace(Regex("^(?:#?\\d+[.、\\s-]+)"), "").trim()
             val (title, artist) = when {
+                Regex("""^(.*?)\s*《(.*?)》$""").find(line) != null -> {
+                    val match = Regex("""^(.*?)\s*《(.*?)》$""").find(line)!!
+                    val art = match.groupValues[1].trim()
+                    val tit = match.groupValues[2].trim()
+                    tit to art
+                }
                 line.contains(" - ") -> line.split(" - ", limit = 2).let { it[0].trim() to it[1].trim() }
                 line.contains(" — ") -> line.split(" — ", limit = 2).let { it[0].trim() to it[1].trim() }
                 line.contains('\t') -> line.split('\t', limit = 2).let { it[0].trim() to it[1].trim() }

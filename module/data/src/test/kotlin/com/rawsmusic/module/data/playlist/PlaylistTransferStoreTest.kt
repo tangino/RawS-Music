@@ -24,9 +24,9 @@ class PlaylistTransferStoreTest {
 
         val text = PlaylistTransferStore.exportPlainText(playlist)
         val expected = """
-            晴天 - 周杰伦
-            海阔天空 - Beyond
-            孤独患者 - 陈奕迅
+            周杰伦 《晴天》
+            Beyond 《海阔天空》
+            陈奕迅 《孤独患者》
         """.trimIndent()
 
         assertEquals(expected, text)
@@ -49,10 +49,10 @@ class PlaylistTransferStoreTest {
 
         val text = PlaylistTransferStore.exportPlainText(playlist)
         val expected = """
-            纯音曲目
-            未知曲目
-            英文未知
-            正常曲目 - 林俊杰
+            《纯音曲目》
+            《未知曲目》
+            《英文未知》
+            林俊杰 《正常曲目》
         """.trimIndent()
 
         assertEquals(expected, text)
@@ -89,8 +89,8 @@ class PlaylistTransferStoreTest {
 
         val text = PlaylistTransferStore.exportPlainText(audioFiles)
         val expected = """
-            七里香 - 周杰伦
-            追梦赤子心 - GALA
+            周杰伦 《七里香》
+            GALA 《追梦赤子心》
         """.trimIndent()
 
         assertEquals(expected, text)
