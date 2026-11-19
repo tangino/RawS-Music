@@ -26,11 +26,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,9 +85,18 @@ fun PlaylistDetailScreen(
     val context = LocalContext.current
     val matchVersion by playlistStore.matchCacheVersion.collectAsState()
     val allDownloadTasks by MusicSourceDownloadController.tasks.collectAsState()
-    // 监听本地匹配缓存版本（离线下载完成时自动自愈并刷新）
-    val songs = remember(playlist, librarySongs, matchVersion) {
-        playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
+    // 首帧使用纯内存零 I/O 快照立即渲染（彻底消除点击本地歌单下钻时的主线程卡顿），
+    // 随后在 IO 线程异步执行完整的本地曲库对齐与磁盘核验并无缝刷新。
+    var songs by remember(playlist?.id) {
+        mutableStateOf(playlistStore.peekCachedPlaylistSongs(playlist, librarySongs))
+    }
+    LaunchedEffect(playlist, librarySongs, matchVersion) {
+        val resolved = withContext(Dispatchers.IO) {
+            playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
+        }
+        if (resolved != songs) {
+            songs = resolved
+        }
     }
     val playlistDownloadTasks = remember(playlist, allDownloadTasks) {
         collectPlaylistDownloadTasks(playlist, allDownloadTasks)

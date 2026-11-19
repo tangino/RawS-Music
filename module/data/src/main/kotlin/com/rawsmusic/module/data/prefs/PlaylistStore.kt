@@ -11,6 +11,7 @@ import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.playlistIdentityKey
+import com.rawsmusic.core.common.model.queueIdentity
 import com.rawsmusic.core.common.model.toAudioFile
 import com.rawsmusic.core.common.model.toUserPlaylistSong
 import com.rawsmusic.core.common.utils.SongMatcher
@@ -104,6 +105,34 @@ class PlaylistStore private constructor(private val context: Context) {
     // 内存 LRU 映射缓存：将 online 歌曲 Key 映射到匹配成功的本地 AudioFile 或在线虚拟条目，避免重复遍历曲库与磁盘 I/O
     private val onlineToLocalMatchCache = android.util.LruCache<String, AudioFile>(4000)
 
+    // 整单解析结果快照缓存：相同歌单快照与曲库版本下 O(1) 命中，避免下钻转场重复计算
+    private val resolvedPlaylistSnapshotCache = android.util.LruCache<String, List<AudioFile>>(24)
+
+    // 本地文件头校验结果缓存：避免每次打开歌单反复打开数百个文件读磁盘前 12 字节
+    private val localAudioHeaderValidCache = android.util.LruCache<String, Boolean>(4000)
+
+    private class LibraryLookupCache(
+        val sourceSongs: List<AudioFile>,
+        val byIdentity: Map<String, AudioFile>,
+        val byPath: Map<String, AudioFile>,
+    )
+
+    @Volatile
+    private var libraryLookupCache: LibraryLookupCache? = null
+
+    private fun getOrBuildLibraryLookup(librarySongs: List<AudioFile>): LibraryLookupCache {
+        val cached = libraryLookupCache
+        if (cached != null && cached.sourceSongs === librarySongs) return cached
+        val byIdentity = librarySongs.associateBy { it.playlistIdentityKey() }
+        val byPath = buildMap<String, AudioFile>(librarySongs.size * 2) {
+            librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
+        }
+        return LibraryLookupCache(librarySongs, byIdentity, byPath).also { libraryLookupCache = it }
+    }
+
+    private fun playlistSnapshotKey(playlist: UserPlaylist, librarySongs: List<AudioFile>): String =
+        "${playlist.id}|${playlist.updatedAt}|${playlist.songs.size}|${System.identityHashCode(librarySongs)}|${_matchCacheVersion.value}"
+
     /**
      * 异步回填单曲封面至内存歌单与数据库中（混合歌单封面自愈）。
      */
@@ -130,6 +159,7 @@ class PlaylistStore private constructor(private val context: Context) {
             if (playlistChanged) playlist.copy(songs = newSongs) else playlist
         }
         if (anyUpdated) {
+            resolvedPlaylistSnapshotCache.evictAll()
             _playlists.value = newPlaylists
             databaseScope.launch {
                 dao.updateArtworkPathByTitleAndArtist(title, artist, artworkUrl)
@@ -142,6 +172,8 @@ class PlaylistStore private constructor(private val context: Context) {
 
     fun invalidateMatchCache() {
         onlineToLocalMatchCache.evictAll()
+        resolvedPlaylistSnapshotCache.evictAll()
+        localAudioHeaderValidCache.evictAll()
         _matchCacheVersion.value++
     }
 
@@ -298,6 +330,85 @@ class PlaylistStore private constructor(private val context: Context) {
             .equals(songPath.replace('\\', '/'), ignoreCase = true)
     }
 
+    /**
+     * 判定两条歌单持久化记录是否为“完全相同的歌曲”：
+     * 1. 唯一 key 或归一化物理路径相同；
+     * 2. 或四要素（歌曲名称、演唱者、专辑、时长）完全一致（专辑不一致不视为相同；时长容许 1 秒内毫秒取整误差）。
+     */
+    private fun isIdenticalPlaylistSong(a: UserPlaylistSong, b: UserPlaylistSong): Boolean {
+        if (a.key == b.key) return true
+        if (a.path.isNotBlank() && b.path.isNotBlank() && a.path.normalizedPath() == b.path.normalizedPath()) {
+            return true
+        }
+        val titleA = a.title.trim()
+        val titleB = b.title.trim()
+        if (titleA.isBlank() || !titleA.equals(titleB, ignoreCase = true)) return false
+        if (!a.artist.trim().equals(b.artist.trim(), ignoreCase = true)) return false
+        if (!a.album.trim().equals(b.album.trim(), ignoreCase = true)) return false
+        return a.duration == b.duration ||
+            (a.duration > 0L && b.duration > 0L && kotlin.math.abs(a.duration - b.duration) <= 1_000L)
+    }
+
+    /**
+     * 判定两条解析后的 AudioFile 是否在同一个歌单列表中冲突或完全相同：
+     * 1. 同一物理路径 / 同一队列标识 / 同一非零 ID（会导致虚拟列表节点复用变为空白占位、多选连带选中）；
+     * 2. 或四要素（歌曲名称、演唱者、专辑、时长）完全一致（专辑不一致不视为相同）。
+     */
+    private fun isIdenticalResolvedAudio(a: AudioFile, b: AudioFile): Boolean {
+        if (a.playlistIdentityKey() == b.playlistIdentityKey()) return true
+        if (a.queueIdentity() == b.queueIdentity()) return true
+        if (a.id != 0L && a.id == b.id) return true
+        if (a.path.isNotBlank() && b.path.isNotBlank() && a.path.normalizedPath() == b.path.normalizedPath()) {
+            return true
+        }
+        val titleA = a.title.trim()
+        val titleB = b.title.trim()
+        if (titleA.isBlank() || !titleA.equals(titleB, ignoreCase = true)) return false
+        if (!a.artist.trim().equals(b.artist.trim(), ignoreCase = true)) return false
+        if (!a.album.trim().equals(b.album.trim(), ignoreCase = true)) return false
+        return a.duration == b.duration ||
+            (a.duration > 0L && b.duration > 0L && kotlin.math.abs(a.duration - b.duration) <= 1_000L)
+    }
+
+    /**
+     * 从待添加候选列表中过滤掉与既有曲目或同批次前面曲目完全相同的歌曲。
+     */
+    private fun filterUniqueAdditions(
+        existing: List<UserPlaylistSong>,
+        candidates: Iterable<UserPlaylistSong>,
+    ): List<UserPlaylistSong> {
+        val accepted = ArrayList<UserPlaylistSong>(existing.size + 16)
+        accepted.addAll(existing)
+        val additions = ArrayList<UserPlaylistSong>()
+        for (candidate in candidates) {
+            if (accepted.none { isIdenticalPlaylistSong(it, candidate) }) {
+                accepted.add(candidate)
+                additions.add(candidate)
+            }
+        }
+        return additions
+    }
+
+    /**
+     * 对单个列表内部按“完全相同歌曲”标准保序去重。
+     */
+    private fun deduplicateStoredPlaylistSongs(songs: Iterable<UserPlaylistSong>): List<UserPlaylistSong> =
+        filterUniqueAdditions(emptyList(), songs)
+
+    /**
+     * 对解析后的 AudioFile 列表保序去重，确保同一歌单中绝不出现重复 identity 或四要素完全相同的条目。
+     */
+    private fun deduplicateResolvedAudioList(songs: List<AudioFile>): List<AudioFile> {
+        if (songs.size <= 1) return songs
+        val result = ArrayList<AudioFile>(songs.size)
+        for (song in songs) {
+            if (result.none { isIdenticalResolvedAudio(it, song) }) {
+                result.add(song)
+            }
+        }
+        return result
+    }
+
     suspend fun createPlaylist(name: String): UserPlaylist? = withDatabase {
         val cleanName = name.trim()
         if (cleanName.isBlank()) return@withDatabase null
@@ -358,8 +469,7 @@ class PlaylistStore private constructor(private val context: Context) {
     suspend fun addOnlineSongsToPlaylistAndReportAddedKeys(playlistId: String, songs: Collection<UserPlaylistSong>): Set<String> = withDatabase {
         mutationMutex.withLock {
             val playlist = _playlists.value.firstOrNull { it.id == playlistId } ?: return@withLock emptySet<String>()
-            val keys = playlist.songs.mapTo(mutableSetOf()) { it.key }
-            val additions = songs.filter { keys.add(it.key) }
+            val additions = filterUniqueAdditions(playlist.songs, songs)
             if (additions.isEmpty()) return@withLock emptySet<String>()
 
             val now = System.currentTimeMillis()
@@ -517,11 +627,13 @@ class PlaylistStore private constructor(private val context: Context) {
         val byPath = buildMap<String, AudioFile> {
             librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
         }
-        return playlist.songs.mapNotNull { stored ->
-            byIdentity[stored.key]
-                ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
-                ?: stored.toAudioFile().takeIf { File(it.path).exists() }
-        }
+        return deduplicateResolvedAudioList(
+            playlist.songs.mapNotNull { stored ->
+                byIdentity[stored.key]
+                    ?: stored.path.pathCandidates().firstNotNullOfOrNull(byPath::get)
+                    ?: stored.toAudioFile().takeIf { File(it.path).exists() }
+            }
+        )
     }
 
     /**
@@ -529,6 +641,45 @@ class PlaylistStore private constructor(private val context: Context) {
      */
     fun onlineSongsOf(playlist: UserPlaylist?): List<UserPlaylistSong> =
         playlist?.songs?.filter { it.isOnlineEntry() }.orEmpty()
+
+    /**
+     * 主线程零 I/O 极速预览：用于歌单详情页下钻转场首帧立即渲染列表，绝不阻塞动画。
+     * 优先 O(1) 命中整单快照缓存；未命中时直接从内存缓存与持久化条目快速组装，
+     * 完整匹配与磁盘核验随后在后台协程中异步刷新。
+     */
+    fun peekCachedPlaylistSongs(
+        playlist: UserPlaylist?,
+        librarySongs: List<AudioFile>,
+    ): List<AudioFile> {
+        playlist ?: return emptyList()
+        val snapKey = playlistSnapshotKey(playlist, librarySongs)
+        resolvedPlaylistSnapshotCache.get(snapKey)?.let { return it }
+
+        val cachedLookup = libraryLookupCache?.takeIf { it.sourceSongs === librarySongs }
+        val rawList = playlist.songs.map { stored ->
+            if (stored.isOnlineEntry()) {
+                val cached = onlineToLocalMatchCache.get(stored.key)
+                if (cached != null) {
+                    cached
+                } else {
+                    val fallbackCover = stored.albumArtPath.takeIf {
+                        it.startsWith("http://", true) || it.startsWith("https://", true)
+                    }.orEmpty().ifBlank {
+                        artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
+                    }
+                    stored.toAudioFile().let { audio ->
+                        if (audio.albumArtPath.isBlank() && fallbackCover.isNotBlank()) {
+                            audio.copy(albumArtPath = fallbackCover)
+                        } else audio
+                    }
+                }
+            } else {
+                cachedLookup?.byIdentity?.get(stored.key)
+                    ?: stored.toAudioFile()
+            }
+        }
+        return deduplicateResolvedAudioList(rawList)
+    }
 
     /**
      * 混合歌单的曲目智能解析：保留歌单原本的排列顺序。
@@ -541,10 +692,12 @@ class PlaylistStore private constructor(private val context: Context) {
         librarySongs: List<AudioFile>,
     ): List<AudioFile> {
         playlist ?: return emptyList()
-        val byIdentity = librarySongs.associateBy { it.playlistIdentityKey() }
-        val byPath = buildMap<String, AudioFile> {
-            librarySongs.forEach { song -> song.path.pathCandidates().forEach { putIfAbsent(it, song) } }
-        }
+        val snapKey = playlistSnapshotKey(playlist, librarySongs)
+        resolvedPlaylistSnapshotCache.get(snapKey)?.let { return it }
+
+        val lookup = getOrBuildLibraryLookup(librarySongs)
+        val byIdentity = lookup.byIdentity
+        val byPath = lookup.byPath
 
         // 仅在有在线歌曲或未索引的本地歌曲时才懒加载构建索引，避免无意义的开销
         val localSongIndex by lazy(LazyThreadSafetyMode.NONE) {
@@ -578,8 +731,11 @@ class PlaylistStore private constructor(private val context: Context) {
         // 本地音源优先原则：无论歌单是否为混合歌单，在线条目若在本地曲库中有对应音频，
         // 一律优先使用本地音源播放，实现 0 延迟秒开，避免网络寻源开销与超时；
         // 本地条目若因换机或路径微调未命中原路径，自动通过智能匹配器自愈找回。
-        return playlist.songs.mapNotNull { stored ->
-            if (stored.isOnlineEntry()) {
+        val uniqueResolved = ArrayList<AudioFile>(playlist.songs.size)
+        val duplicateStoredKeys = LinkedHashSet<String>()
+
+        for (stored in playlist.songs) {
+            val resolvedAudio: AudioFile = if (stored.isOnlineEntry()) {
                 val cacheKey = stored.key
                 val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                 val cleanedArtPath = stored.albumArtPath.takeIf {
@@ -630,8 +786,17 @@ class PlaylistStore private constructor(private val context: Context) {
 
                 fun isUsableLocalAudio(audio: AudioFile): Boolean {
                     if (audio.path.startsWith("content://", ignoreCase = true)) return true
+                    // 已由曲库扫描器确认具备有效音频流参数（时长+采样率）的条目直接信任，避免每次打开歌单反复读磁盘
+                    if (audio.duration > 0L && audio.sampleRate > 0) return true
                     val file = File(audio.path)
-                    return MusicSourceDownloadController.isValidLocalAudioFile(file)
+                    if (!file.isFile) return false
+                    val len = file.length()
+                    if (len < 12L) return false
+                    val headerKey = "${audio.path}|$len|${file.lastModified()}"
+                    localAudioHeaderValidCache.get(headerKey)?.let { return it }
+                    val valid = MusicSourceDownloadController.isValidLocalAudioFile(file)
+                    localAudioHeaderValidCache.put(headerKey, valid)
+                    return valid
                 }
 
                 val cached = onlineToLocalMatchCache.get(cacheKey)
@@ -716,7 +881,24 @@ class PlaylistStore private constructor(private val context: Context) {
                     )
                 }
             }
+
+            if (uniqueResolved.none { isIdenticalResolvedAudio(it, resolvedAudio) }) {
+                uniqueResolved.add(resolvedAudio)
+            } else if (stored.key.isNotBlank() && playlist.songs.count { it.key == stored.key } == 1) {
+                // 两条不同 key 的记录解析到了同一首本地曲目或完全相同的四要素歌曲，记录冗余 key 后台自动清理
+                duplicateStoredKeys.add(stored.key)
+            }
         }
+
+        if (duplicateStoredKeys.isNotEmpty() && !playlist.id.startsWith("attitude:")) {
+            val targetPlaylistId = playlist.id
+            databaseScope.launch {
+                runCatching { removeSongsFromPlaylist(targetPlaylistId, duplicateStoredKeys) }
+            }
+        }
+
+        resolvedPlaylistSnapshotCache.put(snapKey, uniqueResolved)
+        return uniqueResolved
     }
 
     /**
@@ -802,12 +984,14 @@ class PlaylistStore private constructor(private val context: Context) {
             val existing = _playlists.value.firstOrNull {
                 !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
             }
-            val existingKeys = if (overwrite) mutableSetOf() else (existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf())
-            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
-                .filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else existing.orEmptySongs()
+            val incoming = filterUniqueAdditions(
+                existing = baseSongs,
+                candidates = localSongs.map { it.toUserPlaylistSong() } + onlineSongs,
+            )
             if (incoming.isEmpty() && existing != null && !overwrite) return@withLock existing
 
-            val importedSongs = if (overwrite) incoming else (existing.orEmptySongs() + incoming)
+            val importedSongs = baseSongs + incoming
             val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
                 ?: incoming.firstOrNull { it.albumArtPath.startsWith("http://", true) || it.albumArtPath.startsWith("https://", true) }?.albumArtPath
             val imported = UserPlaylist(
@@ -843,12 +1027,14 @@ class PlaylistStore private constructor(private val context: Context) {
     ) = withDatabase {
         mutationMutex.withLock {
             val favorites = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock
-            val existingKeys = if (overwrite) mutableSetOf() else favorites.songs.mapTo(mutableSetOf()) { it.key }
-            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
-                .filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else favorites.songs
+            val incoming = filterUniqueAdditions(
+                existing = baseSongs,
+                candidates = localSongs.map { it.toUserPlaylistSong() } + onlineSongs,
+            )
             if (incoming.isEmpty() && !overwrite) return@withLock
 
-            val finalSongs = if (overwrite) incoming else (favorites.songs + incoming)
+            val finalSongs = baseSongs + incoming
             val now = System.currentTimeMillis()
             dao.deleteSongsForPlaylist(favorites.id)
             dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(favorites.id, index) })
@@ -872,12 +1058,14 @@ class PlaylistStore private constructor(private val context: Context) {
                     dao.upsertPlaylist(created.toEntity(_playlists.value.size))
                     _playlists.value = _playlists.value + created
                 }
-            val existingKeys = if (overwrite) mutableSetOf() else disliked.songs.mapTo(mutableSetOf()) { it.key }
-            val incoming = (localSongs.map { it.toUserPlaylistSong() } + onlineSongs)
-                .filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else disliked.songs
+            val incoming = filterUniqueAdditions(
+                existing = baseSongs,
+                candidates = localSongs.map { it.toUserPlaylistSong() } + onlineSongs,
+            )
             if (incoming.isEmpty() && !overwrite) return@withLock
 
-            val finalSongs = if (overwrite) incoming else (disliked.songs + incoming)
+            val finalSongs = baseSongs + incoming
             val now = System.currentTimeMillis()
             dao.deleteSongsForPlaylist(disliked.id)
             dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(disliked.id, index) })
@@ -905,11 +1093,11 @@ class PlaylistStore private constructor(private val context: Context) {
             val existing = _playlists.value.firstOrNull {
                 !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
             }
-            val existingKeys = if (overwrite) mutableSetOf() else (existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf())
-            val incoming = songs.filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else existing.orEmptySongs()
+            val incoming = filterUniqueAdditions(existing = baseSongs, candidates = songs)
             if (incoming.isEmpty() && existing != null && !overwrite) return@withLock existing
 
-            val importedSongs = if (overwrite) incoming else (existing.orEmptySongs() + incoming)
+            val importedSongs = baseSongs + incoming
             val targetCover = coverUrl ?: existing?.coverUrl ?: getPlaylistCoverUrl(existing?.id.orEmpty())
                 ?: incoming.firstOrNull { it.albumArtPath.startsWith("http://", true) || it.albumArtPath.startsWith("https://", true) }?.albumArtPath
             val imported = UserPlaylist(
@@ -944,11 +1132,11 @@ class PlaylistStore private constructor(private val context: Context) {
     ) = withDatabase {
         mutationMutex.withLock {
             val favorites = _playlists.value.firstOrNull { it.isFavorites } ?: return@withLock
-            val existingKeys = if (overwrite) mutableSetOf() else favorites.songs.mapTo(mutableSetOf()) { it.key }
-            val incoming = songs.filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else favorites.songs
+            val incoming = filterUniqueAdditions(existing = baseSongs, candidates = songs)
             if (incoming.isEmpty() && !overwrite) return@withLock
 
-            val finalSongs = if (overwrite) incoming else (favorites.songs + incoming)
+            val finalSongs = baseSongs + incoming
             val now = System.currentTimeMillis()
             dao.deleteSongsForPlaylist(favorites.id)
             dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(favorites.id, index) })
@@ -971,11 +1159,11 @@ class PlaylistStore private constructor(private val context: Context) {
                     dao.upsertPlaylist(created.toEntity(_playlists.value.size))
                     _playlists.value = _playlists.value + created
                 }
-            val existingKeys = if (overwrite) mutableSetOf() else disliked.songs.mapTo(mutableSetOf()) { it.key }
-            val incoming = songs.filter { existingKeys.add(it.key) }
+            val baseSongs = if (overwrite) emptyList() else disliked.songs
+            val incoming = filterUniqueAdditions(existing = baseSongs, candidates = songs)
             if (incoming.isEmpty() && !overwrite) return@withLock
 
-            val finalSongs = if (overwrite) incoming else (disliked.songs + incoming)
+            val finalSongs = baseSongs + incoming
             val now = System.currentTimeMillis()
             dao.deleteSongsForPlaylist(disliked.id)
             dao.insertSongs(finalSongs.mapIndexed { index, song -> song.toEntity(disliked.id, index) })
@@ -996,7 +1184,7 @@ class PlaylistStore private constructor(private val context: Context) {
                     _playlists.value = _playlists.value + created
                 }
             val songRow = song.toUserPlaylistSong()
-            if (disliked.songs.any { it.key == songRow.key }) return@withLock
+            if (disliked.songs.any { isIdenticalPlaylistSong(it, songRow) }) return@withLock
             val finalSongs = disliked.songs + songRow
             val now = System.currentTimeMillis()
             dao.insertSongs(listOf(songRow.toEntity(disliked.id, disliked.songs.size)))
@@ -1057,9 +1245,9 @@ class PlaylistStore private constructor(private val context: Context) {
                     val existing = _playlists.value.firstOrNull {
                         !it.isFavorites && it.name.equals(baseName, ignoreCase = true)
                     }
-                    val existingKeys = existing?.songs?.mapTo(mutableSetOf()) { it.key } ?: mutableSetOf()
-                    val importedSongs = existing.orEmptySongs() +
-                        matched.map { it.toUserPlaylistSong() }.filter { existingKeys.add(it.key) }
+                    val baseSongs = existing.orEmptySongs()
+                    val importedSongs = baseSongs +
+                        filterUniqueAdditions(baseSongs, matched.map { it.toUserPlaylistSong() })
                     val imported = UserPlaylist(
                         id = existing?.id ?: "playlist-${UUID.randomUUID()}",
                         name = existing?.name ?: baseName,
@@ -1291,10 +1479,16 @@ class PlaylistStore private constructor(private val context: Context) {
             .mapValues { (_, songs) -> songs.map(UserPlaylistSongEntity::toModel) }
         return ensureFavorites(
             dao.getPlaylists().map { playlist ->
+                val rawSongs = songsByPlaylist[playlist.playlistId].orEmpty()
+                val deduped = deduplicateStoredPlaylistSongs(rawSongs)
+                if (deduped.size < rawSongs.size) {
+                    dao.deleteSongsForPlaylist(playlist.playlistId)
+                    dao.insertSongs(deduped.mapIndexed { index, song -> song.toEntity(playlist.playlistId, index) })
+                }
                 UserPlaylist(
                     id = playlist.playlistId,
                     name = playlist.name,
-                    songs = songsByPlaylist[playlist.playlistId].orEmpty(),
+                    songs = deduped,
                     createdAt = playlist.createdAt,
                     updatedAt = playlist.updatedAt,
                     coverUrl = getPlaylistCoverUrl(playlist.playlistId),
