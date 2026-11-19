@@ -1,6 +1,5 @@
 package com.rawsmusic.module.data.source.kuwo
 
-import android.util.Base64
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -192,7 +191,7 @@ object KwDes {
      * kwDES 解密 Base64 编码的密文。
      */
     fun base64Decrypt(msg: String, key: ByteArray = DEFAULT_KEY): String {
-        val decoded = Base64.decode(msg.trim(), Base64.DEFAULT)
+        val decoded = KuwoBase64.decode(msg.trim())
         val decrypted = desCrypt(decoded, key, isDecrypt = true)
 
         var end = decrypted.size

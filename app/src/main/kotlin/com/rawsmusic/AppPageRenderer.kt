@@ -277,19 +277,7 @@ class AppPageRendererImpl(
                     onRemoveSong = { song ->
                         val targetId = effectiveArgument
                         val targetName = playlist?.name ?: return@PlaylistDetailScreen
-                        val storedSongs = playlist.songs
-                        val candidateKeys = mutableSetOf<String>()
-                        candidateKeys.add(song.playlistIdentityKey())
-                        if (song.path.isNotBlank()) candidateKeys.add(song.path)
-                        for (stored in storedSongs) {
-                            val keyMatch = stored.key == song.playlistIdentityKey() || stored.key == song.path || stored.path == song.path
-                            val metaMatch = stored.title.equals(song.title, ignoreCase = true) &&
-                                (stored.artist.equals(song.artist, ignoreCase = true) || stored.artist.isBlank() || song.artist.isBlank())
-                            if (keyMatch || metaMatch) {
-                                candidateKeys.add(stored.key)
-                                if (stored.path.isNotBlank()) candidateKeys.add(stored.path)
-                            }
-                        }
+                        val candidateKeys = playlistStore.resolveStoredKeysForRemoval(playlist, listOf(song))
                         scope.launch {
                             try {
                                 val changed = when (targetId) {
@@ -327,21 +315,7 @@ class AppPageRendererImpl(
                         val targetId = effectiveArgument
                         val targetName = playlist?.name ?: return@PlaylistDetailScreen
                         if (selectedSongs.isEmpty()) return@PlaylistDetailScreen
-                        val storedSongs = playlist.songs
-                        val candidateKeys = mutableSetOf<String>()
-                        for (song in selectedSongs) {
-                            candidateKeys.add(song.playlistIdentityKey())
-                            if (song.path.isNotBlank()) candidateKeys.add(song.path)
-                            for (stored in storedSongs) {
-                                val keyMatch = stored.key == song.playlistIdentityKey() || stored.key == song.path || stored.path == song.path
-                                val metaMatch = stored.title.equals(song.title, ignoreCase = true) &&
-                                    (stored.artist.equals(song.artist, ignoreCase = true) || stored.artist.isBlank() || song.artist.isBlank())
-                                if (keyMatch || metaMatch) {
-                                    candidateKeys.add(stored.key)
-                                    if (stored.path.isNotBlank()) candidateKeys.add(stored.path)
-                                }
-                            }
-                        }
+                        val candidateKeys = playlistStore.resolveStoredKeysForRemoval(playlist, selectedSongs)
                         scope.launch {
                             try {
                                 val removedCount = when (targetId) {

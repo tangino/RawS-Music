@@ -24,6 +24,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -32,11 +34,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /** Status for downloads owned by the online-source portal. */
 enum class MusicSourceDownloadStatus {
@@ -102,6 +108,8 @@ object MusicSourceDownloadController {
     const val PUBLIC_DOWNLOAD_DIRECTORY = "RawSMusic"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // 限制同时进行的直连下载并发数，避免批量下载时抢占带宽导致连接被系统或 CDN 中断
+    private val directDownloadSemaphore = Semaphore(2)
     private val lock = Any()
     private val resolveJobs = linkedMapOf<String, Job>()
     private val finalizingTaskIds = linkedSetOf<String>()
@@ -294,18 +302,59 @@ object MusicSourceDownloadController {
             return false
         }
 
-        val preferLossless = task.requestedQuality in setOf(
-            RawSourceQuality.HiRes,
-            RawSourceQuality.Lossless,
-            RawSourceQuality.Super,
-        )
-
-        val resource = KuwoCarAudioEngine.resolveDownloadResource(match, preferLossless = preferLossless) ?: run {
+        val primaryResource = KuwoCarAudioEngine.resolveDownloadResource(
+            songMatch = match,
+            requestedQuality = task.requestedQuality,
+            allowEncrypted = true,
+        ) ?: run {
             AppLogger.w("MusicSourceDownload", "KW_ENGINE: Failed to resolve download resource for rid=${match.rid}")
             return false
         }
 
-        AppLogger.i("MusicSourceDownload", "KW_ENGINE: Matched rid=${match.rid}, targetExt=${resource.targetExtension}, bitrate=${resource.bitrate}k, encrypted=${resource.isEncrypted}")
+        if (downloadKuwoResource(context, task, artist, title, primaryResource)) {
+            return true
+        }
+
+        // 若加密母带解密校验失败或断流失败，自动降级尝试未加密无损 FLAC / 320K MP3，绝不落盘损坏文件
+        if (primaryResource.isEncrypted) {
+            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Encrypted stream failed, retrying unencrypted lossless for rid=${match.rid}")
+            val fallbackResource = KuwoCarAudioEngine.resolveDownloadResource(
+                songMatch = match,
+                requestedQuality = task.requestedQuality,
+                allowEncrypted = false,
+            ) ?: return false
+            return downloadKuwoResource(context, task, artist, title, fallbackResource)
+        }
+        return false
+    }
+
+    private suspend fun downloadKuwoResource(
+        context: Context,
+        task: MusicSourceDownloadTask,
+        artist: String,
+        title: String,
+        resource: KuwoCarAudioEngine.KuwoDownloadResource,
+    ): Boolean {
+        // 先标为排队中，等待获取并发下载槽位
+        updateTask(task.id) {
+            it.copy(
+                status = MusicSourceDownloadStatus.Queued,
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        }
+        return directDownloadSemaphore.withPermit {
+            downloadKuwoResourceInternal(context, task, artist, title, resource)
+        }
+    }
+
+    private suspend fun downloadKuwoResourceInternal(
+        context: Context,
+        task: MusicSourceDownloadTask,
+        artist: String,
+        title: String,
+        resource: KuwoCarAudioEngine.KuwoDownloadResource,
+    ): Boolean {
+        AppLogger.i("MusicSourceDownload", "KW_ENGINE: Downloading targetExt=${resource.targetExtension}, bitrate=${resource.bitrate}k, encrypted=${resource.isEncrypted}")
 
         val publicDir = publicDownloadDirectory().apply { mkdirs() }
         ensurePublicDownloadFolderSelected(publicDir)
@@ -315,15 +364,18 @@ object MusicSourceDownloadController {
             "flac" -> "audio/flac"
             "wav" -> "audio/wav"
             "m4a", "aac" -> "audio/mp4"
+            "ogg" -> "audio/ogg"
             else -> "audio/mpeg"
         }
 
         val rawBase = if (artist.isNotBlank()) "$artist - $title" else title
         val base = sanitizeFileName(rawBase)
         var candidateName = "$base.$ext"
-        if (File(publicDir, candidateName).exists()) {
+        val defaultExisting = File(publicDir, candidateName)
+        // 如果同名旧文件存在且完整有效，避免覆盖另存编号；若同名旧文件已损坏（如旧版未解密残余），直接覆盖修复
+        if (defaultExisting.exists() && isValidLocalAudioFile(defaultExisting)) {
             var index = 1
-            while (File(publicDir, "$base ($index).$ext").exists()) {
+            while (File(publicDir, "$base ($index).$ext").let { it.exists() && isValidLocalAudioFile(it) }) {
                 index++
             }
             candidateName = "$base ($index).$ext"
@@ -331,6 +383,7 @@ object MusicSourceDownloadController {
 
         val outputFile = File(publicDir, candidateName)
         val tempFile = File(publicDir, "$candidateName.downloading")
+        runCatching { if (tempFile.exists()) tempFile.delete() }
 
         val resolvedQuality = when {
             resource.bitrate >= 10000 -> RawSourceQuality.HiRes
@@ -346,61 +399,143 @@ object MusicSourceDownloadController {
                 fileName = candidateName,
                 mimeType = mimeType,
                 localUri = Uri.fromFile(outputFile).toString(),
+                bytesDownloaded = 0L,
+                totalBytes = -1L,
                 error = "",
                 updatedAtMs = System.currentTimeMillis(),
             )
         }
 
-        // 发起流式下载，若为加密格式（.mflac/.mgg）则实时流式解密
-        val req = Request.Builder()
-            .url(resource.downloadUrl)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            .build()
+        // 发起流式下载（支持 HTTP Range 断点续传重试，QMCv2 流式解密天然支持任意偏移随机续传）
+        val cipher = if (resource.isEncrypted) resource.qmcCipher else null
+        var totalRead = 0L
+        var expectedTotalBytes = -1L
+        var headerChecked = false
+        var headerValid = true
+        var downloadSucceeded = false
+        val maxAttempts = 5
 
-        directDownloadClient.newCall(req).execute().use { response ->
-            if (!response.isSuccessful) {
-                AppLogger.w("MusicSourceDownload", "KW_ENGINE: Direct download HTTP ${response.code}")
-                return false
-            }
-            val body = response.body ?: return false
-            val contentLength = body.contentLength()
-            updateTask(task.id) {
-                it.copy(totalBytes = contentLength, updatedAtMs = System.currentTimeMillis())
-            }
+        try {
+            for (attempt in 1..maxAttempts) {
+                coroutineContext.ensureActive()
+                val reqBuilder = Request.Builder()
+                    .url(resource.downloadUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                if (totalRead > 0L) {
+                    reqBuilder.header("Range", "bytes=$totalRead-")
+                }
 
-            val cipher = if (resource.isEncrypted) resource.qmcCipher else null
-            var totalRead = 0L
-            var lastUpdate = System.currentTimeMillis()
+                try {
+                    directDownloadClient.newCall(reqBuilder.build()).execute().use { response ->
+                        if (!response.isSuccessful && response.code != 206) {
+                            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Direct download HTTP ${response.code} (attempt=$attempt)")
+                            if (response.code in 400..499 && response.code != 408 && response.code != 429) {
+                                return false
+                            }
+                            throw IOException("HTTP ${response.code}")
+                        }
+                        val body = response.body ?: throw IOException("Empty response body")
+                        val isResumed = response.code == 206 && totalRead > 0L
+                        if (!isResumed) {
+                            // 服务端不支持 Range 或首次请求，从头写入
+                            totalRead = 0L
+                            headerChecked = false
+                            expectedTotalBytes = body.contentLength()
+                        } else if (expectedTotalBytes <= 0L) {
+                            val remaining = body.contentLength()
+                            if (remaining > 0L) expectedTotalBytes = totalRead + remaining
+                        }
 
-            body.byteStream().use { input ->
-                tempFile.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        cipher?.decrypt(buffer, totalRead, bytesRead)
-                        output.write(buffer, 0, bytesRead)
-                        totalRead += bytesRead
-
-                        val now = System.currentTimeMillis()
-                        if (now - lastUpdate > 500L) {
-                            lastUpdate = now
+                        if (expectedTotalBytes > 0L) {
                             updateTask(task.id) {
-                                it.copy(bytesDownloaded = totalRead, updatedAtMs = now)
+                                it.copy(totalBytes = expectedTotalBytes, updatedAtMs = System.currentTimeMillis())
+                            }
+                        }
+
+                        var lastUpdate = System.currentTimeMillis()
+                        body.byteStream().use { input ->
+                            FileOutputStream(tempFile, isResumed).use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                var bytesRead: Int
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    coroutineContext.ensureActive()
+                                    cipher?.decrypt(buffer, totalRead, bytesRead)
+                                    if (!headerChecked && totalRead == 0L && bytesRead >= 4) {
+                                        headerChecked = true
+                                        if (!isValidAudioHeader(buffer, bytesRead, ext)) {
+                                            headerValid = false
+                                            AppLogger.w(
+                                                "MusicSourceDownload",
+                                                "KW_ENGINE: Invalid audio header after decrypt for $candidateName " +
+                                                    "(magic=${buffer.take(4).joinToString("") { "%02x".format(it) }})"
+                                            )
+                                            break
+                                        }
+                                    }
+                                    output.write(buffer, 0, bytesRead)
+                                    totalRead += bytesRead
+
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastUpdate >= 200L) {
+                                        lastUpdate = now
+                                        updateTask(task.id) {
+                                            it.copy(bytesDownloaded = totalRead, updatedAtMs = now)
+                                        }
+                                    }
+                                }
+                                output.flush()
                             }
                         }
                     }
-                    output.flush()
+
+                    if (!headerValid) {
+                        runCatching { tempFile.delete() }
+                        return false
+                    }
+
+                    // 校验是否完整接收了全部字节（防止服务端提前关闭流导致半截文件）
+                    if (expectedTotalBytes > 0L && totalRead < expectedTotalBytes) {
+                        throw IOException("Incomplete download: $totalRead/$expectedTotalBytes")
+                    }
+                    downloadSucceeded = true
+                    break
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (io: IOException) {
+                    AppLogger.w(
+                        "MusicSourceDownload",
+                        "KW_ENGINE: Stream interrupted for $candidateName at ${totalRead}/${expectedTotalBytes} (attempt=$attempt/$maxAttempts): ${io.message}"
+                    )
+                    if (attempt >= maxAttempts) {
+                        runCatching { tempFile.delete() }
+                        return false
+                    }
+                    delay(1500L * attempt)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            runCatching { tempFile.delete() }
+            throw cancelled
+        }
 
-            if (tempFile.exists()) {
-                if (outputFile.exists()) outputFile.delete()
-                tempFile.renameTo(outputFile)
+        if (!downloadSucceeded || !headerValid) {
+            runCatching { tempFile.delete() }
+            return false
+        }
+
+        if (tempFile.exists()) {
+            if (outputFile.exists()) outputFile.delete()
+            if (!tempFile.renameTo(outputFile)) {
+                runCatching {
+                    tempFile.copyTo(outputFile, overwrite = true)
+                    tempFile.delete()
+                }
             }
         }
 
-        if (!outputFile.exists() || outputFile.length() == 0L) {
-            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Output file not created or empty")
+        if (!outputFile.exists() || outputFile.length() == 0L || !isValidLocalAudioFile(outputFile)) {
+            AppLogger.w("MusicSourceDownload", "KW_ENGINE: Output file missing, empty, or invalid header")
+            runCatching { outputFile.delete() }
             return false
         }
 
@@ -645,6 +780,7 @@ object MusicSourceDownloadController {
                         updatedAtMs = System.currentTimeMillis(),
                     )
                 }
+                PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
                 MediaScannerConnection.scanFile(
                     context,
                     arrayOf(output.absolutePath),
@@ -677,9 +813,20 @@ object MusicSourceDownloadController {
             warnings += "歌曲标签写入失败"
         }
 
-        if (task.item.artworkUrl.isNotBlank()) {
+        val resolvedArtworkUrl = task.item.artworkUrl.ifBlank {
+            PlaylistStore.getInstance(context.applicationContext)
+                .artworkFallbackDelegate
+                ?.getCachedArtworkUrl(task.item.title, task.item.artists.joinToString(" / "))
+                .orEmpty()
+        }
+        if (resolvedArtworkUrl.isNotBlank()) {
+            val artworkItem = if (resolvedArtworkUrl == task.item.artworkUrl) {
+                task.item
+            } else {
+                task.item.copy(artworkUrl = resolvedArtworkUrl)
+            }
             val artwork = runCatching {
-                MusicSourceArtworkRepository.ensureLocalFile(context, task.item)
+                MusicSourceArtworkRepository.ensureLocalFile(context, artworkItem)
             }.getOrNull()
             if (artwork == null) {
                 warnings += "专辑图下载失败"
@@ -707,6 +854,50 @@ object MusicSourceDownloadController {
                 "gif" -> "image/gif"
                 else -> "image/jpeg"
             }
+    }
+
+    /**
+     * 校验字节流头部是否符合目标音频格式的合法魔数，防止将未解密密文或错误页面落盘为假音频文件。
+     */
+    fun isValidAudioHeader(header: ByteArray, length: Int, extension: String): Boolean {
+        if (length < 4) return false
+        val b0 = header[0].toInt() and 0xFF
+        val b1 = header[1].toInt() and 0xFF
+        val b2 = header[2].toInt() and 0xFF
+        val b3 = header[3].toInt() and 0xFF
+        val hasId3 = b0 == 0x49 && b1 == 0x44 && b2 == 0x33 // "ID3"
+        return when (extension.lowercase(Locale.ROOT)) {
+            "flac" -> (b0 == 0x66 && b1 == 0x4C && b2 == 0x61 && b3 == 0x43) || hasId3 // "fLaC"
+            "ogg" -> b0 == 0x4F && b1 == 0x67 && b2 == 0x67 && b3 == 0x53 // "OggS"
+            "wav" -> b0 == 0x52 && b1 == 0x49 && b2 == 0x46 && b3 == 0x46 // "RIFF"
+            "mp3" -> hasId3 || (b0 == 0xFF && (b1 and 0xE0) == 0xE0)
+            "m4a", "mp4" -> (length >= 8 &&
+                (header[4].toInt() and 0xFF) == 0x66 &&
+                (header[5].toInt() and 0xFF) == 0x74 &&
+                (header[6].toInt() and 0xFF) == 0x79 &&
+                (header[7].toInt() and 0xFF) == 0x70) // "ftyp"
+            "aac" -> hasId3 || (b0 == 0xFF && (b1 and 0xF0) == 0xF0) ||
+                (length >= 8 &&
+                    (header[4].toInt() and 0xFF) == 0x66 &&
+                    (header[5].toInt() and 0xFF) == 0x74 &&
+                    (header[6].toInt() and 0xFF) == 0x79 &&
+                    (header[7].toInt() and 0xFF) == 0x70)
+            else -> true
+        }
+    }
+
+    /**
+     * 快速读取本地音频文件前 12 字节，判断其是否为可解码的合法音频文件。
+     */
+    fun isValidLocalAudioFile(file: File): Boolean {
+        if (!file.exists() || !file.isFile || file.length() < 12L) return false
+        val ext = file.extension.lowercase(Locale.ROOT)
+        if (ext.isBlank()) return true
+        return runCatching {
+            val header = ByteArray(12)
+            val read = file.inputStream().use { it.read(header) }
+            isValidAudioHeader(header, read, ext)
+        }.getOrDefault(false)
     }
 
     fun publicDownloadDirectory(): File {

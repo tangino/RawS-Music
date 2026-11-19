@@ -1,5 +1,6 @@
 package com.rawsmusic.module.data.source.kuwo
 
+import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.utils.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -215,37 +216,61 @@ object KuwoCarAudioEngine {
     }
 
     /**
-     * 依据优先无损/母带策略，向官方车机接口请求真实下载链接与解密密钥。
+     * 依据目标音质策略，向官方车机接口请求真实下载链接与解密密钥。
+     * - HiRes / Super：优先 192kHz/24bit 臻品母带（20900kmflac）→ 4000k flac → 2000k flac；
+     * - Lossless：优先标准无损 FLAC（2000k flac，体积约 30MB、无加密、下载最快）→ 4000k flac → 20900kmflac；
+     * - High / Standard：优先 320k / 128k MP3。
      */
     suspend fun resolveDownloadResource(
         songMatch: KuwoSongMatch,
-        preferLossless: Boolean = true
+        requestedQuality: RawSourceQuality = RawSourceQuality.Lossless,
+        allowEncrypted: Boolean = true,
     ): KuwoDownloadResource? = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<KuwoQualityOption>()
-
-        if (preferLossless) {
-            // 1. 优先尝试 192kHz/24bit 臻品母带（20900kmflac）
-            songMatch.qualities.find { it.bitrate == 20900 }?.let { candidates.add(it) }
-                ?: candidates.add(KuwoQualityOption("zply", 20900, "mflac", ""))
-
-            // 2. 尝试 Hi-Res / CD 无损 FLAC（4000k / 2000k）
-            songMatch.qualities.find { it.bitrate == 4000 }?.let { candidates.add(it) }
-                ?: candidates.add(KuwoQualityOption("hr", 4000, "flac", ""))
-            songMatch.qualities.find { it.bitrate == 2000 }?.let { candidates.add(it) }
-                ?: candidates.add(KuwoQualityOption("ff", 2000, "flac", ""))
-
-            // 3. 降级尝试高品质 320k mp3 / 128k
-            songMatch.qualities.find { it.bitrate == 320 }?.let { candidates.add(it) }
-                ?: candidates.add(KuwoQualityOption("p", 320, "mp3", ""))
-            songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
-        } else {
-            songMatch.qualities.find { it.bitrate == 320 }?.let { candidates.add(it) }
-                ?: candidates.add(KuwoQualityOption("p", 320, "mp3", ""))
-            songMatch.qualities.find { it.bitrate == 2000 }?.let { candidates.add(it) }
-            songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+        fun addOption(bitrate: Int, fallbackLevel: String, fallbackFormat: String) {
+            val found = songMatch.qualities.find { it.bitrate == bitrate }
+                ?: KuwoQualityOption(fallbackLevel, bitrate, fallbackFormat, "")
+            if (candidates.none { it.bitrate == found.bitrate && it.format.equals(found.format, ignoreCase = true) }) {
+                candidates.add(found)
+            }
         }
 
-        for (opt in candidates) {
+        when (requestedQuality) {
+            RawSourceQuality.HiRes, RawSourceQuality.Super -> {
+                if (allowEncrypted) addOption(20900, "zply", "mflac")
+                addOption(4000, "hr", "flac")
+                addOption(2000, "ff", "flac")
+                addOption(320, "p", "mp3")
+                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+            }
+            RawSourceQuality.Lossless -> {
+                addOption(2000, "ff", "flac")
+                addOption(4000, "hr", "flac")
+                if (allowEncrypted) addOption(20900, "zply", "mflac")
+                addOption(320, "p", "mp3")
+                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+            }
+            RawSourceQuality.High -> {
+                addOption(320, "p", "mp3")
+                addOption(2000, "ff", "flac")
+                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+            }
+            RawSourceQuality.Standard -> {
+                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+                    ?: addOption(128, "h", "mp3")
+                addOption(320, "p", "mp3")
+            }
+        }
+
+        val filtered = if (allowEncrypted) {
+            candidates
+        } else {
+            candidates.filterNot {
+                it.format.equals("mflac", ignoreCase = true) || it.format.equals("mgg", ignoreCase = true)
+            }
+        }
+
+        for (opt in filtered) {
             val res = requestCarApi(songMatch.rid, opt.bitrate, opt.format)
             if (res != null) {
                 return@withContext res

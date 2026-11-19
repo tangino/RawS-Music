@@ -447,7 +447,8 @@ class SongActionSheetHelper(
             selected.forEach { playlist ->
                 runCatching {
                     if (removing) {
-                        if (playlist.id in removalIds && playlistStore.removeSongFromPlaylist(playlist.id, songKey)) {
+                        val removalKeys = playlistStore.resolveStoredKeysForRemoval(playlist, listOf(songs.first()))
+                        if (playlist.id in removalIds && playlistStore.removeSongsFromPlaylist(playlist.id, removalKeys) > 0) {
                             playlistSongChangeMessage(context, listOf(songs.first().title), playlist.name, true)?.let(messages::add)
                         }
                     } else {

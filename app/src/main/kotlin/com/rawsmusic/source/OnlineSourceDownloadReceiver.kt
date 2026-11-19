@@ -5,9 +5,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.rawsmusic.core.common.utils.AppLogger
-import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
 import com.rawsmusic.module.data.prefs.PlaylistStore
+import com.rawsmusic.module.data.repository.MusicRepository
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.scanner.MetadataParser
 import com.rawsmusic.module.scanner.ScanScheduler
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,9 +43,38 @@ class OnlineSourceDownloadReceiver : BroadcastReceiver() {
 
             MusicSourceDownloadController.ACTION_DOWNLOAD_MEDIA_READY -> {
                 val path = intent.getStringExtra(MusicSourceDownloadController.EXTRA_DOWNLOAD_PATH).orEmpty()
-                AppLogger.i(TAG, "online download ready, request incremental scan path=$path")
-                PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
-                ScanScheduler.requestDirScan(context.applicationContext, "在线下载完成")
+                val appContext = context.applicationContext
+                AppLogger.i(TAG, "online download ready, parse metadata & upsert directly path=$path")
+                val pending = goAsync()
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    try {
+                        val parsed = path.takeIf { it.isNotBlank() && File(it).isFile }
+                            ?.let { MetadataParser.parseFromFile(it) }
+                        if (parsed != null) {
+                            // 直接将单曲完整标签（歌名、歌手、专辑、采样率、位深等）精扫入库，
+                            // 避免全目录两阶段扫描的第一阶段用“文件名占位”覆盖真实标签
+                            MusicRepository.init(appContext)
+                            MusicRepository.upsertSongsSuspend(
+                                songs = listOf(parsed),
+                                refreshLibrary = true,
+                            )
+                            PlaylistStore.getInstance(appContext).invalidateMatchCache()
+                            AppLogger.i(
+                                TAG,
+                                "online download upserted with full tags: title=${parsed.title}, artist=${parsed.artist}, album=${parsed.album}"
+                            )
+                        } else {
+                            PlaylistStore.getInstance(appContext).invalidateMatchCache()
+                            ScanScheduler.requestDirScan(appContext, "在线下载完成")
+                        }
+                    } catch (error: Throwable) {
+                        AppLogger.e(TAG, "direct metadata upsert failed path=$path, fallback to dir scan", error)
+                        PlaylistStore.getInstance(appContext).invalidateMatchCache()
+                        ScanScheduler.requestDirScan(appContext, "在线下载完成")
+                    } finally {
+                        pending.finish()
+                    }
+                }
             }
         }
     }

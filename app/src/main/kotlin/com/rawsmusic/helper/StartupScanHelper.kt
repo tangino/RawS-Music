@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
+import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import android.os.SystemClock
 import com.rawsmusic.module.scanner.AutomaticScanScheduler
@@ -23,6 +25,8 @@ import com.rawsmusic.module.scanner.MediaStoreScanner
 import com.rawsmusic.module.scanner.ScanScheduler
 import com.rawsmusic.module.scanner.ScanUiState
 import com.rawsmusic.module.scanner.TwoStageMediaScanner
+import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +50,9 @@ class StartupScanHelper(
 ) {
     private var mediaStoreObserver: MediaStoreObserver? = null
     private var autoObserverJob: Job? = null
+    private var foregroundCheckJob: Job? = null
+    @Volatile
+    private var lastForegroundCheckAtMs: Long = 0L
     private var mountReceiver: BroadcastReceiver? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val requestScheduler = AutomaticScanScheduler(
@@ -168,10 +175,15 @@ class StartupScanHelper(
         scanCoordinator = LibraryScanCoordinator(repository)
 
         autoObserverJob = scope.launch {
-            MediaStoreChangeObserver.observeAudio(context, debounceMs = 0L)
+            MediaStoreChangeObserver.observeAudio(context, debounceMs = MEDIA_STORE_DEBOUNCE_MS)
                 .collectLatest { change ->
                     if (!AppPreferences.Scanner.automaticScanEnabled) return@collectLatest
-                    AppLogger.d(TAG, "MediaStore changed: uri=${change.uri}")
+                    if (LibraryScanCoordinator.isScanning) return@collectLatest
+                    if (!shouldTriggerAutoScanForMediaStoreChange(change.uri)) {
+                        AppLogger.d(TAG, "MediaStore change ignored (outside selected folders or no delta): uri=${change.uri}")
+                        return@collectLatest
+                    }
+                    AppLogger.d(TAG, "MediaStore changed inside selected folders: uri=${change.uri}")
                     _scanUiState.value = _scanUiState.value.copy(
                         pendingScan = true,
                         message = context.getString(R.string.scan_media_changed)
@@ -181,6 +193,127 @@ class StartupScanHelper(
         }
         AppLogger.d(TAG, "Auto MediaStore scan started")
     }
+
+    /**
+     * 应用回到前台时执行极轻量目录变化巡检（带节流）。
+     * 解决用户在文件管理器/电脑端删除或新增音频后，系统未通知 MediaStore 导致曲库长期不更新的问题。
+     */
+    fun onAppForegrounded() {
+        if (autoObserverJob == null && mediaStoreObserver == null) return
+        if (!AppPreferences.Scanner.automaticScanEnabled) return
+        if (LibraryScanCoordinator.isScanning) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastForegroundCheckAtMs < FOREGROUND_CHECK_INTERVAL_MS) return
+        lastForegroundCheckAtMs = now
+
+        if (foregroundCheckJob?.isActive == true) return
+        foregroundCheckJob = scope.launch {
+            val changed = runCatching { hasSelectedDirectoriesChanged() }.getOrDefault(false)
+            if (changed && AppPreferences.Scanner.automaticScanEnabled && !LibraryScanCoordinator.isScanning) {
+                AppLogger.i(TAG, "Foreground directory check detected added/deleted files, scheduling incremental scan")
+                requestScheduler.systemChanged(context.getString(R.string.scan_media_changed))
+            }
+        }
+    }
+
+    private suspend fun shouldTriggerAutoScanForMediaStoreChange(uri: Uri?): Boolean {
+        val scanPaths = AppPreferences.UI.scanPaths.map { normalizeDirPath(it) }.filter { it.isNotBlank() }
+        val safUris = AppPreferences.Scanner.musicFolderUris
+        if (scanPaths.isEmpty() && safUris.isEmpty()) return false
+
+        // 1. 若变更 URI 指向具体音频记录，先核对其物理路径是否落在已选扫描目录内，
+        //    彻底屏蔽微信语音、录音、第三方缓存等无关 MediaStore 变动引发的“突然反复扫描”。
+        if (uri != null && uri.lastPathSegment?.toLongOrNull() != null && safUris.isEmpty()) {
+            val changedPath = queryMediaStorePath(uri)
+            if (changedPath != null) {
+                val normalized = normalizeDirPath(changedPath)
+                val inSelected = scanPaths.any { root ->
+                    normalized == root || normalized.startsWith("$root/")
+                }
+                if (!inSelected) return false
+            }
+        }
+
+        // 2. 若仅配置了文件系统路径，进一步快速核对所选目录是否真的发生了文件增删或时间戳变更
+        if (safUris.isEmpty() && scanPaths.isNotEmpty()) {
+            return hasSelectedDirectoriesChanged()
+        }
+        return true
+    }
+
+    private fun queryMediaStorePath(uri: Uri): String? = runCatching {
+        context.applicationContext.contentResolver.query(
+            uri,
+            arrayOf(MediaStore.Audio.Media.DATA),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf(String::isNotBlank) else null
+        }
+    }.getOrNull()
+
+    /**
+     * 轻量巡检所选文件系统目录：
+     * 1. 检查基线中任意本地歌曲物理文件是否已被删除；
+     * 2. 检查所选目录及其子目录的 lastModified 时间戳是否相对上次扫描发生了变化。
+     */
+    private suspend fun hasSelectedDirectoriesChanged(): Boolean {
+        val repo = resolvedRepository ?: return false
+        val scanPaths = AppPreferences.UI.scanPaths.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (scanPaths.isEmpty()) return false
+
+        val normalizedRoots = scanPaths.map { normalizeDirPath(it) }
+        val baseline = repo.getScanBaseline()
+
+        // 1. 检查曲库中位于所选目录下的本地物理文件是否有任意一首已被删除
+        for (song in baseline.songs) {
+            val path = song.path
+            if (path.isBlank() || path.startsWith("online://") || path.startsWith("content://", ignoreCase = true) ||
+                path.startsWith("http://", ignoreCase = true) || path.startsWith("https://", ignoreCase = true)
+            ) {
+                continue
+            }
+            val normPath = normalizeDirPath(path)
+            val underSelected = normalizedRoots.any { root -> normPath == root || normPath.startsWith("$root/") }
+            if (underSelected && !File(path).isFile) {
+                return true
+            }
+        }
+
+        // 2. 检查目录及子目录的 lastModified 是否相对基线变化（捕获外部新增/改名/删文件）
+        val baselineDirs = baseline.directories
+        val visited = HashSet<String>()
+        val stack = ArrayDeque<File>()
+        scanPaths.forEach { stack.addLast(File(it)) }
+        while (stack.isNotEmpty()) {
+            val dir = stack.removeLast()
+            if (!dir.exists() || !dir.isDirectory) continue
+            val normDir = normalizeDirPath(dir.path)
+            if (!visited.add(normDir)) continue
+            val dirKey = "fs:$normDir"
+            val recordedModified = baselineDirs[dirKey]
+            val currentModified = dir.lastModified()
+            if (recordedModified == null || (currentModified > 0L && recordedModified != currentModified)) {
+                return true
+            }
+            val children = runCatching { dir.listFiles() }.getOrNull() ?: continue
+            for (child in children) {
+                if (child.isDirectory && !child.name.startsWith(".") && !child.name.startsWith("_")) {
+                    stack.addLast(child)
+                }
+            }
+        }
+        return false
+    }
+
+    private fun normalizeDirPath(path: String): String =
+        runCatching { File(path).canonicalPath }
+            .getOrElse { File(path).absolutePath }
+            .trim()
+            .replace('\\', '/')
+            .trimEnd('/')
+            .lowercase(Locale.ROOT)
 
     private suspend fun runScanLoop(context: Context, request: ScanRequest) {
         try {
@@ -387,11 +520,14 @@ class StartupScanHelper(
         mediaStoreObserver?.unregister()
         mediaStoreObserver = null
         autoObserverJob?.cancel()
+        foregroundCheckJob?.cancel()
         scope.cancel()
     }
 
     companion object {
         private const val TAG = "StartupScanHelper"
+        private const val MEDIA_STORE_DEBOUNCE_MS = 2_000L
+        private const val FOREGROUND_CHECK_INTERVAL_MS = 15_000L
         private val coldStartScanRequested = AtomicBoolean(false)
     }
 

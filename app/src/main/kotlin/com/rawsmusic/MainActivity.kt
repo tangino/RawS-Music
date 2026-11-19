@@ -4998,6 +4998,7 @@ class MainActivity : ComponentActivity() {
         }
 
         playbackStatsHelper.start()
+        startupScanHelper.onAppForegrounded()
 
         updateMiniPlayerBarSong()
         updateMiniPlayerBarPlayback()

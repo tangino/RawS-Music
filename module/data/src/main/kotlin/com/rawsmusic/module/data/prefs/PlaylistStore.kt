@@ -385,6 +385,7 @@ class PlaylistStore private constructor(private val context: Context) {
             val now = System.currentTimeMillis()
             dao.deleteSong(playlistId, songKey)
             dao.touchPlaylist(playlistId, now)
+            onlineToLocalMatchCache.remove(songKey)
             _playlists.value = _playlists.value.map { current ->
                 if (current.id == playlistId) {
                     current.copy(
@@ -409,6 +410,7 @@ class PlaylistStore private constructor(private val context: Context) {
             val now = System.currentTimeMillis()
             dao.deleteSongs(playlistId, keySet.toList())
             dao.touchPlaylist(playlistId, now)
+            keySet.forEach { onlineToLocalMatchCache.remove(it) }
             _playlists.value = _playlists.value.map { current ->
                 if (current.id == playlistId) {
                     current.copy(songs = remaining, updatedAt = now)
@@ -418,6 +420,94 @@ class PlaylistStore private constructor(private val context: Context) {
             }
             removedCount
         }
+    }
+
+    /**
+     * 为歌单移除动作解析出所有应被删除的持久化 `stored.key` 集合。
+     *
+     * 混合歌单中，在线条目在离线保存后会解析为本地 `AudioFile`（路径变为 `/storage/...`，
+     * 歌手分隔符、标题或扫描器读出的标签可能与原在线条目略有差异）。本方法按三层策略解析：
+     * 1. 通过 `onlineToLocalMatchCache` 快照精确反查该展示项对应的原始 `stored.key`；
+     * 2. 精确匹配 `stored.key` / `stored.path` / `playlistIdentityKey()`；
+     * 3. 通过 `SongMatcher` 与宽松身份比对（兼容“歌手 - 歌名”文件名标题与未知歌手标签）兜底。
+     */
+    fun resolveStoredKeysForRemoval(
+        playlist: UserPlaylist?,
+        targetSongs: Collection<AudioFile>,
+    ): Set<String> {
+        if (playlist == null || targetSongs.isEmpty()) return emptySet()
+        val storedSongs = playlist.songs
+        if (storedSongs.isEmpty()) return emptySet()
+
+        val result = linkedSetOf<String>()
+        val targetPaths = targetSongs.mapNotNull { it.path.takeIf(String::isNotBlank)?.normalizedPath() }.toSet()
+        val targetIdentityKeys = targetSongs.mapTo(mutableSetOf()) { it.playlistIdentityKey() }
+        val targetIds = targetSongs.mapNotNull { it.id.takeIf { id -> id != 0L } }.toSet()
+
+        targetSongs.forEach { song ->
+            result.add(song.playlistIdentityKey())
+            if (song.path.isNotBlank()) result.add(song.path)
+        }
+
+        // 1. 反向查阅在线→本地匹配缓存，100% 精准命中离线保存后被映射为本地文件的在线条目
+        val cacheSnapshot = onlineToLocalMatchCache.snapshot()
+        for (stored in storedSongs) {
+            val cachedAudio = cacheSnapshot[stored.key] ?: continue
+            val cachedNormPath = cachedAudio.path.normalizedPath()
+            if (cachedAudio.playlistIdentityKey() in targetIdentityKeys ||
+                (cachedNormPath.isNotBlank() && cachedNormPath in targetPaths) ||
+                (cachedAudio.id != 0L && cachedAudio.id in targetIds)
+            ) {
+                result.add(stored.key)
+                if (stored.path.isNotBlank()) result.add(stored.path)
+            }
+        }
+
+        // 2. 精确标识 + 智能元数据匹配
+        for (song in targetSongs) {
+            val songIdKey = song.playlistIdentityKey()
+            val songNormPath = song.path.normalizedPath()
+            for (stored in storedSongs) {
+                if (stored.key in result) continue
+                val storedNormPath = stored.path.normalizedPath()
+                val keyMatch = stored.key == songIdKey ||
+                    stored.key == song.path ||
+                    (songNormPath.isNotBlank() && storedNormPath == songNormPath) ||
+                    (stored.id != 0L && stored.id == song.id)
+                val metaMatch = sameLooseSongIdentity(stored, song) ||
+                    SongMatcher.isMatched(
+                        targetTitle = stored.title,
+                        targetArtist = stored.artist,
+                        candidateTitle = song.title,
+                        candidateArtist = song.artist,
+                        targetDurationMs = stored.duration,
+                        candidateDurationMs = song.duration,
+                        toleranceMs = 30_000L,
+                    )
+                // 兜底：若损坏文件被媒体库以“歌手 - 歌名”作为标题扫描，拆出后半段比对
+                val fileNameTitleMatch = !keyMatch && !metaMatch && run {
+                    val fileStem = song.path.substringAfterLast('/').substringBeforeLast('.')
+                    val rawCandidate = song.title.ifBlank { fileStem }
+                    val splitTitle = rawCandidate.substringAfter(" - ", "").trim()
+                    if (splitTitle.isBlank()) {
+                        false
+                    } else {
+                        val storedNormTitle = SongMatcher.normalizeForCompare(
+                            SongMatcher.extractCoreTitle(stored.title, stored.artist)
+                        )
+                        val candidateNormTitle = SongMatcher.normalizeForCompare(
+                            SongMatcher.extractCoreTitle(splitTitle, stored.artist)
+                        )
+                        storedNormTitle.isNotBlank() && storedNormTitle == candidateNormTitle
+                    }
+                }
+                if (keyMatch || metaMatch || fileNameTitleMatch) {
+                    result.add(stored.key)
+                    if (stored.path.isNotBlank()) result.add(stored.path)
+                }
+            }
+        }
+        return result
     }
 
     /** Resolves stored identities against the live library so edited tags and artwork stay current. */
@@ -512,36 +602,58 @@ class PlaylistStore private constructor(private val context: Context) {
                     }
                 }
 
-                fun inheritCoverIfNeeded(audio: AudioFile): AudioFile {
-                    // 规则：如果匹配到本地歌曲，本地歌曲有封面优先使用本地；无封面才使用网络封面
-                    val hasLocalCover = audio.coverKey.isNotBlank() ||
-                        (audio.albumArtPath.isNotBlank() && !audio.albumArtPath.startsWith("http://", true) && !audio.albumArtPath.startsWith("https://", true))
-                    return if (!hasLocalCover && cleanedArtPath.isNotBlank()) {
-                        audio.copy(albumArtPath = cleanedArtPath)
+                fun inheritMetadataAndCoverIfNeeded(audio: AudioFile): AudioFile {
+                    // 1. 若匹配到的本地记录尚处于快速扫描的“文件名占位”状态（缺少歌手/专辑标签），
+                    //    优先继承原在线条目的真实歌名、歌手与专辑，避免列表直接显示文件名。
+                    val fileStem = audio.path.substringAfterLast('/').substringBeforeLast('.')
+                    val looksLikeFileNamePlaceholder = audio.artist.isBlank() &&
+                        (audio.title.isBlank() || audio.title.equals(fileStem, ignoreCase = true))
+                    val enriched = if (looksLikeFileNamePlaceholder) {
+                        audio.copy(
+                            title = stored.title.ifBlank { audio.title },
+                            artist = stored.artist.ifBlank { audio.artist },
+                            album = audio.album.ifBlank { stored.album },
+                        )
+                    } else if (audio.album.isBlank() && stored.album.isNotBlank()) {
+                        audio.copy(album = stored.album)
                     } else {
                         audio
                     }
+                    // 2. 本地音频的 coverKey 永远指向 audio://...（由 BitmapProvider 优先读内嵌封面），
+                    //    只要 albumArtPath 为空就补充网络封面作为外置回退，确保内嵌封面缺失时仍正常显示封面。
+                    return if (enriched.albumArtPath.isBlank() && cleanedArtPath.isNotBlank()) {
+                        enriched.copy(albumArtPath = cleanedArtPath)
+                    } else {
+                        enriched
+                    }
+                }
+
+                fun isUsableLocalAudio(audio: AudioFile): Boolean {
+                    if (audio.path.startsWith("content://", ignoreCase = true)) return true
+                    val file = File(audio.path)
+                    return MusicSourceDownloadController.isValidLocalAudioFile(file)
                 }
 
                 val cached = onlineToLocalMatchCache.get(cacheKey)
                 if (cached != null) {
                     if (cached.path.startsWith("online://")) {
                         // 负缓存命中：此前已确认无本地匹配，直接返回在线音频，0ms 秒开（补齐最新封面）
-                        inheritCoverIfNeeded(cached)
-                    } else if (cached.path.startsWith("content://", ignoreCase = true) || File(cached.path).exists()) {
-                        // 正缓存命中：本地匹配文件依然存在，直接返回（若本地无封面则继承在线封面）
-                        inheritCoverIfNeeded(cached)
+                        inheritMetadataAndCoverIfNeeded(cached)
+                    } else if (isUsableLocalAudio(cached)) {
+                        // 正缓存命中：本地匹配文件完整有效，直接返回（补齐缺失标签与外置封面回退）
+                        inheritMetadataAndCoverIfNeeded(cached)
                     } else {
-                        // 之前匹配的本地物理文件被删除或移动，重新走匹配
+                        // 之前匹配的本地物理文件被删除、移动或已损坏，重新走匹配
                         val onlineAudioFile = buildOnlineAudio()
                         var matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                            ?.takeIf(::isUsableLocalAudio)
                         if (matchedLocal == null) {
                             matchedLocal = findDownloadedTaskMatch(onlineAudioFile, completedTasksSnapshot)
                         }
                         if (matchedLocal == null) {
                             matchedLocal = probeDownloadedFile(onlineAudioFile, downloadedFilesSnapshot)
                         }
-                        val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
+                        val result = matchedLocal?.let(::inheritMetadataAndCoverIfNeeded) ?: onlineAudioFile
                         onlineToLocalMatchCache.put(cacheKey, result)
                         result
                     }
@@ -549,13 +661,14 @@ class PlaylistStore private constructor(private val context: Context) {
                     // 缓存未命中：执行匹配流程，并将结果（无论是本地还是 online 虚拟音频）均写入 LRU 缓存，阻断重复扫描
                     val onlineAudioFile = buildOnlineAudio()
                     var matchedLocal = SongMatcher.findBestLocalMatch(onlineAudioFile, librarySongs, localSongIndex)
+                        ?.takeIf(::isUsableLocalAudio)
                     if (matchedLocal == null) {
                         matchedLocal = findDownloadedTaskMatch(onlineAudioFile, completedTasksSnapshot)
                     }
                     if (matchedLocal == null) {
                         matchedLocal = probeDownloadedFile(onlineAudioFile, downloadedFilesSnapshot)
                     }
-                    val result = matchedLocal?.let(::inheritCoverIfNeeded) ?: onlineAudioFile
+                    val result = matchedLocal?.let(::inheritMetadataAndCoverIfNeeded) ?: onlineAudioFile
                     onlineToLocalMatchCache.put(cacheKey, result)
                     result
                 }
@@ -569,10 +682,8 @@ class PlaylistStore private constructor(private val context: Context) {
                     }
                     ?: SongMatcher.findBestLocalMatch(stored.toAudioFile(), librarySongs, localSongIndex)
                 if (matched != null) {
-                    // 若本地物理文件存在但无内嵌封面，尝试利用在线缓存或在线寻源补齐封面
-                    val hasLocalCover = matched.coverKey.isNotBlank() ||
-                        (matched.albumArtPath.isNotBlank() && !matched.albumArtPath.startsWith("http://", true) && !matched.albumArtPath.startsWith("https://", true))
-                    if (!hasLocalCover && stored.title.isNotBlank()) {
+                    // 若本地物理文件缺少外置封面路径，补充在线缓存或在线寻源作为内嵌封面缺失时的回退
+                    if (matched.albumArtPath.isBlank() && stored.title.isNotBlank()) {
                         val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                         if (cachedCover.isNotBlank()) {
                             matched.copy(albumArtPath = cachedCover)
@@ -995,7 +1106,7 @@ class PlaylistStore private constructor(private val context: Context) {
             val file = runCatching { Uri.parse(task.localUri) }.getOrNull()
                 ?.path?.let(::File)
                 ?: File(MusicSourceDownloadController.publicDownloadDirectory(), task.fileName)
-            if (!file.exists() || file.length() == 0L) continue
+            if (!MusicSourceDownloadController.isValidLocalAudioFile(file)) continue
 
             val taskTitle = task.item.title
             val taskArtist = task.item.artists.joinToString(" & ")
@@ -1030,6 +1141,8 @@ class PlaylistStore private constructor(private val context: Context) {
                     path = file.absolutePath,
                     title = if (onlineAudioFile.title.isNotBlank()) onlineAudioFile.title else taskTitle,
                     artist = if (onlineAudioFile.artist.isNotBlank()) onlineAudioFile.artist else taskArtist,
+                    album = onlineAudioFile.album.ifBlank { task.item.album },
+                    albumArtist = onlineAudioFile.albumArtist.ifBlank { taskArtist },
                     format = formatStr,
                     encodingFormat = formatStr,
                     fileSize = file.length(),
@@ -1082,7 +1195,7 @@ class PlaylistStore private constructor(private val context: Context) {
                 // 核心优化：内存 Set 快速比对，命中后再构造 File，避免成千上万次磁盘 I/O 系统调用
                 if (candidateName in fileSnapshot) {
                     val candidateFile = File(dir, "$sanitized.$ext")
-                    if (candidateFile.exists() && candidateFile.length() > 0L) {
+                    if (MusicSourceDownloadController.isValidLocalAudioFile(candidateFile)) {
                         val formatStr = ext.uppercase(Locale.ROOT)
                         return onlineAudioFile.copy(
                             id = candidateFile.absolutePath.hashCode().toLong(),

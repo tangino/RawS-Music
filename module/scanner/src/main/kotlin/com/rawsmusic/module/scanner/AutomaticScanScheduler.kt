@@ -67,6 +67,7 @@ class AutomaticScanScheduler(
             is Command.Finished -> {
                 if (command.generation != activeRun) continue
                 running = null
+                policy.lastScanCompletedAtMs = nowMs()
                 val next = pending
                 pending = null
                 if (next != null) start(next)

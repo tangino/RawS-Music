@@ -5,6 +5,7 @@ class AutomaticScanPolicy {
     var requestsEnabledAtMs: Long? = null
     var fileDeletedAtMs: Long? = null
     var initializationAtMs: Long? = null
+    var lastScanCompletedAtMs: Long? = null
 
     private var lastChangeMs: Long? = null
     private var changeCount = 0
@@ -14,7 +15,9 @@ class AutomaticScanPolicy {
     fun systemChangeDelayMs(nowMs: Long, uptimeMs: Long, immediate: Boolean): Long {
         val bootDelay = if (uptimeMs > 60000L) 0L else 10000L
         val longWindow = (if (immediate) 1000L else 12000L) + bootDelay
-        val shortRequest = lastChangeMs == null || nowMs - lastChangeMs!! > longWindow || changeCount < 2
+        val expiredWindow = lastChangeMs == null || nowMs - lastChangeMs!! > longWindow
+        if (expiredWindow) changeCount = 0
+        val shortRequest = expiredWindow || changeCount < 2
         if (shortRequest) changeCount++
         lastChangeMs = nowMs
         return bootDelay + if (shortRequest) {
@@ -26,7 +29,8 @@ class AutomaticScanPolicy {
         !scanRunning && disabledRequests <= 0 &&
             outsideWindow(nowMs, initializationAtMs, 3000L) &&
             outsideWindow(nowMs, requestsEnabledAtMs, 5000L) &&
-            outsideWindow(nowMs, fileDeletedAtMs, 11000L)
+            outsideWindow(nowMs, fileDeletedAtMs, 11000L) &&
+            outsideWindow(nowMs, lastScanCompletedAtMs, 10000L)
 
     private fun outsideWindow(nowMs: Long, timestamp: Long?, window: Long): Boolean =
         timestamp == null || nowMs - timestamp >= window
