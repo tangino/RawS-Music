@@ -24,12 +24,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Playback state owned only by the online-source portal. */
 enum class MusicSourcePlaybackStatus {
@@ -120,6 +123,10 @@ object MusicSourcePlaybackController {
     private var plannedNextShuffleIndex: Int? = null
     private val playHistory = ArrayDeque<Int>()
     private const val MAX_HISTORY_SIZE = 50
+    private const val RESOLVE_TIMEOUT_MS = 15_000L
+    private const val MATERIALIZE_TIMEOUT_MS = 25_000L
+    private const val PRELOAD_TIMEOUT_MS = 12_000L
+    private const val MEDIA_PLAYER_PREPARE_TIMEOUT_MS = 20_000L
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
     private var resumeOnFocusGain = false
@@ -281,11 +288,11 @@ object MusicSourcePlaybackController {
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        val activeQueue = if (queue.isNotEmpty() && queue.size > 1) {
+        val activeQueue = if (queue.isNotEmpty()) {
             queue
         } else {
             val currentQueue = mutableSnapshot.value.queue
-            if (currentQueue.size > 1) {
+            if (currentQueue.isNotEmpty()) {
                 val matchIndex = currentQueue.indexOfFirst {
                     it.stableIdentity == item.stableIdentity ||
                         (it.title.equals(item.title, ignoreCase = true) &&
@@ -293,13 +300,9 @@ object MusicSourcePlaybackController {
                 }
                 if (matchIndex >= 0) {
                     currentQueue.toMutableList().apply { set(matchIndex, item) }
-                } else if (queue.isNotEmpty()) {
-                    queue
                 } else {
                     listOf(item)
                 }
-            } else if (queue.isNotEmpty()) {
-                queue
             } else {
                 listOf(item)
             }
@@ -687,7 +690,9 @@ object MusicSourcePlaybackController {
                 }
             }
             try {
-                val resolved = MusicSourceAudioResolver.resolve(context, item, requestedQuality)
+                val resolved = withTimeout(RESOLVE_TIMEOUT_MS) {
+                    MusicSourceAudioResolver.resolve(context, item, requestedQuality)
+                }
                 delayResolvingNotification.cancel()
                 if (generation != generations.get()) return@launch
                 prepareResolved(
@@ -697,6 +702,11 @@ object MusicSourcePlaybackController {
                     startPositionMs = startPositionMs.coerceAtLeast(0L),
                     autoPlay = autoPlay,
                 )
+            } catch (timeout: TimeoutCancellationException) {
+                delayResolvingNotification.cancel()
+                if (generation != generations.get()) return@launch
+                AppLogger.w(TAG, "ONLINE_RESOLVE_TIMEOUT for ${item.title} after ${RESOLVE_TIMEOUT_MS}ms")
+                fail("网络寻源超时，请尝试更换音源或稍后重试")
             } catch (cancelled: CancellationException) {
                 delayResolvingNotification.cancel()
                 throw cancelled
@@ -813,7 +823,9 @@ object MusicSourcePlaybackController {
                 )
                 val resolved = preloadedResolvedMap[nextItem.stableIdentity]?.takeIf {
                     !it.url.startsWith("http", ignoreCase = true)
-                } ?: MusicSourceAudioResolver.resolve(context, nextItem, preferredQuality)
+                } ?: withTimeoutOrNull(PRELOAD_TIMEOUT_MS) {
+                    MusicSourceAudioResolver.resolve(context, nextItem, preferredQuality)
+                } ?: return@launch
 
                 AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_RESOLVED nextTitle=${nextItem.title} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)}")
 
@@ -943,24 +955,26 @@ object MusicSourcePlaybackController {
                     "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_START generation=$generation " +
                         "quality=${source.quality} url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}"
                 )
-                val cached = OnlineAudioFileCache.materialize(
-                    context = context,
-                    item = item,
-                    source = source,
-                ) { percent, downloadedBytes, totalBytes ->
-                    mainHandler.post {
-                        if (generation != generations.get()) return@post
-                        val current = mutableSnapshot.value
-                        if (current.status == MusicSourcePlaybackStatus.Preparing) {
-                            mutableSnapshot.value = current.copy(bufferedPercent = percent.coerceIn(0, 100))
+                val cached = withTimeout(MATERIALIZE_TIMEOUT_MS) {
+                    OnlineAudioFileCache.materialize(
+                        context = context,
+                        item = item,
+                        source = source,
+                    ) { percent, downloadedBytes, totalBytes ->
+                        mainHandler.post {
+                            if (generation != generations.get()) return@post
+                            val current = mutableSnapshot.value
+                            if (current.status == MusicSourcePlaybackStatus.Preparing) {
+                                mutableSnapshot.value = current.copy(bufferedPercent = percent.coerceIn(0, 100))
+                            }
                         }
-                    }
-                    if (percent == 0 || percent == 25 || percent == 50 || percent == 75 || percent == 100) {
-                        AppLogger.i(
-                            TAG,
-                            "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PROGRESS generation=$generation " +
-                                "percent=$percent downloadedBytes=$downloadedBytes totalBytes=$totalBytes"
-                        )
+                        if (percent == 0 || percent == 25 || percent == 50 || percent == 75 || percent == 100) {
+                            AppLogger.i(
+                                TAG,
+                                "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PROGRESS generation=$generation " +
+                                    "percent=$percent downloadedBytes=$downloadedBytes totalBytes=$totalBytes"
+                            )
+                        }
                     }
                 }
                 if (generation != generations.get()) return@launch
@@ -1210,6 +1224,8 @@ object MusicSourcePlaybackController {
             player.setAudioAttributes(audioAttributes)
             player.setOnPreparedListener { preparedPlayer ->
                 if (generation != generations.get() || mediaPlayer !== preparedPlayer) return@setOnPreparedListener
+                mediaFallbackJob?.cancel()
+                mediaFallbackJob = null
                 prepared = true
                 val reportedDuration = runCatching { preparedPlayer.duration.toLong() }
                     .getOrDefault(0L)
@@ -1277,6 +1293,19 @@ object MusicSourcePlaybackController {
                     )
                 }
             }
+            player.setOnInfoListener { current, what, extra ->
+                if (generation == generations.get() && mediaPlayer === current) {
+                    when (what) {
+                        MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
+                            if (mutableSnapshot.value.status == MusicSourcePlaybackStatus.Playing && !current.isPlaying) {
+                                AppLogger.w(TAG, "MediaPlayer buffering end, resuming auto-start")
+                                runCatching { current.start() }
+                            }
+                        }
+                    }
+                }
+                false
+            }
             player.setOnCompletionListener { completedPlayer ->
                 if (generation != generations.get() || mediaPlayer !== completedPlayer) return@setOnCompletionListener
                 val state = mutableSnapshot.value
@@ -1294,6 +1323,8 @@ object MusicSourcePlaybackController {
             }
             player.setOnErrorListener { failedPlayer, what, extra ->
                 if (generation == generations.get() && mediaPlayer === failedPlayer) {
+                    mediaFallbackJob?.cancel()
+                    mediaFallbackJob = null
                     AppLogger.e(
                         TAG,
                         "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_ERROR generation=$generation what=$what extra=$extra"
@@ -1303,6 +1334,15 @@ object MusicSourcePlaybackController {
                 true
             }
             player.setDataSource(context, Uri.parse(source.url), requestHeaders)
+            mediaFallbackJob?.cancel()
+            mediaFallbackJob = scope.launch {
+                delay(MEDIA_PLAYER_PREPARE_TIMEOUT_MS)
+                if (generation != generations.get()) return@launch
+                if (!prepared && mutableSnapshot.value.status == MusicSourcePlaybackStatus.Preparing) {
+                    AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_PREPARE_TIMEOUT generation=$generation")
+                    fail("在线媒体准备超时")
+                }
+            }
             player.prepareAsync()
         } catch (error: Throwable) {
             AppLogger.e(
@@ -1356,6 +1396,14 @@ object MusicSourcePlaybackController {
                 val duration = runCatching {
                     if (isMediaPlayerPrepared()) mediaPlayer?.duration?.toLong() ?: 0L else 0L
                 }.getOrDefault(0L).takeIf { it > 0L } ?: state.durationMs
+                // 看门狗：若上层状态处于 Playing，但底层 MediaPlayer 意外停止，自动拉起
+                if (state.status == MusicSourcePlaybackStatus.Playing && isMediaPlayerPrepared()) {
+                    val p = mediaPlayer
+                    if (p != null && !p.isPlaying) {
+                        AppLogger.w(TAG, "MediaPlayer watchdog: status is Playing but player paused, auto-starting")
+                        runCatching { p.start() }
+                    }
+                }
                 mutableSnapshot.value = state.copy(
                     positionMs = currentPosition().coerceAtMost(duration.coerceAtLeast(0L)),
                     durationMs = duration.coerceAtLeast(0L),
@@ -1371,11 +1419,14 @@ object MusicSourcePlaybackController {
     private fun releaseMediaPlayer(abandonFocus: Boolean) {
         mediaPlayerProgressJob?.cancel()
         mediaPlayerProgressJob = null
+        mediaFallbackJob?.cancel()
+        mediaFallbackJob = null
         mediaPlayer?.let { player ->
             runCatching { player.setOnPreparedListener(null) }
             runCatching { player.setOnCompletionListener(null) }
             runCatching { player.setOnErrorListener(null) }
             runCatching { player.setOnBufferingUpdateListener(null) }
+            runCatching { player.setOnInfoListener(null) }
             runCatching { player.reset() }
             runCatching { player.release() }
         }

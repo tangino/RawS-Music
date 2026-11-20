@@ -55,43 +55,47 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         )
 
         val song = request.toAudioFile()
-        val allSongs = if (request.queue.isNotEmpty() && request.queue.size > 1) {
-            request.queue.mapIndexed { idx, mediaItem ->
-                if (idx == request.queueIndex) {
-                    song
-                } else {
-                    mediaItem.toVirtualAudioFile()
-                }
-            }
-        } else {
-            val existingSongs = controller.visibleQueue.value.songs
-            val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
-            val existingMatchIndex = existingSongs.indexOfFirst { existing ->
-                existing.path == targetKey ||
-                    existing.path == request.source.url ||
-                    existing.id == song.id ||
-                    (existing.title.equals(song.title, ignoreCase = true) &&
-                        existing.artist.equals(song.artist, ignoreCase = true))
-            }
-            if (existingSongs.size > 1 && existingMatchIndex >= 0) {
-                existingSongs.mapIndexed { idx, existing ->
-                    if (idx == existingMatchIndex) song else existing
-                }
-            } else if (request.queue.isNotEmpty()) {
-                request.queue.mapIndexed { idx, mediaItem ->
-                    if (idx == request.queueIndex) song else mediaItem.toVirtualAudioFile()
-                }
-            } else {
-                listOf(song)
-            }
+        val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+
+        // 优先检查宿主 PlayerController 记录的权威歌单队列（包含本地原路径、在线 key 和原始歌单顺序）
+        val hostQueue = controller.authoritativePlaybackQueue()
+        val hostMatchIndex = hostQueue.indexOfFirst { existing ->
+            existing.path == targetKey ||
+                existing.path == request.source.url ||
+                existing.id == song.id ||
+                (existing.title.equals(song.title, ignoreCase = true) &&
+                    existing.artist.equals(song.artist, ignoreCase = true))
         }
-        // Keep the clicked queue row authoritative. indexOfFirst() can select an earlier row when
-        // search results share an online key (same remote id / duplicate catalog entry), which made
-        // the player artwork bind to the first result while the mini player showed the clicked one.
-        val targetIndex = request.queueIndex
-            .takeIf { it in allSongs.indices && allSongs[it].path == song.path }
-            ?: allSongs.indexOfFirst { it.path == song.path }.takeIf { it >= 0 }
-            ?: request.queueIndex.coerceIn(allSongs.indices)
+
+        val allSongs: List<AudioFile>
+        val targetIndex: Int
+
+        if (hostQueue.isNotEmpty() && hostMatchIndex >= 0) {
+            // 宿主权威队列中包含当前播放歌曲：绝不使用 request.queue.map { toVirtualAudioFile() } 粗暴覆盖！
+            // 完美保留宿主队列中原汁原味的本地物理文件路径（如 /storage/...）与在线歌曲，
+            // 仅将命中项更新为当前解析出直链/时长/封面的完整 song 对象。
+            allSongs = hostQueue.mapIndexed { idx, existing ->
+                if (idx == hostMatchIndex) song else existing
+            }
+            targetIndex = hostMatchIndex
+        } else if (request.queue.isNotEmpty() && request.queue.size > 1) {
+            // 外部独立在线广场/在线歌单起播（宿主未预设包含该歌曲的队列）
+            allSongs = request.queue.mapIndexed { idx, mediaItem ->
+                if (idx == request.queueIndex) song else mediaItem.toVirtualAudioFile()
+            }
+            targetIndex = request.queueIndex
+                .takeIf { it in allSongs.indices && allSongs[it].path == song.path }
+                ?: allSongs.indexOfFirst { it.path == song.path }.takeIf { it >= 0 }
+                ?: request.queueIndex.coerceIn(allSongs.indices)
+        } else if (request.queue.isNotEmpty()) {
+            allSongs = request.queue.mapIndexed { idx, mediaItem ->
+                if (idx == request.queueIndex) song else mediaItem.toVirtualAudioFile()
+            }
+            targetIndex = request.queueIndex.coerceIn(allSongs.indices)
+        } else {
+            allSongs = listOf(song)
+            targetIndex = 0
+        }
         AppLogger.i(
             TAG,
             "${OnlinePlaybackDiagnostics.PREFIX} PLAY_START generation=${request.generation} " +

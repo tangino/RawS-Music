@@ -364,6 +364,9 @@ internal class PlayerQueueControlCoordinator(
             val reloadedQueue = visibleQueue()
             targetIndex = nextIndex(reloadedQueue, automatic = false)
         }
+        if (targetIndex !in queue.songs.indices && queue.songs.isNotEmpty()) {
+            targetIndex = (queue.currentIndex + 1) % queue.songs.size
+        }
         val target = queue.songs.getOrNull(targetIndex) ?: return null
 
         callbacks.savePosition()

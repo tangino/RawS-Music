@@ -4213,6 +4213,8 @@ class FfmpegAudioPlayer(private val context: Context) {
             snapshotTrackFormat(actualSampleRate, channelConfig, actualEncoding)
 
             setVolume(volume)
+            // 防御性音量保障：彻底清除换源前 silenceOutputForSwitch 残留的 0f 静音
+            runCatching { track.setVolume(volume) }
 
             val buffer = ByteArray(PCM_BUFFER_SIZE)
             val gaplessPendingScratch = ByteArray(PCM_BUFFER_SIZE)
@@ -4327,6 +4329,15 @@ class FfmpegAudioPlayer(private val context: Context) {
                 if (isPaused.get()) {
                     awaitPlaybackResume()
                     continue
+                }
+
+                // 🌟 音频输出状态自愈看门狗：
+                // 若 AudioTrack 被系统（音频焦点短暂抖动、蓝牙断连、锁屏休眠等）暂停，但上层控制并未暂停，
+                // 主动唤醒 AudioTrack 继续发声，防止在等待数据或连续循环时出现声音静音中断但按钮仍是播放中的假死
+                val activeTrack = audioTrack
+                if (activeTrack != null && activeTrack.playState == AudioTrack.PLAYSTATE_PAUSED && !isPaused.get()) {
+                    AppLogger.w(TAG, "Streaming loop: AudioTrack PAUSED externally, auto-recovering play()")
+                    try { activeTrack.play() } catch (_: Exception) {}
                 }
 
                 // Manual transitions start immediately from their own duration. Natural playback
@@ -5279,6 +5290,7 @@ class FfmpegAudioPlayer(private val context: Context) {
 
             var lastStreamLogMs = System.currentTimeMillis()
             var writeCyclesSinceLog = 0
+            var consecutiveStreamingTimeouts = 0
             while (isPlaying.get() && !isReleased.get()) {
                 if (consumePendingCrossfadeSeekHandoff(generation)) {
                     rb = ringBuffer ?: break
@@ -5291,6 +5303,15 @@ class FfmpegAudioPlayer(private val context: Context) {
                 if (isPaused.get()) {
                     awaitPlaybackResume()
                     continue
+                }
+
+                // 🌟 音频输出状态自愈看门狗：
+                // 若 AudioTrack 被系统（音频焦点短暂抖动、蓝牙断连、锁屏休眠等）暂停，但上层控制并未暂停，
+                // 主动唤醒 AudioTrack 继续发声，防止在等待数据或连续循环时出现声音静音中断但按钮仍是播放中的假死
+                val activeTrack = audioTrack
+                if (activeTrack != null && activeTrack.playState == AudioTrack.PLAYSTATE_PAUSED && !isPaused.get()) {
+                    AppLogger.w(TAG, "Streaming loop: AudioTrack PAUSED externally, auto-recovering play()")
+                    try { activeTrack.play() } catch (_: Exception) {}
                 }
 
                 val manualCrossfadePending = manualCrossfadeRequested && crossfadeDurationMs > 0
@@ -5330,13 +5351,16 @@ class FfmpegAudioPlayer(private val context: Context) {
                 if (crossfadeTransition.active && preparedCrossfade != null) {
                     val currentRead = rb.readWithTimeout(buffer, 0, readLimit, RING_BUFFER_READ_TIMEOUT_MS)
                     if (currentRead == -1) {
+                        consecutiveStreamingTimeouts++
                         if (!isPlaying.get()) break
-                        if (decoderDone && rb.available() == 0) {
+                        if ((decoderDone && rb.available() == 0) || consecutiveStreamingTimeouts >= 3) {
+                            AppLogger.i(TAG, "Native streaming crossfade: decoderDone=$decoderDone timeouts=$consecutiveStreamingTimeouts → EOF")
                             read = 0
                         } else {
                             continue
                         }
                     } else {
+                        if (currentRead > 0) consecutiveStreamingTimeouts = 0
                         read = currentRead
                     }
 
@@ -5398,9 +5422,13 @@ class FfmpegAudioPlayer(private val context: Context) {
                     }
                 } else {
                     read = rb.readWithTimeout(buffer, 0, readLimit, RING_BUFFER_READ_TIMEOUT_MS)
-                    if (read == -1) {
+                    if (read > 0) {
+                        consecutiveStreamingTimeouts = 0
+                    } else if (read == -1) {
+                        consecutiveStreamingTimeouts++
                         if (!isPlaying.get()) break
-                        if (decoderDone && rb.available() == 0) {
+                        if ((decoderDone && rb.available() == 0) || consecutiveStreamingTimeouts >= 3) {
+                            AppLogger.i(TAG, "Native streaming: decoderDone=$decoderDone timeouts=$consecutiveStreamingTimeouts → EOF")
                             read = 0
                         } else {
                             continue
@@ -6138,6 +6166,15 @@ class FfmpegAudioPlayer(private val context: Context) {
                 if (isPaused.get()) {
                     awaitPlaybackResume()
                     continue
+                }
+
+                // 🌟 音频输出状态自愈看门狗：
+                // 若 AudioTrack 被系统（音频焦点短暂抖动、蓝牙断连、锁屏休眠等）暂停，但上层控制并未暂停，
+                // 主动唤醒 AudioTrack 继续发声，防止在等待数据或连续循环时出现声音静音中断但按钮仍是播放中的假死
+                val activeTrack = audioTrack
+                if (activeTrack != null && activeTrack.playState == AudioTrack.PLAYSTATE_PAUSED && !isPaused.get()) {
+                    AppLogger.w(TAG, "Streaming loop: AudioTrack PAUSED externally, auto-recovering play()")
+                    try { activeTrack.play() } catch (_: Exception) {}
                 }
 
                 val manualRequest = usbSameProfileTrackSwitchCoordinator.takePendingRequest()
@@ -7366,6 +7403,15 @@ class FfmpegAudioPlayer(private val context: Context) {
                     continue
                 }
 
+                // 🌟 音频输出状态自愈看门狗：
+                // 若 AudioTrack 被系统（音频焦点短暂抖动、蓝牙断连、锁屏休眠等）暂停，但上层控制并未暂停，
+                // 主动唤醒 AudioTrack 继续发声，防止在等待数据或连续循环时出现声音静音中断但按钮仍是播放中的假死
+                val activeTrack = audioTrack
+                if (activeTrack != null && activeTrack.playState == AudioTrack.PLAYSTATE_PAUSED && !isPaused.get()) {
+                    AppLogger.w(TAG, "Streaming loop: AudioTrack PAUSED externally, auto-recovering play()")
+                    try { activeTrack.play() } catch (_: Exception) {}
+                }
+
                 val bufferedBeforeRead = engine.nativeGetBufferUsedBytes()
                 if (bufferedBeforeRead > highWater) {
                     LockSupport.parkNanos(2_000_000L)
@@ -7589,6 +7635,8 @@ class FfmpegAudioPlayer(private val context: Context) {
             snapshotTrackFormat(actualSampleRate, channelConfig, actualEncoding)
 
             setVolume(volume)
+            // 防御性音量保障：彻底清除换源前 silenceOutputForSwitch 残留的 0f 静音
+            runCatching { track.setVolume(volume) }
             track.play()
 
             if (startByteOffset > 0) {
@@ -7657,6 +7705,15 @@ class FfmpegAudioPlayer(private val context: Context) {
                 if (isPaused.get()) {
                     awaitPlaybackResume()
                     continue
+                }
+
+                // 🌟 音频输出状态自愈看门狗：
+                // 若 AudioTrack 被系统（音频焦点短暂抖动、蓝牙断连、锁屏休眠等）暂停，但上层控制并未暂停，
+                // 主动唤醒 AudioTrack 继续发声，防止在等待数据或连续循环时出现声音静音中断但按钮仍是播放中的假死
+                val activeTrack = audioTrack
+                if (activeTrack != null && activeTrack.playState == AudioTrack.PLAYSTATE_PAUSED && !isPaused.get()) {
+                    AppLogger.w(TAG, "Streaming loop: AudioTrack PAUSED externally, auto-recovering play()")
+                    try { activeTrack.play() } catch (_: Exception) {}
                 }
 
                 // Consume route commands between writes, never on a competing callback thread.

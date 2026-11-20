@@ -1542,6 +1542,9 @@ class PlayerService : LifecycleService() {
         if (currentPlayState == PlayState.PLAYING) {
             requestServiceAudioFocus("SONG_UPDATE_PLAYING:$reason")
             acquireWakeLockIfNeeded()
+            acquireWifiLockIfNeeded("SONG_UPDATE_PLAYING:$reason")
+        } else {
+            releaseWifiLock("SONG_UPDATE_NOT_PLAYING:$reason")
         }
 
         // reference player does not rebuild metadata/artwork on a pure play/pause state pulse. Keep the
@@ -1580,6 +1583,7 @@ class PlayerService : LifecycleService() {
                 currentPlayState = PlayState.PLAYING
                 requestServiceAudioFocus("ACTION_PLAY")
                 acquireWakeLock()
+                acquireWifiLockIfNeeded("ACTION_PLAY")
                 startPositionUpdates()
                 updateMediaSessionPlaybackState(currentPlayState, lastKnownPosition)
                 updateNotification()
@@ -1587,6 +1591,7 @@ class PlayerService : LifecycleService() {
             ACTION_PAUSE -> {
                 currentPlayState = PlayState.PAUSED
                 positionUpdateJob?.cancel()
+                releaseWifiLock("ACTION_PAUSE")
                 // 暂停时保留WakeLock，避免蓝牙场景下被杀后台
                 updateMediaSessionPlaybackState(currentPlayState, lastKnownPosition)
                 updateNotification()

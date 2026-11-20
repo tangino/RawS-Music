@@ -1134,8 +1134,8 @@ class PlayerController private constructor(context: Context) {
 
     private fun handleOnlinePlaybackError(snapshot: MusicSourcePlaybackSnapshot) {
         if (isReleased) return
-        // A paused/stopped/errored controller must not be resurrected by a late snapshot Error.
-        if (_playState.value != PlayState.PLAYING && _playState.value != PlayState.PREPARING) return
+        // A stopped controller must not be resurrected by a late snapshot Error.
+        if (_playState.value == PlayState.STOPPED) return
         val item = snapshot.currentItem ?: return
         // During a deferred manual switch the public currentSong intentionally still points at the
         // retiring track. Resolve the failure owner from the pending renderer commit instead.
@@ -1190,10 +1190,12 @@ class PlayerController private constructor(context: Context) {
         // first so next() advances from the failed row, not from the retiring song.
         commitPendingFailureTarget()
         val queue = _queue.value
-        val canAdvance = queue.songs.size > 1 && (
-            playbackModeController.currentRepeatMode == RepeatMode.ALL ||
-                queueControlCoordinator.hasAutomaticContinuation()
-            )
+        val onlineQueue = MusicSourcePlaybackController.snapshot.value.queue
+        val effectiveQueueSize = maxOf(queue.songs.size, onlineQueue.size)
+        val isSequentialAtEnd = (playbackModeController.currentRepeatMode == RepeatMode.OFF || playbackModeController.currentPlayMode == PlayMode.SEQUENTIAL) &&
+            queue.currentIndex >= queue.songs.lastIndex &&
+            playbackModeController.currentRepeatMode != RepeatMode.ALL
+        val canAdvance = effectiveQueueSize > 1 && !isSequentialAtEnd
         if (!canAdvance || onlineConsecutiveSkips > ONLINE_FAILURE_MAX_CONSECUTIVE_SKIPS) {
             AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
             stop()
@@ -1204,9 +1206,15 @@ class PlayerController private constructor(context: Context) {
             context.getString(R.string.player_notice_online_skipped, song.title),
             AppNoticeIcon.WARNING,
         )
-        if (queueControlCoordinator.advanceOnFailure() == null) {
-            AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
-            stop()
+        val advanced = queueControlCoordinator.advanceOnFailure()
+        if (advanced == null) {
+            if (onlineQueue.size > 1) {
+                AppLogger.w(TAG, "advanceOnFailure returned null, advancing via MusicSourcePlaybackController.next()")
+                MusicSourcePlaybackController.next(automatic = false)
+            } else {
+                AppNoticeBus.error(context.getString(R.string.player_notice_online_failed_stopped))
+                stop()
+            }
         }
     }
 
@@ -5912,6 +5920,18 @@ class PlayerController private constructor(context: Context) {
         transportControlCoordinator.play(song, queue, index)
     }
 
+    /**
+     * 获取宿主当前最具权威性的播放队列（优先取待提交的歌单队列，次之取 visibleQueue 或基础 _queue）。
+     * 在在线寻源完成回调时，用于完整保留本地歌单中的本地歌曲真实路径与歌单顺序，避免被虚拟在线队列冲掉。
+     */
+    fun authoritativePlaybackQueue(): List<AudioFile> {
+        val pending = pendingRendererUiCommit?.queue
+        if (!pending.isNullOrEmpty()) return pending
+        val visible = visibleQueue.value.songs
+        if (visible.isNotEmpty()) return visible
+        return _queue.value.songs
+    }
+
     fun playResolvedOnlineSource(
         song: AudioFile,
         resolvedUrl: String,
@@ -6213,7 +6233,6 @@ class PlayerController private constructor(context: Context) {
                                 it.artist.equals(song.artist, ignoreCase = true))
                     }.takeIf { it >= 0 } ?: 0
                 }
-                val existingSnapshotQueue = MusicSourcePlaybackController.snapshot.value.queue
                 val mediaItems = finalQueue.map { qSong ->
                     if (com.rawsmusic.core.common.model.isOnlineSongKey(qSong.path)) {
                         val rest = qSong.path.removePrefix("online://")
@@ -6230,13 +6249,9 @@ class PlayerController private constructor(context: Context) {
                             artworkUrl = qSong.albumArtPath,
                         )
                     } else {
-                        val matchedItem = existingSnapshotQueue.firstOrNull {
-                            it.title.equals(qSong.title, ignoreCase = true) &&
-                                it.artists.contains(qSong.artist)
-                        }
-                        matchedItem ?: com.rawsmusic.core.common.source.RawSourceMediaItem(
-                            sourceId = "netease",
-                            remoteId = qSong.id.toString(),
+                        com.rawsmusic.core.common.source.RawSourceMediaItem(
+                            sourceId = "local",
+                            remoteId = qSong.path,
                             mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
                             title = qSong.title,
                             artists = listOf(qSong.artist),

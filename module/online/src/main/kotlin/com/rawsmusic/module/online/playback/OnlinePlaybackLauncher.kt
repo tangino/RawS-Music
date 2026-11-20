@@ -135,11 +135,11 @@ object OnlinePlaybackLauncher {
         queue: List<OnlineSongItem> = listOf(item),
         index: Int = 0,
     ): OnlinePlayResult = try {
-        val rawQueue = if (queue.isNotEmpty() && queue.size > 1) {
+        val rawQueue = if (queue.isNotEmpty()) {
             queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
         } else {
             val existingQueue = MusicSourcePlaybackController.snapshot.value.queue
-            if (existingQueue.size > 1) {
+            if (existingQueue.isNotEmpty()) {
                 val matchIdx = existingQueue.indexOfFirst {
                     it.remoteId == item.id ||
                         (it.title.equals(item.title, ignoreCase = true) &&
@@ -148,13 +148,9 @@ object OnlinePlaybackLauncher {
                 if (matchIdx >= 0) {
                     val targetMedia = OnlineSourceMediaMapper.toRawSourceMediaItem(item)
                     existingQueue.toMutableList().apply { set(matchIdx, targetMedia) }
-                } else if (queue.isNotEmpty()) {
-                    queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
                 } else {
                     listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
                 }
-            } else if (queue.isNotEmpty()) {
-                queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
             } else {
                 listOf(OnlineSourceMediaMapper.toRawSourceMediaItem(item))
             }
