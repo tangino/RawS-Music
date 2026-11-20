@@ -1053,6 +1053,13 @@ object MusicSourcePlaybackController {
                     state.status != MusicSourcePlaybackStatus.Completed
                 ) {
                     prepared = false
+                    // 若底层渲染器在 Playing 状态意外停止为 Idle，必须同步退出 Playing 状态，
+                    // 防止播放/暂停按钮永远卡死在“正在播放(暂停图标)”假状态。
+                    if (state.status == MusicSourcePlaybackStatus.Playing) {
+                        mutableSnapshot.value = state.copy(
+                            status = MusicSourcePlaybackStatus.Idle,
+                        )
+                    }
                 }
             }
             MusicSourceBackendStatus.Preparing -> {

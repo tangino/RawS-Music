@@ -2,17 +2,33 @@ package com.rawsmusic.module.online.recommend
 
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.online.model.OnlineSongItem
+import com.tencent.mmkv.MMKV
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
  * 猜你喜欢本地推荐优化器与行为闭环引擎。
  * 1. 种子管理：记录用户完播与喜爱的正向反馈种子；
  * 2. 负反馈抑制：记录秒切/不感兴趣歌曲与歌手冷却；
- * 3. 本地重排：历史去重、歌手防疲劳打散算法。
+ * 3. 本地重排：2000 首持久化历史去重、歌手防疲劳打散算法。
  */
 object GuessLikeOptimizer {
 
     private const val TAG = "GuessLikeOptimizer"
+    private const val MAX_EXPOSED_WINDOW = 2000
+    private const val MAX_RECENT_RADIO_WINDOW = 500
+    private const val MAX_POSITIVE_SEEDS = 100
+    private const val KEY_EXPOSED_IDS = "guess_like_exposed_song_ids_v1"
+    private const val KEY_EXPOSED_FPS = "guess_like_exposed_song_fps_v1"
+    private const val KEY_POSITIVE_SEEDS = "guess_like_positive_seeds_v1"
+
+    private val persistExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "RawS-GuessLikePersist").apply { isDaemon = true }
+    }
+
+    private val kv: MMKV? by lazy {
+        runCatching { MMKV.defaultMMKV() }.getOrNull()
+    }
 
     // 正向种子池（最新完播或加喜欢的歌曲 ID）
     private val positiveSeedMids = LinkedHashSet<String>()
@@ -27,25 +43,84 @@ object GuessLikeOptimizer {
     // 最近在当前电台推荐流中排布播放过的歌曲 ID
     private val recentPlayedInRadio = LinkedHashSet<String>()
 
-    // 全局已曝光展示歌曲 ID 滑动窗口（向用户展示过的歌曲，容量 300 首，FIFO 轮转）
+    // 全局已曝光展示歌曲 ID 滑动窗口（容量 2000 首，FIFO 轮转，并持久化到 MMKV 防止重启后重复推荐）
     private val exposedSongIds = LinkedHashSet<String>()
 
-    // 全局已曝光歌曲特征指纹（"clean_title##clean_artist"，防止相同歌曲的不同专辑/版本重复推荐）
+    // 全局已曝光歌曲特征指纹（"clean_title##clean_artist"，容量 2000 首，防止同曲不同版本重复推荐）
     private val exposedSongFingerprints = LinkedHashSet<String>()
+
+    @Volatile
+    private var loadedFromStorage = false
+
+    private fun ensureLoaded() {
+        if (loadedFromStorage) return
+        synchronized(exposedSongIds) {
+            if (loadedFromStorage) return
+            loadedFromStorage = true
+            val storage = kv ?: return
+            runCatching {
+                storage.decodeString(KEY_EXPOSED_IDS)
+                    ?.split('\n')
+                    ?.asSequence()
+                    ?.filter { it.isNotBlank() }
+                    ?.forEach { exposedSongIds.add(it) }
+                storage.decodeString(KEY_EXPOSED_FPS)
+                    ?.split('\n')
+                    ?.asSequence()
+                    ?.filter { it.isNotBlank() }
+                    ?.forEach { exposedSongFingerprints.add(it) }
+            }
+            synchronized(positiveSeedMids) {
+                runCatching {
+                    storage.decodeString(KEY_POSITIVE_SEEDS)
+                        ?.split('\n')
+                        ?.asSequence()
+                        ?.filter { it.isNotBlank() }
+                        ?.forEach { positiveSeedMids.add(it) }
+                }
+            }
+        }
+    }
+
+    private fun persistExposedAsync() {
+        val idsSnapshot: List<String>
+        val fpsSnapshot: List<String>
+        synchronized(exposedSongIds) {
+            idsSnapshot = exposedSongIds.toList()
+            fpsSnapshot = exposedSongFingerprints.toList()
+        }
+        persistExecutor.execute {
+            runCatching {
+                kv?.encode(KEY_EXPOSED_IDS, idsSnapshot.joinToString("\n"))
+                kv?.encode(KEY_EXPOSED_FPS, fpsSnapshot.joinToString("\n"))
+            }
+        }
+    }
+
+    private fun persistSeedsAsync() {
+        val seedsSnapshot = synchronized(positiveSeedMids) { positiveSeedMids.toList() }
+        persistExecutor.execute {
+            runCatching {
+                kv?.encode(KEY_POSITIVE_SEEDS, seedsSnapshot.joinToString("\n"))
+            }
+        }
+    }
 
     /**
      * 记录正向反馈（例如单曲完播 >= 80% 或被收藏）。
      */
     fun recordPositiveFeedback(songId: String) {
         if (songId.isBlank()) return
+        ensureLoaded()
         synchronized(positiveSeedMids) {
             positiveSeedMids.remove(songId)
             positiveSeedMids.add(songId)
-            while (positiveSeedMids.size > 30) {
+            while (positiveSeedMids.size > MAX_POSITIVE_SEEDS) {
                 val oldest = positiveSeedMids.iterator().next()
                 positiveSeedMids.remove(oldest)
             }
         }
+        persistSeedsAsync()
         AppLogger.d(TAG, "记录正向反馈种子: $songId (当前种子库大小: ${positiveSeedMids.size})")
     }
 
@@ -59,6 +134,7 @@ object GuessLikeOptimizer {
             synchronized(positiveSeedMids) {
                 positiveSeedMids.remove(songId)
             }
+            persistSeedsAsync()
         }
 
         if (artist.isNotBlank() && artist != "未知歌手") {
@@ -78,51 +154,63 @@ object GuessLikeOptimizer {
      */
     fun recordSongPlayedInRadio(songId: String) {
         if (songId.isBlank()) return
+        ensureLoaded()
         synchronized(recentPlayedInRadio) {
             recentPlayedInRadio.add(songId)
-            while (recentPlayedInRadio.size > 150) {
+            while (recentPlayedInRadio.size > MAX_RECENT_RADIO_WINDOW) {
                 val oldest = recentPlayedInRadio.iterator().next()
                 recentPlayedInRadio.remove(oldest)
             }
         }
         // 播放的曲目同时记录到已曝光窗口
         synchronized(exposedSongIds) {
+            exposedSongIds.remove(songId)
             exposedSongIds.add(songId)
+            while (exposedSongIds.size > MAX_EXPOSED_WINDOW) {
+                val oldest = exposedSongIds.iterator().next()
+                exposedSongIds.remove(oldest)
+            }
         }
+        persistExposedAsync()
     }
 
     /**
      * 记录一组歌曲已在界面向用户曝光展示。
-     * 建立 300 首滑动去重窗口，杜绝“换一批”时重复展示用户刚刚看过的歌曲。
+     * 建立 2000 首持久化滑动去重窗口，杜绝“换一批”与重启 App 后重复展示看过的歌曲。
      */
     fun recordSongsExposed(songs: Collection<OnlineSongItem>) {
         if (songs.isEmpty()) return
+        ensureLoaded()
         synchronized(exposedSongIds) {
             for (song in songs) {
                 if (song.id.isNotBlank()) {
+                    exposedSongIds.remove(song.id)
                     exposedSongIds.add(song.id)
                 }
                 val fp = makeFingerprint(song.title, song.artist)
                 if (fp.isNotBlank()) {
+                    exposedSongFingerprints.remove(fp)
                     exposedSongFingerprints.add(fp)
                 }
             }
-            while (exposedSongIds.size > 300) {
+            while (exposedSongIds.size > MAX_EXPOSED_WINDOW) {
                 val oldest = exposedSongIds.iterator().next()
                 exposedSongIds.remove(oldest)
             }
-            while (exposedSongFingerprints.size > 300) {
+            while (exposedSongFingerprints.size > MAX_EXPOSED_WINDOW) {
                 val oldestFp = exposedSongFingerprints.iterator().next()
                 exposedSongFingerprints.remove(oldestFp)
             }
         }
+        persistExposedAsync()
         AppLogger.d(TAG, "已记录曝光: ${songs.size} 首歌曲，当前曝光历史池大小: ${exposedSongIds.size}")
     }
 
     /**
      * 获取最近曝光的歌曲 mid 列表，传递给云端服务端以从召回源头剔除已曝光曲目。
      */
-    fun getRecentExposedMids(limit: Int = 20): List<String> {
+    fun getRecentExposedMids(limit: Int = 50): List<String> {
+        ensureLoaded()
         synchronized(exposedSongIds) {
             return exposedSongIds.toList().takeLast(limit)
         }
@@ -165,34 +253,26 @@ object GuessLikeOptimizer {
         count: Int = 5,
         excludeMids: Set<String> = emptySet(),
     ): List<String> {
+        ensureLoaded()
         val pool = mutableListOf<String>()
         synchronized(positiveSeedMids) {
             pool.addAll(positiveSeedMids.filterNot { it in excludeMids })
         }
 
-        // 如果动态完播种子较少，自动通过 provider 补充有效在线 mid 种子
-        if (pool.size < count) {
-            try {
-                val externalSeeds = favoriteSeedsProvider?.invoke().orEmpty()
-                val candidateSeeds = externalSeeds.filterNot { it in excludeMids || it in pool }.shuffled()
-                pool.addAll(candidateSeeds.take(count * 2))
-            } catch (e: Exception) {
-                AppLogger.w(TAG, "从外部收藏库提取种子失败: ${e.message}")
-            }
+        // 总是混入一部分外部收藏库随机种子，扩大兴趣探索半径，避免只围绕最近播放的几首歌打转
+        try {
+            val externalSeeds = favoriteSeedsProvider?.invoke().orEmpty()
+            val candidateSeeds = externalSeeds.filterNot { it in excludeMids || it in pool }.shuffled()
+            pool.addAll(candidateSeeds.take(count * 3))
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "从外部收藏库提取种子失败: ${e.message}")
         }
 
         if (pool.isEmpty()) return emptyList()
-        if (pool.size <= count) return pool.reversed()
+        if (pool.size <= count) return pool.shuffled()
 
-        // 策略：保留最新的 1 首作为即时心动锚点，其余种子从池中洗牌随机抽取，打破局部最优
-        val latest = pool.last()
-        val candidatePool = pool.dropLast(1).shuffled()
-        val sampled = mutableListOf(latest)
-        for (seed in candidatePool) {
-            if (sampled.size >= count) break
-            sampled.add(seed)
-        }
-        return sampled
+        // 全池洗牌随机抽取，彻底打破固定锚点导致的推荐死循环
+        return pool.shuffled().take(count)
     }
 
     /**
@@ -202,12 +282,15 @@ object GuessLikeOptimizer {
      * 3. 歌手防疲劳打散（确保同一歌手之间至少间隔 3 首以上）。
      *
      * @param filterExposed 是否严格过滤已曝光历史。在换一批与正常推荐时必须为 true，彻底打掉重复率。
+     * @param allowRelaxFallback 当过滤后不足 3 首时是否允许立即放宽曝光限制；多轮召回中间轮次必须传 false，避免提前放回重复歌曲。
      */
     fun optimizeRecommendations(
         candidates: List<OnlineSongItem>,
         currentSeedId: String? = null,
         filterExposed: Boolean = true,
+        allowRelaxFallback: Boolean = true,
     ): List<OnlineSongItem> {
+        ensureLoaded()
         val now = System.currentTimeMillis()
 
         // 清理过期的抑制项
@@ -246,14 +329,14 @@ object GuessLikeOptimizer {
             }
         }
 
-        // 如果用户刷了极多曲目导致严格过滤后候选项过少，放宽已曝光限制，但仍保留指纹去重与抑制过滤
-        if (deduplicated.size < 3 && filterExposed && candidates.isNotEmpty()) {
+        // 仅在允许兜底放宽时才退回未过滤已曝光的列表；多轮探索中保持严格空/少量返回，迫使上层换新种子继续召回
+        if (allowRelaxFallback && deduplicated.size < 3 && filterExposed && candidates.isNotEmpty()) {
             AppLogger.w(TAG, "严格去重后候选歌曲较少(${deduplicated.size})，放宽曝光限制以防止流耗尽")
-            return optimizeRecommendations(candidates, currentSeedId, filterExposed = false)
+            return optimizeRecommendations(candidates, currentSeedId, filterExposed = false, allowRelaxFallback = false)
         }
 
         if (deduplicated.isEmpty()) {
-            return candidates.distinctBy { it.id }
+            return if (allowRelaxFallback) candidates.distinctBy { it.id } else emptyList()
         }
 
         // 歌手防疲劳打散重排

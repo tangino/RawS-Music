@@ -1495,25 +1495,54 @@ class QQMusicSource(
         seedSongMids: List<String>,
         favSongMids: List<String>,
     ): List<OnlineSongItem> = withContext(Dispatchers.IO) {
-        val cookieStr = cookieProvider?.invoke().orEmpty()
-        var uinLong = 0L
-        var authst = ""
+        val qqAccount = com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.QQ)
+        val cookieStr = cookieProvider?.invoke()?.takeIf { it.isNotBlank() } ?: qqAccount?.toCookieHeader().orEmpty()
+        var uinLong = qqAccount?.userId?.replace("^o0*".toRegex(), "")?.toLongOrNull() ?: 0L
+        var authst = qqAccount?.tokens?.get("key")
+            ?: qqAccount?.cookies?.get("qm_keyst")
+            ?: qqAccount?.cookies?.get("qqmusic_key")
+            ?: qqAccount?.cookies?.get("psrf_musickey_id")
+            ?: qqAccount?.cookies?.get("authst")
+            ?: ""
         if (cookieStr.isNotBlank()) {
-            val uinMatch = Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(cookieStr)
-            uinLong = uinMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
-            val keyMatch = Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)
-            authst = keyMatch?.groupValues?.get(1)?.trim().orEmpty()
+            if (uinLong <= 0L) {
+                val uinMatch = Regex("""(?:uin|p_uin|login_uin)=(?:o0*)?(\d+)""").find(cookieStr)
+                uinLong = uinMatch?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            }
+            if (authst.isBlank()) {
+                val keyMatch = Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)
+                authst = keyMatch?.groupValues?.get(1)?.trim().orEmpty()
+            }
         }
+
+        val isWxLogin = authst.startsWith("W_X_", ignoreCase = true) ||
+            cookieStr.contains("wxuin=", ignoreCase = true) ||
+            cookieStr.contains("wxopenid=", ignoreCase = true)
+        val tmeLoginType = if (isWxLogin) 1 else 2
 
         val commObj = JSONObject().apply {
             put("ct", 24)
-            put("cv", 0)
-            if (uinLong > 0) put("uin", uinLong)
-            if (authst.isNotBlank()) put("authst", authst)
+            put("cv", 4747474)
+            put("format", "json")
+            put("inCharset", "utf-8")
+            put("outCharset", "utf-8")
+            put("platform", "yqq.json")
+            put("notice", 0)
+            put("needNewCode", 1)
+            if (uinLong > 0) {
+                put("uin", uinLong)
+                put("tmeLoginType", tmeLoginType)
+            }
+            if (authst.isNotBlank()) {
+                put("authst", authst)
+                put("g_tk", calculateGtk(authst))
+            }
         }
 
+        val effectivePage = page.coerceAtLeast(1)
         val paramObj = JSONObject().apply {
-            put("Page", page.coerceAtLeast(1))
+            put("Page", effectivePage)
+            // 保持官方精准私人雷达模式 ReqType=0，确保 100% 紧扣用户画像与收藏种子，不做无关联大盘发散
             put("ReqType", 0)
 
             val favArr = JSONArray()
@@ -1534,8 +1563,8 @@ class QQMusicSource(
             }
             put("EntranceSongs", entranceArr)
 
-            // 借鉴 QTMusic RadioRequest：向服务端带入已知已曝光歌曲 ID，在召回源头剔除重复
-            val exposedIds = com.rawsmusic.module.online.recommend.GuessLikeOptimizer.getRecentExposedMids(20)
+            // 借鉴 QTMusic RadioRequest：向服务端带入最近 50 首已曝光歌曲 ID，在召回源头剔除重复
+            val exposedIds = com.rawsmusic.module.online.recommend.GuessLikeOptimizer.getRecentExposedMids(50)
             if (exposedIds.isNotEmpty()) {
                 val songIdsArr = JSONArray()
                 exposedIds.forEach { mid ->
@@ -1560,54 +1589,60 @@ class QQMusicSource(
             put("radar", radarObj)
         }
 
+        fun parseTrackItem(trackObj: JSONObject): OnlineSongItem? {
+            val mid = trackObj.optString("mid").ifEmpty { trackObj.optString("songmid") }
+            val name = trackObj.optString("name").ifEmpty { trackObj.optString("title") }
+            if (mid.isBlank() || name.isBlank()) return null
+
+            val singerArr = trackObj.optJSONArray("singer")
+            val singers = mutableListOf<String>()
+            if (singerArr != null) {
+                for (s in 0 until singerArr.length()) {
+                    singerArr.optJSONObject(s)?.optString("name")?.takeIf { it.isNotBlank() }?.let {
+                        singers.add(it)
+                    }
+                }
+            }
+            val singerStr = if (singers.isNotEmpty()) singers.joinToString(", ") else "未知歌手"
+
+            val albumObj = trackObj.optJSONObject("album")
+            val albumName = albumObj?.optString("name")?.ifEmpty { albumObj.optString("title") } ?: ""
+            val albumMid = albumObj?.optString("mid") ?: ""
+
+            val coverUrl = if (albumMid.isNotBlank()) {
+                "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
+            } else null
+
+            val intervalSec = trackObj.optLong("interval", 0L)
+            val durationMs = if (intervalSec in 1..86400) intervalSec * 1000L else 0L
+            val isVip = parseQQIsVip(trackObj)
+
+            return OnlineSongItem(
+                id = mid,
+                platform = platform,
+                title = name,
+                artist = singerStr,
+                album = albumName,
+                durationMs = durationMs,
+                coverUrl = coverUrl,
+                isVip = isVip
+            )
+        }
+
         val resultSongs = mutableListOf<OnlineSongItem>()
         try {
-            val respJson = postMusicU(payload)
+            val respJson = postMusicU(payload, uin = if (uinLong > 0L) uinLong.toString() else "", authKey = authst)
             val vecSongs = respJson.optJSONObject("radar")?.optJSONObject("data")?.optJSONArray("VecSongs")
             if (vecSongs != null) {
+                val seenIds = HashSet<String>()
                 for (i in 0 until vecSongs.length()) {
                     val itemWrapper = vecSongs.optJSONObject(i) ?: continue
                     val trackObj = itemWrapper.optJSONObject("Track") ?: itemWrapper
-
-                    val mid = trackObj.optString("mid").ifEmpty { trackObj.optString("songmid") }
-                    val name = trackObj.optString("name").ifEmpty { trackObj.optString("title") }
-                    if (mid.isBlank() || name.isBlank()) continue
-
-                    val singerArr = trackObj.optJSONArray("singer")
-                    val singers = mutableListOf<String>()
-                    if (singerArr != null) {
-                        for (s in 0 until singerArr.length()) {
-                            singerArr.optJSONObject(s)?.optString("name")?.takeIf { it.isNotBlank() }?.let {
-                                singers.add(it)
-                            }
+                    parseTrackItem(trackObj)?.let { item ->
+                        if (seenIds.add(item.id)) {
+                            resultSongs.add(item)
                         }
                     }
-                    val singerStr = if (singers.isNotEmpty()) singers.joinToString(", ") else "未知歌手"
-
-                    val albumObj = trackObj.optJSONObject("album")
-                    val albumName = albumObj?.optString("name")?.ifEmpty { albumObj.optString("title") } ?: ""
-                    val albumMid = albumObj?.optString("mid") ?: ""
-
-                    val coverUrl = if (albumMid.isNotBlank()) {
-                        "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
-                    } else null
-
-                    val intervalSec = trackObj.optLong("interval", 0L)
-                    val durationMs = if (intervalSec in 1..86400) intervalSec * 1000L else 0L
-                    val isVip = parseQQIsVip(trackObj)
-
-                    resultSongs.add(
-                        OnlineSongItem(
-                            id = mid,
-                            platform = platform,
-                            title = name,
-                            artist = singerStr,
-                            album = albumName,
-                            durationMs = durationMs,
-                            coverUrl = coverUrl,
-                            isVip = isVip
-                        )
-                    )
                 }
             }
         } catch (e: Exception) {

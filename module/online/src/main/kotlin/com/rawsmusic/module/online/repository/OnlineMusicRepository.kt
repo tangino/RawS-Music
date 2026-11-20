@@ -158,22 +158,29 @@ class OnlineMusicRepository private constructor() {
             var currentSeedList = seedSongMids
             val usedSeedMids = HashSet<String>()
 
-            // 最多执行 3 轮动态召回补齐，彻底解决服务端雷达模型单次返回高度重合的问题
+            // 最多执行 5 轮动态召回补齐，每轮更换不同种子组合与锚点，彻底打破固定小曲池循环
             var attempt = 0
-            while (collected.size < pageSize && attempt < 3) {
+            while (collected.size < pageSize && attempt < 5) {
                 attempt++
                 val dynamicFavSeeds = if (favSongMids.isNotEmpty() && attempt == 1) {
                     favSongMids
                 } else {
-                    GuessLikeOptimizer.getDynamicFavoriteSeeds(count = 5, excludeMids = usedSeedMids)
+                    GuessLikeOptimizer.getDynamicFavoriteSeeds(count = 6, excludeMids = usedSeedMids)
                 }
                 usedSeedMids.addAll(dynamicFavSeeds)
+
+                // 第 2 轮起若仍复用静态入口种子，改用动态抽样种子作为锚点扩散，防止云端锁死在同一首歌的邻域
+                val effectiveSeeds = if (attempt == 1) {
+                    currentSeedList
+                } else {
+                    currentSeedList.ifEmpty { dynamicFavSeeds.take(2) }
+                }
 
                 val rawBatch = try {
                     source.getRecommendSongs(
                         page = page + attempt - 1,
                         pageSize = pageSize,
-                        seedSongMids = currentSeedList,
+                        seedSongMids = effectiveSeeds,
                         favSongMids = dynamicFavSeeds,
                     )
                 } catch (e: Exception) {
@@ -183,11 +190,12 @@ class OnlineMusicRepository private constructor() {
 
                 if (rawBatch.isEmpty() && collected.isNotEmpty()) break
 
-                // 本地严格过滤：过滤抑制项、冷却歌手、已曝光滑窗、相同歌名指纹
+                // 多轮探索期间严格禁止中途放宽曝光去重，确保只收割真正的新歌
                 val optimized = GuessLikeOptimizer.optimizeRecommendations(
                     candidates = rawBatch,
-                    currentSeedId = currentSeedList.firstOrNull(),
+                    currentSeedId = effectiveSeeds.firstOrNull(),
                     filterExposed = true,
+                    allowRelaxFallback = false,
                 )
 
                 for (song in optimized) {
@@ -197,19 +205,22 @@ class OnlineMusicRepository private constructor() {
                     }
                 }
 
-                // 为下一轮尝试提供新锚点（如果有收集到新歌，取其中一首作为新锚点）
-                if (collected.isNotEmpty()) {
-                    currentSeedList = listOf(collected.last().id)
+                // 为下一轮尝试切换新锚点（优先从未用过的新歌或新的收藏种子中随机抽取）
+                currentSeedList = when {
+                    collected.isNotEmpty() -> listOf(collected.random().id)
+                    dynamicFavSeeds.isNotEmpty() -> listOf(dynamicFavSeeds.random())
+                    else -> emptyList()
                 }
             }
 
-            // 兜底：若经过多轮严格去重后仍然数量过少（极端情况），放宽已曝光限制以确保有歌可听
+            // 兜底：若 5 轮双引擎召回后仍不足一半，才放宽已曝光限制补齐余量
             if (collected.size < pageSize / 2) {
-                val fallbackRaw = source.getRecommendSongs(page, pageSize, seedSongMids, favSongMids)
+                val fallbackRaw = source.getRecommendSongs(page + 5, pageSize, emptyList(), GuessLikeOptimizer.getDynamicFavoriteSeeds(6))
                 val fallbackOptimized = GuessLikeOptimizer.optimizeRecommendations(
                     candidates = fallbackRaw,
                     currentSeedId = seedSongMids.firstOrNull(),
                     filterExposed = false,
+                    allowRelaxFallback = true,
                 )
                 for (song in fallbackOptimized) {
                     if (collectedIds.add(song.id)) {

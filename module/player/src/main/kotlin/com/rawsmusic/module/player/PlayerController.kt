@@ -1103,6 +1103,29 @@ class PlayerController private constructor(context: Context) {
                         // handled, but keep the per-song failure count so retry #2 skips.
                         lastHandledOnlineErrorItem = null
                     }
+                    MusicSourcePlaybackStatus.Idle -> {
+                        // 防状态撕裂：若在线引擎已回到 Idle，但 PlayerController 仍停留在 PLAYING/PREPARING 且底层解码器未在播，
+                        // 说明在线切歌/寻源被异常中断，及时同步 UI 状态为 PAUSED，避免按钮卡死在“正在播放(暂停图标)”假状态。
+                        val song = pendingRendererUiCommit?.song ?: _currentSong.value
+                        val isOnline = song != null && (
+                            com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
+                                song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+                            )
+                        val ffState = ffmpegPlayer.state
+                        if (isOnline &&
+                            (_playState.value == PlayState.PLAYING || _playState.value == PlayState.PREPARING) &&
+                            ffState != FfmpegAudioPlayer.State.PLAYING &&
+                            ffState != FfmpegAudioPlayer.State.PREPARING &&
+                            onlineFailureRetryJob?.isActive != true
+                        ) {
+                            AppLogger.w(
+                                TAG,
+                                "ONLINE_STATE_DESYNC detected: online=Idle, ff=$ffState, ui=${_playState.value}, song=${song?.title}; syncing UI to PAUSED",
+                            )
+                            pendingRendererUiCommit = null
+                            smForceTransition(PlayState.PAUSED, "online_idle_desync_guard")
+                        }
+                    }
                     else -> Unit
                 }
             }
@@ -1117,9 +1140,17 @@ class PlayerController private constructor(context: Context) {
         // During a deferred manual switch the public currentSong intentionally still points at the
         // retiring track. Resolve the failure owner from the pending renderer commit instead.
         val song = pendingRendererUiCommit?.song ?: _currentSong.value ?: return
-        if (!com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) return
+        val isOnlineSong = com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
+            song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+        if (!isOnlineSong) return
         val expectedPath = com.rawsmusic.core.common.model.onlineSongKey(item.sourceId, item.remoteId)
-        if (song.path != expectedPath && !rendererSourceMatches(song.path, expectedPath)) return
+        val pathMatched = song.path == expectedPath || rendererSourceMatches(song.path, expectedPath)
+        val metaMatched = song.title.isNotBlank() &&
+            song.title.equals(item.title, ignoreCase = true) &&
+            (song.artist.isBlank() || item.artists.isEmpty() ||
+                item.artists.any { it.equals(song.artist, ignoreCase = true) } ||
+                item.artists.joinToString(", ").equals(song.artist, ignoreCase = true))
+        if (!pathMatched && !metaMatched) return
 
         val itemIdentity = "${item.sourceId}/${item.remoteId}"
         if (lastHandledOnlineErrorItem == itemIdentity) return
