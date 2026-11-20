@@ -227,9 +227,10 @@ object KuwoCarAudioEngine {
         allowEncrypted: Boolean = true,
     ): KuwoDownloadResource? = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<KuwoQualityOption>()
+        val hasQualityManifest = songMatch.qualities.isNotEmpty()
         fun addOption(bitrate: Int, fallbackLevel: String, fallbackFormat: String) {
             val found = songMatch.qualities.find { it.bitrate == bitrate }
-                ?: KuwoQualityOption(fallbackLevel, bitrate, fallbackFormat, "")
+                ?: if (!hasQualityManifest) KuwoQualityOption(fallbackLevel, bitrate, fallbackFormat, "") else return
             if (candidates.none { it.bitrate == found.bitrate && it.format.equals(found.format, ignoreCase = true) }) {
                 candidates.add(found)
             }

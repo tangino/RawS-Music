@@ -10,6 +10,7 @@ import android.os.SystemClock
 import com.rawsmusic.module.data.source.InstalledLxSource
 import com.rawsmusic.module.data.source.LxSourcePluginStore
 import com.rawsmusic.module.data.source.MusicSourcePluginStore
+import com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine
 import com.rawsmusic.module.data.source.runtime.LxCatalogSearchService
 import com.rawsmusic.module.data.source.runtime.MusicSourceRuntimeClient
 import kotlinx.coroutines.CancellationException
@@ -139,6 +140,20 @@ object MusicSourceAudioResolver {
             return cached.source
         }
 
+        // 1. 优先尝试酷我车载非加密直链引擎（响应快、无损直链命中率高）；未命中再沿用原有插件/多源寻源规则
+        if (item.mediaType == com.rawsmusic.core.common.source.RawSourceMediaType.Music) {
+            resolveViaKuwoCarEngine(item, requestedQuality)?.let { kwResolved ->
+                memorySourceCache.put(cacheKey, CachedResolvedSource(kwResolved, now + 15 * 60 * 1000L))
+                AppLogger.i(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK primary=kuwo_car sourceId=${item.sourceId} " +
+                        "quality=${kwResolved.quality} url=${OnlinePlaybackDiagnostics.safeUrl(kwResolved.url)} " +
+                        "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                )
+                return kwResolved
+            }
+        }
+
         val musicFreeSource = MusicSourcePluginStore.sources.value.firstOrNull {
             it.id == item.sourceId && it.enabled
         }
@@ -244,6 +259,42 @@ object MusicSourceAudioResolver {
             )
             throw error
         }
+    }
+
+    /**
+     * 酷我车载非加密直链兜底（2000k/4000k FLAC 或 320k/128k MP3），可直接交由播放器流式秒开。
+     */
+    private suspend fun resolveViaKuwoCarEngine(
+        item: RawSourceMediaItem,
+        requestedQuality: RawSourceQuality,
+    ): RawResolvedAudioSource? {
+        if (item.title.isBlank()) return null
+        return runCatching {
+            val artist = item.artists.joinToString(" & ")
+            val match = KuwoCarAudioEngine.matchBestSong(item.title, artist, item.durationMs)
+                ?: return null
+            val resource = KuwoCarAudioEngine.resolveDownloadResource(
+                songMatch = match,
+                requestedQuality = requestedQuality,
+                allowEncrypted = false,
+            ) ?: return null
+            val quality = when {
+                resource.bitrate >= 4000 -> RawSourceQuality.HiRes
+                resource.bitrate >= 1000 -> RawSourceQuality.Lossless
+                resource.bitrate >= 320 -> RawSourceQuality.High
+                else -> RawSourceQuality.Standard
+            }
+            RawResolvedAudioSource(
+                url = resource.downloadUrl,
+                quality = quality,
+                userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                platform = "kuwo_car",
+                sourceName = "酷我车载",
+            )
+        }.onFailure { err ->
+            if (err is CancellationException) throw err
+            AppLogger.w(TAG, "KuwoCarAudioEngine fallback failed for ${item.title}: ${err.message}")
+        }.getOrNull()
     }
 
     private suspend fun resolveMusicFree(

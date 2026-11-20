@@ -1141,6 +1141,45 @@ object OnlineAudioSourceResolver {
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
         kotlinx.coroutines.withTimeoutOrNull(15_000L) {
             val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
+            // 0. 优先尝试酷我车载非加密直链（响应快、无损直链命中率高），未命中再沿用原有寻源策略
+            if (title.isNotBlank()) {
+                val kwResolved = runCatching {
+                    val requestedQuality = stringToRawSourceQuality(targetQuality)
+                    val match = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.matchBestSong(
+                        title,
+                        artist,
+                        expectedDurationMs,
+                    )
+                    val resource = match?.let {
+                        com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.resolveDownloadResource(
+                            songMatch = it,
+                            requestedQuality = requestedQuality,
+                            allowEncrypted = false,
+                        )
+                    }
+                    if (match != null && resource != null) {
+                        val qualityLabel = when {
+                            resource.bitrate >= 4000 -> "HR"
+                            resource.bitrate >= 1000 -> "SQ"
+                            resource.bitrate >= 320 -> "HQ"
+                            else -> "PQ"
+                        }
+                        ResolvedAudioSource(
+                            url = resource.downloadUrl,
+                            platform = OnlinePlatform.KUWO,
+                            sourceName = "酷我车载",
+                            quality = qualityLabel,
+                            durationMs = if (match.durationSec > 0L) match.durationSec * 1000L else expectedDurationMs,
+                            isFallback = platform != OnlinePlatform.KUWO,
+                        )
+                    } else null
+                }.getOrNull()
+                if (kwResolved != null) {
+                    AppLogger.i(TAG, "[KuwoCarPrimary] Resolved direct URL for $title ($artist) quality=${kwResolved.quality}")
+                    return@withTimeoutOrNull kwResolved
+                }
+            }
+
             val strategy = AppPreferences.Source.resolveStrategy
             if (strategy == ResolveStrategy.CLASSIC_POLLING) {
                 resolvePlayableSourceClassicPolling(

@@ -722,6 +722,7 @@ object MusicSourcePlaybackController {
         if (rawPlatformOrSourceId.isNullOrBlank()) return "在线音源"
         val p = rawPlatformOrSourceId.trim().lowercase()
         return when {
+            p == "kuwo_car" || p.contains("酷我车载") -> "酷我车载"
             p == "netease" || p == "wy" || p.contains("163") || p.contains("网易") -> "网易云音乐"
             p == "qq" || p == "tx" || p.contains("tencent") || p.contains("qq") -> "QQ音乐"
             p == "kugou" || p == "kg" || p.contains("酷狗") -> "酷狗音乐"

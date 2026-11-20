@@ -1148,8 +1148,7 @@ class PlayerController private constructor(context: Context) {
         val metaMatched = song.title.isNotBlank() &&
             song.title.equals(item.title, ignoreCase = true) &&
             (song.artist.isBlank() || item.artists.isEmpty() ||
-                item.artists.any { it.equals(song.artist, ignoreCase = true) } ||
-                item.artists.joinToString(", ").equals(song.artist, ignoreCase = true))
+                item.artists.any { song.artist.contains(it, ignoreCase = true) || it.contains(song.artist, ignoreCase = true) })
         if (!pathMatched && !metaMatched) return
 
         val itemIdentity = "${item.sourceId}/${item.remoteId}"
@@ -1163,7 +1162,11 @@ class PlayerController private constructor(context: Context) {
         }
         onlineFailureCount++
 
-        if (onlineFailureCount <= ONLINE_FAILURE_RETRY_LIMIT) {
+        // 寻源彻底失败（已在解析器内走完插件+全网兜底+酷我直链）时无需原地盲等重试，直接快速切下一首
+        val isResolveExhausted = snapshot.error.contains("对应音源不存在") ||
+            snapshot.error.contains("音频地址解析失败") ||
+            snapshot.error.contains("未找到可用")
+        if (!isResolveExhausted && onlineFailureCount <= ONLINE_FAILURE_RETRY_LIMIT) {
             AppLogger.w(
                 TAG,
                 "ONLINE_PLAY_FAILURE retry attempt=$onlineFailureCount song=${song.title} " +

@@ -228,7 +228,7 @@ object OnlinePlaybackLauncher {
                 queue = rawQueue,
                 index = resolvedIndex,
                 originalPlatform = item.platform.displayName,
-                resolvedPlatform = resolved.platform.displayName,
+                resolvedPlatform = if (resolved.sourceName == "酷我车载") "酷我车载" else resolved.platform.displayName,
                 sourceTag = resolved.sourceName,
             )
             OnlinePlayResult.Started
