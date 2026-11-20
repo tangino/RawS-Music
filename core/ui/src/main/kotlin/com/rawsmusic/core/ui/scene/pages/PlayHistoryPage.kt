@@ -73,7 +73,7 @@ import java.util.Locale
 /**
  * 历史播放歌曲详情页。
  * 支持浏览全部历史记录、直接点击播放、全部播放、随机播放、单曲移除、清空历史，
- * 以及设置历史记录保留上限（上限最大 500 首）。
+ * 以及设置历史记录保留上限（上限最大 2000 首）。
  */
 @Composable
 fun PlayHistoryPage(
@@ -83,7 +83,7 @@ fun PlayHistoryPage(
     modifier: Modifier = Modifier,
 ) {
     val historyItems by PlayHistoryManager.history.collectAsState()
-    val maxCount = PlayHistoryManager.maxHistoryCount
+    val maxCount by PlayHistoryManager.maxCountFlow.collectAsState()
 
     var showLimitDialog by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -468,7 +468,7 @@ private fun HistorySongRow(
 }
 
 /**
- * 历史记录上限设置弹窗（上限 500 首）
+ * 历史记录上限设置弹窗（上限 2000 首）
  */
 @Composable
 private fun HistoryLimitSettingDialog(
@@ -479,7 +479,7 @@ private fun HistoryLimitSettingDialog(
     var limitInput by remember { mutableStateOf(currentLimit.toString()) }
     var selectedValue by remember { mutableIntStateOf(currentLimit) }
 
-    val presets = listOf(50, 100, 200, 300, 500)
+    val presets = listOf(100, 300, 500, 1000, 2000)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -494,7 +494,7 @@ private fun HistoryLimitSettingDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "设置历史播放歌曲保留的最大数量（范围 10 ~ 500 首），超出部分将自动移除最旧记录。",
+                    text = "设置历史播放歌曲保留的最大数量（范围 10 ~ 2000 首），超出部分将自动移除最旧记录。",
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     lineHeight = 18.sp
@@ -558,7 +558,7 @@ private fun HistoryLimitSettingDialog(
                     BasicTextField(
                         value = limitInput,
                         onValueChange = { input ->
-                            val digitsOnly = input.filter { it.isDigit() }.take(3)
+                            val digitsOnly = input.filter { it.isDigit() }.take(4)
                             limitInput = digitsOnly
                             digitsOnly.toIntOrNull()?.let {
                                 selectedValue = it.coerceIn(PlayHistoryManager.MIN_LIMIT_FLOOR, PlayHistoryManager.MAX_LIMIT_CEILING)
@@ -575,7 +575,7 @@ private fun HistoryLimitSettingDialog(
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = "首 (上限 500)",
+                        text = "首 (上限 2000)",
                         fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                     )

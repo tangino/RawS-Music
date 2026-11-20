@@ -45,7 +45,7 @@ class PlaybackStatsStore private constructor(private val context: Context) {
     companion object {
         @Volatile
         private var instance: PlaybackStatsStore? = null
-        private const val MAX_HISTORY_ITEMS = 200
+        private const val MAX_HISTORY_ITEMS = 2000
 
         fun getInstance(ctx: Context): PlaybackStatsStore {
             return instance ?: synchronized(this) {

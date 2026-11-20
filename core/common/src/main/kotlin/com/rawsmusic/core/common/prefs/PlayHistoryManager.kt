@@ -2,6 +2,7 @@ package com.rawsmusic.core.common.prefs
 
 import com.rawsmusic.core.common.model.AudioFile
 import com.tencent.mmkv.MMKV
+import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,15 +44,26 @@ object PlayHistoryManager {
     private const val KEY_HISTORY_LIST = "play_history_items_json"
     private const val KEY_MAX_COUNT = "play_history_max_count"
 
-    /** 记录数上限硬性约束：最高 500 首，最低 10 首，默认 200 首 */
-    const val MAX_LIMIT_CEILING = 500
+    /** 记录数上限硬性约束：最高 2000 首，最低 10 首，默认 200 首 */
+    const val MAX_LIMIT_CEILING = 2000
     const val MIN_LIMIT_FLOOR = 10
     const val DEFAULT_LIMIT = 200
 
+    /** 单线程后台持久化执行器，避免 2000 条历史记录 JSON 序列化阻塞主线程 */
+    private val persistExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "RawS-PlayHistoryPersist").apply { isDaemon = true }
+    }
+
+    private val _maxCountFlow = MutableStateFlow(
+        kv.decodeInt(KEY_MAX_COUNT, DEFAULT_LIMIT).coerceIn(MIN_LIMIT_FLOOR, MAX_LIMIT_CEILING)
+    )
+    val maxCountFlow: StateFlow<Int> = _maxCountFlow.asStateFlow()
+
     var maxHistoryCount: Int
-        get() = kv.decodeInt(KEY_MAX_COUNT, DEFAULT_LIMIT).coerceIn(MIN_LIMIT_FLOOR, MAX_LIMIT_CEILING)
+        get() = _maxCountFlow.value
         set(value) {
             val clamped = value.coerceIn(MIN_LIMIT_FLOOR, MAX_LIMIT_CEILING)
+            _maxCountFlow.value = clamped
             kv.encode(KEY_MAX_COUNT, clamped)
             trimToLimit(clamped)
         }
@@ -119,7 +131,9 @@ object PlayHistoryManager {
      */
     fun clearHistory() {
         _history.value = emptyList()
-        kv.remove(KEY_HISTORY_LIST)
+        persistExecutor.execute {
+            runCatching { kv.remove(KEY_HISTORY_LIST) }
+        }
     }
 
     private fun trimToLimit(limit: Int) {
@@ -169,24 +183,28 @@ object PlayHistoryManager {
     }
 
     private fun saveHistory(list: List<PlayHistoryItem>) {
-        try {
-            val array = JSONArray()
-            for (item in list) {
-                array.put(
-                    JSONObject().apply {
-                        put("id", item.id)
-                        put("title", item.title)
-                        put("artist", item.artist)
-                        put("album", item.album)
-                        put("duration", item.duration)
-                        put("path", item.path)
-                        put("coverKey", item.coverKey)
-                        put("albumArtPath", item.albumArtPath)
-                        put("playedAt", item.playedAt)
-                    }
-                )
-            }
-            kv.encode(KEY_HISTORY_LIST, array.toString())
-        } catch (_: Exception) {}
+        // 拷贝不可变快照后在后台单线程顺序序列化写入，避免 2000 条记录阻塞切歌主线程
+        val snapshot = list.toList()
+        persistExecutor.execute {
+            try {
+                val array = JSONArray()
+                for (item in snapshot) {
+                    array.put(
+                        JSONObject().apply {
+                            put("id", item.id)
+                            put("title", item.title)
+                            put("artist", item.artist)
+                            put("album", item.album)
+                            put("duration", item.duration)
+                            put("path", item.path)
+                            put("coverKey", item.coverKey)
+                            put("albumArtPath", item.albumArtPath)
+                            put("playedAt", item.playedAt)
+                        }
+                    )
+                }
+                kv.encode(KEY_HISTORY_LIST, array.toString())
+            } catch (_: Exception) {}
+        }
     }
 }
