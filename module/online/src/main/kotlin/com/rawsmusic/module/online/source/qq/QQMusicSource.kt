@@ -1825,6 +1825,13 @@ class QQMusicSource(
      *
      * @param refreshSeed 刷新种子/偏移，用于连续点击“换一批”时轮换不同的私荐歌单。
      */
+    // QTMusic 推荐流会话状态（按 uin 隔离），用于传递 v_cache / v_uniq / s_num，实现真正换一批而非重复返回固定货架
+    private var lastRecommendUin: String = ""
+    private val seenRecommendShelfCacheIds = linkedSetOf<String>()
+    private val seenRecommendUniqIds = linkedSetOf<String>()
+    private val recentlyShownPlaylistIds = linkedSetOf<String>()
+    private var accumulatedRecommendShelfCount: Int = 0
+
     suspend fun getPrivateRecommendPlaylists(refreshSeed: Int = 0): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         val qqAccount = com.rawsmusic.module.online.auth.PlatformAccountManager.getAccount(OnlinePlatform.QQ)
         val cookieStr = cookieProvider?.invoke()?.takeIf { it.isNotBlank() } ?: qqAccount?.toCookieHeader().orEmpty()
@@ -1840,39 +1847,81 @@ class QQMusicSource(
             ?: qqAccount?.cookies?.get("authst")
             ?: Regex("""(?:qm_keyst|qqmusic_key|authst)=([^;]+)""").find(cookieStr)?.groupValues?.get(1)?.trim().orEmpty()
 
+        val isLoggedIn = cleanUin.isNotBlank() && cleanUin != "0"
+
+        // 切换账号时重置推荐流上下文
+        if (cleanUin != lastRecommendUin) {
+            lastRecommendUin = cleanUin
+            seenRecommendShelfCacheIds.clear()
+            seenRecommendUniqIds.clear()
+            recentlyShownPlaylistIds.clear()
+            accumulatedRecommendShelfCount = 0
+        }
+
         com.rawsmusic.core.common.utils.AppLogger.d(
             "QQMusicSource",
-            "获取私荐歌单: uin=$cleanUin (uinLong=$uinLong), hasAuthst=${authst.isNotBlank()}, seed=$refreshSeed"
+            "获取私荐歌单(QTMusic协议): uin=$cleanUin (uinLong=$uinLong), hasAuthst=${authst.isNotBlank()}, seed=$refreshSeed, sNum=$accumulatedRecommendShelfCount"
         )
 
         val result = mutableListOf<OnlinePlaylist>()
 
-        // 1. 优先通过官方客户端个性化私荐接口 music.recommend.RecommendFeed.get_recommend_feed 拉取专属画像歌单
+        // 1. 对齐 QTMusic 官方客户端（n6.java / v4.java）调用 music.recommend.RecommendFeed.get_recommend_feed
         try {
+            val isWxLogin = authst.startsWith("W_X_", ignoreCase = true) ||
+                cookieStr.contains("wxuin=", ignoreCase = true) ||
+                cookieStr.contains("wxopenid=", ignoreCase = true)
+            val tmeLoginType = if (isWxLogin) 1 else 2
+            // 注意：u.y.qq.com/cgi-bin/musicu.fcg 在无客户端 sign 时会拒绝 ct=11（直接返回空），
+            // 必须使用 ct=24, cv=4747474 并携带 tmeLoginType + uin + authst + g_tk 才能正常下发登录用户专属推荐流。
             val commObj = JSONObject().apply {
                 put("ct", 24)
                 put("cv", 4747474)
-                if (uinLong > 0L) {
-                    put("uin", uinLong)
-                } else if (cleanUin.isNotBlank() && cleanUin != "0") {
-                    put("uin", cleanUin)
+                put("format", "json")
+                put("inCharset", "utf-8")
+                put("outCharset", "utf-8")
+                put("platform", "yqq.json")
+                put("notice", 0)
+                put("needNewCode", 1)
+                if (isLoggedIn) {
+                    put("tmeLoginType", tmeLoginType)
+                    if (uinLong > 0L) {
+                        put("uin", uinLong)
+                    } else {
+                        put("uin", cleanUin)
+                    }
                 }
-                if (authst.isNotBlank()) put("authst", authst)
+                if (authst.isNotBlank()) {
+                    put("authst", authst)
+                    put("g_tk", calculateGtk(authst))
+                }
             }
 
+            // 对齐 n6.java 的 ext 扩展参数
             val extObj = JSONObject().apply {
-                put("has_login", if (cleanUin.isNotBlank() && cleanUin != "0") "1" else "0")
+                put("has_login", if (isLoggedIn) "1" else "0")
+                put("no_need_sound_quality", "0")
                 put("is_20_style", "1")
                 put("nopack_people", "1")
+                put("first_req_time", if (refreshSeed == 0) "1" else "0")
+                put("client_time_zone", java.util.TimeZone.getDefault().id)
             }
 
+            // 对齐 v4.java: 首次(seed=0)使用 x_page_type=1, direction=0, s_num=0；
+            // 后续刷新(seed>0)使用上拉翻页(direction=1, x_page_type=2, s_num=已拉取货架数)并携带 v_cache 与 v_uniq 排除已推内容
+            val isLoadMore = refreshSeed > 0 && accumulatedRecommendShelfCount > 0
+            val direction = if (isLoadMore) 1 else 0
+            val xPageType = if (isLoadMore) 2 else 1
+            val sNum = if (isLoadMore) accumulatedRecommendShelfCount else 0
+
             val feedParam = JSONObject().apply {
-                put("direction", refreshSeed % 2)
-                put("x_page_type", 1)
-                put("s_num", 0)
+                put("direction", direction)
+                put("x_page_type", xPageType)
+                put("s_num", sNum)
                 put("client_time", System.currentTimeMillis() / 1000)
-                put("has_login", if (cleanUin.isNotBlank() && cleanUin != "0") 1 else 0)
-                put("is_20_style", 1)
+                put("v_cache", org.json.JSONArray(seenRecommendShelfCacheIds.toList().takeLast(60)))
+                if (seenRecommendUniqIds.isNotEmpty()) {
+                    put("v_uniq", org.json.JSONArray(seenRecommendUniqIds.toList().takeLast(120)))
+                }
                 put("ext", extObj)
             }
 
@@ -1892,15 +1941,39 @@ class QQMusicSource(
             val vShelf = feedData?.optJSONArray("v_shelf") ?: feedData?.optJSONArray("Shelfs")
 
             if (vShelf != null && vShelf.length() > 0) {
-                // 按货架（Shelf）维度分类收集歌单，用于后续执行跨货架多样性轮询采样
-                val shelfBuckets = linkedMapOf<String, MutableList<OnlinePlaylist>>()
+                accumulatedRecommendShelfCount += vShelf.length()
+
+                // 货架分层：优先保留 QTMusic 核心私荐货架（私荐歌单 / 你的歌单宝藏库 / 你的歌曲补给站 / 猜你喜欢等），排除大盘运营/播客/榜单货架
+                val primaryKeywords = listOf(
+                    "私荐", "宝藏", "补给站", "猜你喜欢", "为你推荐", "专属", "口味",
+                    "常听", "符合你", "私人", "懂你", "雷达", "歌单推荐", "听歌习惯", "相似"
+                )
+                val excludedShelfKeywords = listOf(
+                    "排行榜", "飙升", "热歌榜", "新歌首发", "新碟", "播客", "有声",
+                    "相声", "评书", "直播", "视频", "mv", "演出", "活动", "广告", "会员"
+                )
+
+                val primaryBuckets = linkedMapOf<String, MutableList<OnlinePlaylist>>()
+                val secondaryBuckets = linkedMapOf<String, MutableList<OnlinePlaylist>>()
 
                 for (s in 0 until vShelf.length()) {
                     val shelfObj = vShelf.optJSONObject(s) ?: continue
+                    val shelfCacheId = shelfObj.optString("cache_id").ifBlank {
+                        shelfObj.optString("shelf_id").ifBlank { shelfObj.optString("id") }
+                    }
+                    if (shelfCacheId.isNotBlank()) {
+                        seenRecommendShelfCacheIds.add(shelfCacheId)
+                    }
+
                     val shelfTitle = shelfObj.optString("title_content").ifBlank {
                         shelfObj.optString("title_template").ifBlank { "专属私荐 ${s + 1}" }
                     }
-                    val currentShelfList = shelfBuckets.getOrPut(shelfTitle) { mutableListOf() }
+                    val lowerShelfTitle = shelfTitle.lowercase()
+                    if (excludedShelfKeywords.any { it in lowerShelfTitle }) continue
+
+                    val isPrimaryShelf = primaryKeywords.any { it in lowerShelfTitle }
+                    val targetMap = if (isPrimaryShelf) primaryBuckets else secondaryBuckets
+                    val currentShelfList = targetMap.getOrPut(shelfTitle) { mutableListOf() }
 
                     // 收集该 Shelf 下的所有卡片
                     val cards = mutableListOf<JSONObject>()
@@ -1924,6 +1997,35 @@ class QQMusicSource(
                     }
 
                     for (card in cards) {
+                        // 0. 严格对齐 QTMusic CardModel.java 官方协议：
+                        //    - 单曲卡片包含 "track" 字段（@SerializedName("track")），直接过滤；
+                        //    - 歌单卡片的官方唯一标识是 jumptype == 10014（10002 为专辑，其余为单曲/歌手/MV/电台/活动等）。
+                        if (card.has("track") || card.has("song_info") || card.has("songinfo") ||
+                            card.has("song_id") || card.has("songid") || card.has("songmid")
+                        ) {
+                            continue
+                        }
+                        val jumpType = card.optInt("jumptype", -1)
+                        val cardType = card.optInt("type", -1)
+                        val cardSubType = card.optInt("subType", -1)
+                        val candidateJump = card.optString("scheme").ifBlank {
+                            card.optString("jump_url").ifBlank {
+                                card.optString("url")
+                            }
+                        }
+                        val lowerJump = candidateJump.lowercase()
+                        val isExplicitPlaylistJump = lowerJump.contains("taoge") ||
+                            lowerJump.contains("playlist") ||
+                            lowerJump.contains("diss") ||
+                            lowerJump.contains("songlist")
+
+                        // 只允许官方歌单类型（jumptype == 10014）；若服务端未下发 jumptype，则必须有明确歌单跳转协议
+                        if (jumpType != -1) {
+                            if (jumpType != 10014) continue
+                        } else if (!isExplicitPlaylistJump) {
+                            continue
+                        }
+
                         // 1. 提取歌单唯一 ID
                         var dissId = card.optString("id").ifBlank {
                             card.optString("jumpID").ifBlank {
@@ -1935,12 +2037,7 @@ class QQMusicSource(
 
                         // 2. 增强容错：若未直接给出数字 ID，尝试从 scheme、jump_url 或 url 中提取
                         if (dissId.isBlank() || !dissId.all { it.isDigit() }) {
-                            val candidateStr = card.optString("scheme").ifBlank {
-                                card.optString("jump_url").ifBlank {
-                                    card.optString("url")
-                                }
-                            }
-                            val matched = Regex("""(?:id|dissid|disstid|tid)=(\d+)""").find(candidateStr)?.groupValues?.get(1)
+                            val matched = Regex("""(?:id|dissid|disstid|tid)=(\d+)""").find(candidateJump)?.groupValues?.get(1)
                             if (!matched.isNullOrBlank()) {
                                 dissId = matched
                             }
@@ -1956,11 +2053,10 @@ class QQMusicSource(
                             card.optString("subTitle").ifBlank { shelfTitle }
                         }
 
-                        // 明确过滤“每日30首”等日推单曲集（按标题、描述及官方类型 510/500/10002 排除）
+                        // 明确过滤“每日30首”等日推单曲集（注意：正常歌单卡片的 type 就是 500，切勿按 type==500 误杀！）
                         val textForDaily = "$title $subTitle".lowercase()
                         val isDaily30 = listOf("每日30首", "每日三十首", "今日私享30首", "今日私享 30 首", "每日推荐30首", "今日30首").any { it in textForDaily } ||
-                                card.optInt("subType") == 510 ||
-                                card.optInt("type") == 500 ||
+                                cardSubType == 510 ||
                                 card.optString("cardid") == "10002" ||
                                 card.optJSONObject("extra_info")?.optString("cardid") == "10002"
                         if (isDaily30) continue
@@ -1991,43 +2087,51 @@ class QQMusicSource(
                     }
                 }
 
-                // 跨货架轮询交织采样算法（Round-Robin Shelf Interleaving）
-                // 100% 忠实呈现官方推荐引擎为该用户计算出的各个专属货架，绝不掺杂公共分类池无关歌单
+                // 优先从 Tier 1 核心私荐货架中跨货架轮询抽取“未近期展示过”的新鲜歌单，不足再从 Tier 2 补充
                 val diversified = mutableListOf<OnlinePlaylist>()
                 val existingIds = mutableSetOf<String>()
-                val maxItemsPerShelf = shelfBuckets.values.maxOfOrNull { it.size } ?: 0
 
-                for (round in 0 until maxItemsPerShelf) {
-                    for ((_, bucket) in shelfBuckets) {
-                        if (bucket.isEmpty()) continue
-                        val index = (round + refreshSeed) % bucket.size
-                        val candidate = bucket[index]
-                        if (existingIds.add(candidate.id)) {
-                            diversified.add(candidate)
-                            if (diversified.size >= 6) break
-                        }
-                    }
-                    if (diversified.size >= 6) break
-                }
-
-                // 若交织后仍不足 6 个，继续从官方各货架的候选池中顺延补齐，确保所有歌单均为纯正专属推荐
-                if (diversified.size < 6) {
-                    for ((_, bucket) in shelfBuckets) {
-                        for (item in bucket) {
-                            if (existingIds.add(item.id)) {
-                                diversified.add(item)
-                                if (diversified.size >= 6) break
+                fun pickFromBuckets(buckets: Map<String, List<OnlinePlaylist>>, skipRecentlyShown: Boolean) {
+                    if (diversified.size >= 6 || buckets.isEmpty()) return
+                    val maxItems = buckets.values.maxOfOrNull { it.size } ?: 0
+                    for (round in 0 until maxItems) {
+                        for ((_, bucket) in buckets) {
+                            if (bucket.isEmpty()) continue
+                            val index = (round + refreshSeed) % bucket.size
+                            val candidate = bucket[index]
+                            if (skipRecentlyShown && candidate.id in recentlyShownPlaylistIds) continue
+                            if (existingIds.add(candidate.id)) {
+                                diversified.add(candidate)
+                                if (diversified.size >= 6) return
                             }
                         }
-                        if (diversified.size >= 6) break
                     }
+                }
+
+                // 第一轮：优先核心私荐货架的新鲜歌单
+                pickFromBuckets(primaryBuckets, skipRecentlyShown = true)
+                // 第二轮：核心私荐货架若不足，补充次级货架的新鲜歌单
+                pickFromBuckets(secondaryBuckets, skipRecentlyShown = true)
+                // 第三轮：若本页所有货架均已展示过，清空近期展示记录并优先从核心私荐货架补齐
+                if (diversified.size < 6) {
+                    recentlyShownPlaylistIds.clear()
+                    pickFromBuckets(primaryBuckets, skipRecentlyShown = false)
+                    pickFromBuckets(secondaryBuckets, skipRecentlyShown = false)
                 }
 
                 if (diversified.isNotEmpty()) {
+                    diversified.forEach { item ->
+                        recentlyShownPlaylistIds.add(item.id)
+                        seenRecommendUniqIds.add(item.id)
+                    }
+                    // 控制内存集合规模
+                    while (recentlyShownPlaylistIds.size > 60) {
+                        recentlyShownPlaylistIds.iterator().let { if (it.hasNext()) { it.next(); it.remove() } }
+                    }
                     result.addAll(diversified)
                     com.rawsmusic.core.common.utils.AppLogger.d(
                         "QQMusicSource",
-                        "官方专属私荐采样成功: 从 ${shelfBuckets.size} 个专属货架提取到 ${result.size} 个歌单"
+                        "QTMusic 私荐采样成功: 核心货架=${primaryBuckets.size}, 次级货架=${secondaryBuckets.size}, 提取=${result.size}, 累计货架=$accumulatedRecommendShelfCount"
                     )
                 }
             }

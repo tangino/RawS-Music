@@ -397,14 +397,55 @@ class PlaylistStore private constructor(private val context: Context) {
 
     /**
      * 对解析后的 AudioFile 列表保序去重，确保同一歌单中绝不出现重复 identity 或四要素完全相同的条目。
+     * 采用 O(N) 哈希索引，避免大歌单（1000+ 首）在主线程首帧渲染时触发 O(N²) 卡顿。
      */
     private fun deduplicateResolvedAudioList(songs: List<AudioFile>): List<AudioFile> {
         if (songs.size <= 1) return songs
+        val capacity = (songs.size * 4 / 3) + 16
+        val seenIdentityKeys = HashSet<String>(capacity)
+        val seenQueueIds = HashSet<String>(capacity)
+        val seenIds = HashSet<Long>(capacity)
+        val seenNormalizedPaths = HashSet<String>(capacity)
+        val seenMetaDurations = HashMap<String, MutableList<Long>>(capacity)
         val result = ArrayList<AudioFile>(songs.size)
+
         for (song in songs) {
-            if (result.none { isIdenticalResolvedAudio(it, song) }) {
-                result.add(song)
+            val identityKey = song.playlistIdentityKey()
+            if (identityKey in seenIdentityKeys) continue
+
+            val queueId = song.queueIdentity()
+            if (queueId in seenQueueIds) continue
+
+            if (song.id != 0L && song.id in seenIds) continue
+
+            val normalizedPath = if (song.path.isNotBlank()) song.path.normalizedPath() else ""
+            if (normalizedPath.isNotEmpty() && normalizedPath in seenNormalizedPaths) continue
+
+            val title = song.title.trim()
+            val metaKey = if (title.isNotEmpty()) {
+                "${title.lowercase(Locale.ROOT)}\u0000${song.artist.trim().lowercase(Locale.ROOT)}\u0000${song.album.trim().lowercase(Locale.ROOT)}"
+            } else {
+                ""
             }
+            if (metaKey.isNotEmpty()) {
+                val durations = seenMetaDurations[metaKey]
+                if (durations != null && durations.any { prevDuration ->
+                        prevDuration == song.duration ||
+                            (prevDuration > 0L && song.duration > 0L && kotlin.math.abs(prevDuration - song.duration) <= 1_000L)
+                    }
+                ) {
+                    continue
+                }
+            }
+
+            seenIdentityKeys.add(identityKey)
+            seenQueueIds.add(queueId)
+            if (song.id != 0L) seenIds.add(song.id)
+            if (normalizedPath.isNotEmpty()) seenNormalizedPaths.add(normalizedPath)
+            if (metaKey.isNotEmpty()) {
+                seenMetaDurations.getOrPut(metaKey) { ArrayList(2) }.add(song.duration)
+            }
+            result.add(song)
         }
         return result
     }
