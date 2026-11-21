@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.toAudioFile
+import com.rawsmusic.module.data.prefs.PlaylistSourceCounts
 
 /**
  * 歌单分组 UI 的「无状态」部分：网格排布、分组筛选 Chip 栏、`PlaylistGroupOpResult` 文案映射。
@@ -171,6 +172,7 @@ internal fun rememberPlaylistGridProvider(
     rowHeight: Dp,
     collageSongsByPlaylistId: Map<String, List<AudioFile>>,
     attitudeSongCounts: Map<String, Int>,
+    sourceCountsByPlaylistId: Map<String, PlaylistSourceCounts> = emptyMap(),
     onPlaylistClick: (String, String) -> Unit,
     onPlaylistActions: (UserPlaylist) -> Unit,
     onOnlinePlaylistClick: (OnlinePlatform, String) -> Unit,
@@ -182,6 +184,7 @@ internal fun rememberPlaylistGridProvider(
     rowHeight,
     collageSongsByPlaylistId,
     attitudeSongCounts,
+    sourceCountsByPlaylistId,
     onPlaylistClick,
     onPlaylistActions,
     onOnlinePlaylistClick,
@@ -212,6 +215,7 @@ internal fun rememberPlaylistGridProvider(
                     columns = columns,
                     collageSongsByPlaylistId = collageSongsByPlaylistId,
                     attitudeSongCounts = attitudeSongCounts,
+                    sourceCountsByPlaylistId = sourceCountsByPlaylistId,
                     onPlaylistClick = onPlaylistClick,
                     onPlaylistActions = onPlaylistActions,
                     onOnlinePlaylistClick = onOnlinePlaylistClick,
@@ -306,6 +310,7 @@ private fun PlaylistGridRow(
     columns: Int,
     collageSongsByPlaylistId: Map<String, List<AudioFile>>,
     attitudeSongCounts: Map<String, Int>,
+    sourceCountsByPlaylistId: Map<String, PlaylistSourceCounts> = emptyMap(),
     onPlaylistClick: (String, String) -> Unit,
     onPlaylistActions: (UserPlaylist) -> Unit,
     onOnlinePlaylistClick: (OnlinePlatform, String) -> Unit,
@@ -337,6 +342,7 @@ private fun PlaylistGridRow(
                             else -> null
                         },
                         songCountOverride = attitudeSongCounts[playlist.id],
+                        sourceCounts = sourceCountsByPlaylistId[playlist.id],
                         actionsEnabled = actionsEnabled,
                         onClick = { onPlaylistClick(playlist.id, playlist.name) },
                         onActions = { if (actionsEnabled) onPlaylistActions(playlist) },
@@ -618,6 +624,7 @@ internal fun PlaylistFrameCard(
     iconRes: Int,
     accentOverride: Color? = null,
     songCountOverride: Int? = null,
+    sourceCounts: PlaylistSourceCounts? = null,
     actionsEnabled: Boolean = !playlist.isFavorites,
     onClick: () -> Unit,
     onActions: () -> Unit,
@@ -716,14 +723,15 @@ internal fun PlaylistFrameCard(
                     overflow = TextOverflow.Ellipsis,
                     fontFamily = appFontFamily(),
                 )
-                val totalCount = songCountOverride ?: playlist.songs.size
-                val onlineCount = playlist.songs.count { it.isOnlineEntry() }
-                val localCount = (playlist.songs.size - onlineCount).coerceAtLeast(0)
-                val isHybrid = onlineCount > 0 && localCount > 0
+                val totalCount = songCountOverride ?: sourceCounts?.totalCount ?: playlist.songs.size
+                val onlineCount = sourceCounts?.onlineCount ?: playlist.songs.count { it.isOnlineEntry() }
+                val localCount = sourceCounts?.localCount ?: (totalCount - onlineCount).coerceAtLeast(0)
+                val isHybrid = sourceCounts?.isHybrid ?: (onlineCount > 0 && localCount > 0)
+                val isPureOnline = sourceCounts?.isPureOnline ?: (onlineCount > 0 && onlineCount == totalCount)
                 val countText = when {
                     totalCount == 0 -> stringResource(R.string.playlist_song_count, 0)
                     isHybrid -> "${totalCount} 首 (网 $onlineCount · 本 $localCount)"
-                    onlineCount > 0 && onlineCount == playlist.songs.size -> "${totalCount} 首 (网络)"
+                    isPureOnline -> "${totalCount} 首 (网络)"
                     else -> stringResource(R.string.playlist_song_count, totalCount)
                 }
 

@@ -64,6 +64,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -118,9 +119,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.data.prefs.PlaylistGroupStore
+import com.rawsmusic.module.data.prefs.PlaylistSourceCounts
 import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.repository.MusicRepository
 import com.rawsmusic.module.data.repository.SongAttitudeRepository
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadStatus
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.playback.OnlinePlaybackLauncher
@@ -159,8 +163,28 @@ fun PlaylistScreen(
     val colors = themeColors()
 
     val playlists by playlistStore.playlists.collectAsState()
+    val matchCacheVersion by playlistStore.matchCacheVersion.collectAsState()
+    val downloadTasks by MusicSourceDownloadController.tasks.collectAsState()
+    val completedDownloadCount = remember(downloadTasks) {
+        downloadTasks.count { it.status == MusicSourceDownloadStatus.Completed }
+    }
     val onlineFavorites by OnlinePlaylistFavoriteStore.favorites.collectAsState()
     val allLibrarySongs = if (librarySongs.isNotEmpty()) librarySongs else MusicRepository.songs.collectAsState().value
+
+    // 实时在 IO 线程计算每个本地/混合歌单的真实本地曲数与网络曲数（随本地曲库增删、离线下载完成、同步动态刷新）
+    val playlistSourceCountsMap by produceState<Map<String, PlaylistSourceCounts>>(
+        initialValue = emptyMap(),
+        playlists,
+        allLibrarySongs,
+        matchCacheVersion,
+        completedDownloadCount,
+    ) {
+        value = withContext(Dispatchers.IO) {
+            playlists.associate { pl ->
+                pl.id to playlistStore.computePlaylistSourceCounts(pl, allLibrarySongs)
+            }
+        }
+    }
     val dislikedKeys by SongAttitudeRepository.dislikedKeys.collectAsState()
     val onlineFavoriteKeys by SongAttitudeRepository.onlineFavoriteKeys.collectAsState()
     val playlistGroups by PlaylistGroupStore.groups.collectAsState()
@@ -671,6 +695,7 @@ fun PlaylistScreen(
                                         playlist = p1,
                                         groupName = g1,
                                         songCoverMap = songCoverMap,
+                                        sourceCounts = playlistSourceCountsMap[p1.id],
                                         onClick = { onPlaylistClick(p1.id, p1.name) },
                                         onPlay = { onPlayLocalPlaylist(p1) },
                                         onShowActions = { groupChrome.playlistActionsTarget = p1 },
@@ -683,6 +708,7 @@ fun PlaylistScreen(
                                             playlist = p2,
                                             groupName = g2,
                                             songCoverMap = songCoverMap,
+                                            sourceCounts = playlistSourceCountsMap[p2.id],
                                             onClick = { onPlaylistClick(p2.id, p2.name) },
                                             onPlay = { onPlayLocalPlaylist(p2) },
                                             onShowActions = { groupChrome.playlistActionsTarget = p2 },
@@ -699,6 +725,7 @@ fun PlaylistScreen(
                                     playlist = pl,
                                     groupName = g,
                                     songCoverMap = songCoverMap,
+                                    sourceCounts = playlistSourceCountsMap[pl.id],
                                     onClick = { onPlaylistClick(pl.id, pl.name) },
                                     onPlay = { onPlayLocalPlaylist(pl) },
                                     onShowActions = { groupChrome.playlistActionsTarget = pl },
@@ -1845,6 +1872,7 @@ private fun LocalPlaylistItemCard(
     playlist: UserPlaylist,
     groupName: String,
     songCoverMap: Map<Long, String>,
+    sourceCounts: PlaylistSourceCounts? = null,
     onClick: () -> Unit,
     onPlay: () -> Unit,
     onShowActions: () -> Unit,
@@ -1865,11 +1893,11 @@ private fun LocalPlaylistItemCard(
         }
     }
 
-    val totalCount = playlist.songs.size
-    val onlineCount = playlist.songs.count { isOnlineSongKey(it.path) }
-    val localCount = (totalCount - onlineCount).coerceAtLeast(0)
-    val isHybrid = onlineCount > 0 && localCount > 0
-    val isPureOnline = onlineCount > 0 && onlineCount == totalCount
+    val totalCount = sourceCounts?.totalCount ?: playlist.songs.size
+    val onlineCount = sourceCounts?.onlineCount ?: playlist.songs.count { isOnlineSongKey(it.path) }
+    val localCount = sourceCounts?.localCount ?: (totalCount - onlineCount).coerceAtLeast(0)
+    val isHybrid = sourceCounts?.isHybrid ?: (onlineCount > 0 && localCount > 0)
+    val isPureOnline = sourceCounts?.isPureOnline ?: (onlineCount > 0 && onlineCount == totalCount)
 
     Row(
         modifier = modifier

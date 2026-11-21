@@ -63,6 +63,18 @@ data class PlaylistEntries(
     val totalCount: Int get() = local.size + online.size
 }
 
+/**
+ * 歌单实时音源数量统计（基于当前本地曲库、磁盘物理文件与离线下载状态实时解析）。
+ */
+data class PlaylistSourceCounts(
+    val totalCount: Int,
+    val localCount: Int,
+    val onlineCount: Int,
+) {
+    val isHybrid: Boolean get() = localCount > 0 && onlineCount > 0
+    val isPureOnline: Boolean get() = totalCount > 0 && onlineCount == totalCount
+}
+
 /** 导入时没有可用名字的兜底歌单名。与 `importTextPlaylist` 里既有的兜底保持一致。 */
 private const val DEFAULT_IMPORT_PLAYLIST_NAME = "Imported playlist"
 
@@ -144,8 +156,12 @@ class PlaylistStore private constructor(private val context: Context) {
         return LibraryLookupCache(librarySongs, byIdentity, byPath).also { libraryLookupCache = it }
     }
 
-    private fun playlistSnapshotKey(playlist: UserPlaylist, librarySongs: List<AudioFile>): String =
-        "${playlist.id}|${playlist.updatedAt}|${playlist.songs.size}|${System.identityHashCode(librarySongs)}|${_matchCacheVersion.value}"
+    private fun playlistSnapshotKey(playlist: UserPlaylist, librarySongs: List<AudioFile>): String {
+        val completedDownloads = MusicSourceDownloadController.tasks.value.count {
+            it.status == MusicSourceDownloadStatus.Completed
+        }
+        return "${playlist.id}|${playlist.updatedAt}|${playlist.songs.size}|${System.identityHashCode(librarySongs)}|${_matchCacheVersion.value}|$completedDownloads"
+    }
 
     /**
      * 异步回填单曲封面至内存歌单与数据库中（混合歌单封面自愈）。
@@ -1036,6 +1052,28 @@ class PlaylistStore private constructor(private val context: Context) {
 
         resolvedPlaylistSnapshotCache.put(snapKey, uniqueResolved)
         return uniqueResolved
+    }
+
+    /**
+     * 实时计算单个歌单的本地/网络歌曲数量。
+     * 复用 [resolveOrderedPlaylistSongs] 的完整本地曲库对齐与磁盘核验结果，
+     * 保证歌单列表页与歌单详情页的统计口径完全一致。
+     */
+    fun computePlaylistSourceCounts(
+        playlist: UserPlaylist?,
+        librarySongs: List<AudioFile>,
+    ): PlaylistSourceCounts {
+        if (playlist == null || playlist.songs.isEmpty()) {
+            return PlaylistSourceCounts(totalCount = 0, localCount = 0, onlineCount = 0)
+        }
+        val resolved = resolveOrderedPlaylistSongs(playlist, librarySongs)
+        val onlineCount = resolved.count { it.path.startsWith("online://") }
+        val localCount = (resolved.size - onlineCount).coerceAtLeast(0)
+        return PlaylistSourceCounts(
+            totalCount = resolved.size,
+            localCount = localCount,
+            onlineCount = onlineCount,
+        )
     }
 
     /**
