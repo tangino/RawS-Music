@@ -55,6 +55,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
@@ -112,6 +114,7 @@ import com.rawsmusic.core.ui.scene.HomeFullCoverSourceAnchor
 import com.rawsmusic.core.ui.widget.flow.referenceStaticForeground
 import com.rawsmusic.core.ui.widget.flow.usesReferenceStaticForeground
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
+import com.rawsmusic.core.ui.widget.bitmaps.BitmapProvider
 import com.rawsmusic.core.ui.widget.flow.LocalRawFlowMode
 import com.rawsmusic.core.ui.widget.flow.LocalRawFlowModeSetter
 import com.rawsmusic.core.ui.widget.flow.RawFlowModeDialog
@@ -797,21 +800,45 @@ fun Daily20Page(
                     .fillMaxWidth()
                     .height(520.dp)
             ) {
-                if (coverSong?.coverKey?.isNotBlank() == true) {
+                val dailyBase = pastelColorFor("daily-bg-$todayKey")
+                val dailyDeep = lerp(dailyBase, Color(0xFF151822), 0.56f)
+                val dailyGlow = lerp(dailyBase, Color.White, 0.28f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(dailyGlow, dailyBase, dailyDeep),
+                                start = Offset(0f, 0f),
+                                end = Offset(900f, 1200f),
+                            )
+                        )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(
+                                        Color.White.copy(alpha = 0.20f),
+                                        Color.Transparent,
+                                    ),
+                                    center = Offset(780f, 180f),
+                                    radius = 680f,
+                                )
+                            )
+                    )
+                }
+                if (isUsableHomeCardCoverKey(coverSong?.coverKey, 1600, 1600)) {
                     BitmapImage(
-                        key = coverSong.coverKey,
+                        key = coverSong!!.coverKey,
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxSize(),
                         contentScale = ContentScale.Crop,
                         targetWidth = 1600,
-                        targetHeight = 1600
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(pastelColorFor("daily-bg-$todayKey"))
+                        targetHeight = 1600,
+                        showDefaultArtwork = false,
                     )
                 }
                 Box(
@@ -1133,7 +1160,10 @@ private fun LibraryTile(
     }
     val isPlayedScene = scene == NavScene.CURRENT_PLAYLIST || scene == NavScene.PREVIOUS_PLAYLIST
     val isHistoryScene = scene == NavScene.PLAY_HISTORY
-    val historyList by if (isHistoryScene) PlayHistoryManager.history.collectAsState() else remember { mutableStateOf(emptyList()) }
+    val isPortalIconScene = scene.isHomeCardPortalIconScene()
+    val historyList by PlayHistoryManager.history.collectAsState()
+    val currentPlayedPlaylist by PlayedPlaylistManager.currentPlaylist.collectAsState()
+    val previousPlayedPlaylist by PlayedPlaylistManager.previousPlaylist.collectAsState()
     val dragging = dragPreview.activeScene == scene
     val previewDisplacement = dragPreview.displacementFor(scene)
     val committedReleaseEpoch = dragPreview.committedReleaseEpoch
@@ -1216,22 +1246,54 @@ private fun LibraryTile(
             }
             .then(interactionModifier),
     ) {
+        val cardShape = RoundedCornerShape(13.dp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(13.dp))
-                .background(pastelColorFor(scene.tag)),
+                .clip(cardShape)
+                .background(pastelColorFor(scene.tag))
+                .border(0.5.dp, Color.White.copy(alpha = 0.14f), cardShape),
         ) {
-            val candidateCover = if (isGuessLike) {
-                qqAccount?.avatarUrl?.takeIf { it.isNotBlank() }
-            } else if (isHistoryScene) {
-                historyList.firstOrNull()?.coverKey?.takeIf { it.isNotBlank() }
-            } else if (isPlayedScene) {
-                playedInfo?.coverUrl?.takeIf { it.isNotBlank() }
-            } else {
-                song?.coverKey?.takeIf { it.isNotBlank() }
+            val directCover = when {
+                isGuessLike -> qqAccount?.avatarUrl?.takeIf { isUsableHomeCardCoverKey(it) }
+                isHistoryScene -> historyList.firstOrNull { isUsableHomeCardCoverKey(it.coverKey) }?.coverKey
+                isPlayedScene -> playedInfo?.coverUrl?.takeIf { isUsableHomeCardCoverKey(it) }
+                isPortalIconScene -> null
+                else -> song?.coverKey?.takeIf { isUsableHomeCardCoverKey(it) }
             }
+
+            // 当本地曲库为空时，为非门户类曲库卡片从历史播放/歌单/当前播放中借用真实封面（绝不使用默认封面）
+            val borrowedCover = if (directCover == null && !isGuessLike && !isHistoryScene && !isPlayedScene && !isPortalIconScene) {
+                val fallbackPool = remember(historyList, currentPlayingSong, currentPlayedPlaylist, previousPlayedPlaylist) {
+                    buildList {
+                        currentPlayingSong?.coverKey?.takeIf { isUsableHomeCardCoverKey(it) }?.let(::add)
+                        currentPlayedPlaylist?.coverUrl?.takeIf { isUsableHomeCardCoverKey(it) }?.let(::add)
+                        previousPlayedPlaylist?.coverUrl?.takeIf { isUsableHomeCardCoverKey(it) }?.let(::add)
+                        historyList.forEach { item ->
+                            item.coverKey.takeIf { isUsableHomeCardCoverKey(it) }?.let(::add)
+                        }
+                    }.distinct()
+                }
+                if (fallbackPool.isNotEmpty()) {
+                    fallbackPool[stableHomeCardArtworkIndex(scene.tag, "home-fallback", fallbackPool.size)]
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+
+            val candidateCover = directCover ?: borrowedCover
+            val isBorrowedCover = directCover == null && borrowedCover != null
+            var coverLoaded by remember(candidateCover) { mutableStateOf(false) }
+
+            // 底层始终铺设莫奈弥散渐变艺术占位，避免图片加载失败或异步解码瞬间露出纯色或默认封面
+            val accentKey = if (isPlayedScene) (playedInfo?.name ?: scene.tag) else scene.tag
+            HomeCardArtPlaceholder(
+                accent = pastelColorFor(accentKey),
+                iconRes = scene.homeCardFallbackIconRes(),
+            )
 
             if (candidateCover != null) {
                 BitmapImage(
@@ -1241,67 +1303,49 @@ private fun LibraryTile(
                     contentScale = ContentScale.Crop,
                     targetWidth = 360,
                     targetHeight = 360,
+                    showDefaultArtwork = false,
+                    onBitmapReady = { coverLoaded = true },
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
-                )
-            } else if (isPlayedScene) {
-                // 播放歌单专属高质感艺术流光封面（无封面时的优雅兜底）
-                val cardAccent = pastelColorFor(playedInfo?.name ?: scene.tag)
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    cardAccent.copy(alpha = 0.65f),
-                                    Color.Black.copy(alpha = 0.75f),
-                                )
+                if (coverLoaded) {
+                    if (isBorrowedCover) {
+                        // 借图叠加轻度莫奈氛围融合遮罩 + 右下角类别微标，既与真实封面和谐共生又保留清晰辨识度
+                        val tintAccent = pastelColorFor(scene.tag)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            tintAccent.copy(alpha = 0.16f),
+                                            Color.Black.copy(alpha = 0.44f),
+                                        )
+                                    )
+                                ),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(8.dp)
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(Color.Black.copy(alpha = 0.36f))
+                                .border(0.5.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(9.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Image(
+                                painter = painterResource(scene.homeCardFallbackIconRes()),
+                                contentDescription = null,
+                                colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.92f)),
+                                modifier = Modifier.size(15.dp),
                             )
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(Color.White.copy(alpha = 0.16f))
-                            .border(1.dp, Color.White.copy(alpha = 0.30f), RoundedCornerShape(18.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Image(
-                            painter = painterResource(R.drawable.ic_playlist_play),
-                            contentDescription = null,
-                            colorFilter = ColorFilter.tint(Color.White),
-                            modifier = Modifier.size(28.dp),
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)))),
                         )
                     }
-                }
-            } else {
-                val fixedIconRes = scene.homeCardFixedIconResOrNull()
-                if (fixedIconRes != null) {
-                    Image(
-                        painter = painterResource(fixedIconRes),
-                        contentDescription = null,
-                        colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.94f)),
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(58.dp),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color.White.copy(alpha = 0.05f),
-                                        Color.Black.copy(alpha = 0.18f),
-                                    )
-                                )
-                            ),
-                    )
                 }
             }
 
@@ -1373,20 +1417,139 @@ private fun LibraryTile(
 }
 
 /**
- * 主界面卡片上要画的**固定图标**；返回 null 表示该卡片改用「关联歌曲的封面」。
- *
- * 为什么需要这个：卡片封面走的是 `song?.coverKey`，而这类**门户型场景**（音源导入、在线音乐）
- * 没有「关联歌曲」的概念，`coverKey` 恒为空 → 不特判的话卡片上只剩底色和标题，看起来像坏了。
- * 原来只写死了 `SOURCE_IMPORT`，这里收敛成一个映射，避免每加一个门户卡片就再插一个 if 分支。
+ * 判断封面 key 是否可作为主界面卡片封面：排除空值、默认封面占位 URL 及已知无图条目。
  */
-private fun NavScene.homeCardFixedIconResOrNull(): Int? = when (this) {
-    NavScene.SOURCE_IMPORT -> R.drawable.ic_cloud
+private fun isUsableHomeCardCoverKey(
+    key: String?,
+    targetWidth: Int = 360,
+    targetHeight: Int = 360,
+): Boolean {
+    val trimmed = key?.trim().orEmpty()
+    if (trimmed.isEmpty()) return false
+    if (trimmed.contains("default_album_art", ignoreCase = true)) return false
+    if (BitmapProvider.isKnownNoArtwork(trimmed, targetWidth, targetHeight)) return false
+    return true
+}
+
+/**
+ * 门户型卡片始终以专属艺术渐变 + 图标展示，不从曲库或播放历史借用专辑封面。
+ */
+private fun NavScene.isHomeCardPortalIconScene(): Boolean = when (this) {
+    NavScene.SOURCE_IMPORT,
+    NavScene.ONLINE_MUSIC,
+    NavScene.PODCAST,
+    NavScene.WEBDAV,
+    NavScene.WEBDAV_BACKUP,
+    NavScene.SETTINGS,
+    NavScene.LOG_VIEWER -> true
+    else -> false
+}
+
+/**
+ * 主界面卡片在无可用封面（或门户卡片）时的专属矢量图标，覆盖全部曲库与工具场景，
+ * 避免本地音乐库为空时出现空白纯色方块。
+ */
+private fun NavScene.homeCardFallbackIconRes(): Int = when (this) {
+    NavScene.SOURCE_IMPORT, NavScene.WEBDAV, NavScene.WEBDAV_BACKUP -> R.drawable.ic_cloud
     NavScene.ONLINE_MUSIC -> R.drawable.ic_side_rail_online
     NavScene.PODCAST -> R.drawable.ic_side_rail_podcast
-    NavScene.PLAY_HISTORY -> R.drawable.ic_nav_custom_recent
+    NavScene.PLAY_HISTORY, NavScene.RECENTLY_ADDED, NavScene.DAILY_RECOMMEND, NavScene.DAILY_20, NavScene.YEAR -> R.drawable.ic_nav_custom_recent
     NavScene.GUESS_YOU_LIKE -> R.drawable.ic_online_favorite
-    NavScene.DAILY_RECOMMEND -> R.drawable.ic_nav_custom_recent
-    else -> null
+    NavScene.CURRENT_PLAYLIST, NavScene.PREVIOUS_PLAYLIST -> R.drawable.ic_playlist_play
+    NavScene.SONGS -> R.drawable.ic_music_2_fill
+    NavScene.ALBUMS -> R.drawable.ic_nav_custom_albums
+    NavScene.ARTISTS -> R.drawable.ic_nav_custom_artists
+    NavScene.FOLDERS, NavScene.FOLDER_HIERARCHY -> R.drawable.ic_nav_custom_folders
+    NavScene.PLAYLISTS, NavScene.PLAYLIST_LIST -> R.drawable.ic_nav_custom_playlists
+    NavScene.QUEUE -> R.drawable.ic_nav_custom_queue
+    NavScene.GENRE -> R.drawable.ic_nav_custom_genre
+    NavScene.COMPOSER -> R.drawable.ic_edit
+    NavScene.ANALYTICS, NavScene.SONG_STATS -> R.drawable.ic_equalizer_bars
+    NavScene.AUDIO_EFFECTS, NavScene.PEQ, NavScene.AUDIO_SETTINGS -> R.drawable.ic_equalizer_line
+    NavScene.LOG_VIEWER -> R.drawable.ic_side_rail_log
+    NavScene.SETTINGS -> R.drawable.ic_settings
+    else -> R.drawable.ic_music_note
+}
+
+/**
+ * 主界面卡片无封面时的高质感莫奈弥散渐变 + 偏置大水印 + 居中磨砂图标徽章占位，
+ * 底部暗角层次与有图卡片保持一致，使整页卡片在无本地曲库时依然和谐统一。
+ */
+@Composable
+private fun HomeCardArtPlaceholder(
+    accent: Color,
+    iconRes: Int,
+) {
+    val topHighlight = lerp(accent, Color.White, 0.14f)
+    val deepTone = lerp(accent, Color(0xFF141720), 0.62f)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(topHighlight, accent.copy(alpha = 0.88f), deepTone),
+                    start = Offset(0f, 0f),
+                    end = Offset(340f, 380f),
+                )
+            ),
+    ) {
+        // 顶部偏右柔和径向弥散光晕，模拟专辑封面的光影层次
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.22f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(250f, 60f),
+                        radius = 260f,
+                    )
+                ),
+        )
+        // 右下角低透明超大装饰水印，增加设计感并消除单调纯色感
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.11f)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .offset(x = 14.dp, y = 14.dp)
+                .size(92.dp)
+                .graphicsLayer { rotationZ = -14f },
+        )
+        // 与有图卡片一致的底部暗角渐变
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.34f),
+                        )
+                    )
+                ),
+        )
+        // 居中磨砂圆角图标徽章
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(54.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White.copy(alpha = 0.16f))
+                .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(18.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.96f)),
+                modifier = Modifier.size(28.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -1696,8 +1859,7 @@ private fun stableHomeCards(
     salt: String,
 ): List<LibraryHomeCard> {
     val covers = songs
-        .filter { it.coverKey.isNotBlank() }
-        .ifEmpty { songs }
+        .filter { isUsableHomeCardCoverKey(it.coverKey) }
         .sortedWith(compareBy<AudioFile> { it.coverKey }.thenBy { it.path }.thenBy { it.cueTrackIndex })
     return scenes.map { scene ->
         val index = stableHomeCardArtworkIndex(scene.tag, salt, covers.size)
