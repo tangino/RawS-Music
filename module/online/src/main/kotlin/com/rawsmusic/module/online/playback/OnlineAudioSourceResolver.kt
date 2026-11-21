@@ -1141,10 +1141,12 @@ object OnlineAudioSourceResolver {
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
         kotlinx.coroutines.withTimeoutOrNull(15_000L) {
             val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
-            // 0. 优先尝试酷我车载非加密直链（响应快、无损直链命中率高），未命中再沿用原有寻源策略
+            // 0. 优先尝试酷我车载非加密直链（音质统一由 Configure Sources 页面的 preferredQuality 控制），未命中再沿用原有寻源策略
             if (title.isNotBlank()) {
                 val kwResolved = runCatching {
-                    val requestedQuality = stringToRawSourceQuality(targetQuality)
+                    val requestedQuality = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.qualityFromSourcePreference(
+                        AppPreferences.Source.preferredQuality
+                    )
                     val match = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.matchBestSong(
                         title,
                         artist,

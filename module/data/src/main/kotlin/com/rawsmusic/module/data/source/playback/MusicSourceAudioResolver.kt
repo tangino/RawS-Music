@@ -99,7 +99,8 @@ object MusicSourceAudioResolver {
 
     private fun buildCacheKey(item: RawSourceMediaItem, quality: RawSourceQuality): String {
         val identity = item.remoteId.ifBlank { item.stableIdentity }
-        return "${item.sourceId}:$identity:${quality.name}"
+        val pref = com.rawsmusic.module.data.prefs.AppPreferences.Source.preferredQuality
+        return "${item.sourceId}:$identity:${quality.name}:$pref"
     }
 
     fun peekMemoryCache(item: RawSourceMediaItem, quality: RawSourceQuality): RawResolvedAudioSource? {
@@ -140,14 +141,15 @@ object MusicSourceAudioResolver {
             return cached.source
         }
 
-        // 1. 优先尝试酷我车载非加密直链引擎（响应快、无损直链命中率高）；未命中再沿用原有插件/多源寻源规则
+        // 1. 优先尝试酷我车载非加密直链引擎（音质统一由 Configure Sources 页面偏好控制）；未命中再沿用原有插件/多源寻源规则
         if (item.mediaType == com.rawsmusic.core.common.source.RawSourceMediaType.Music) {
-            resolveViaKuwoCarEngine(item, requestedQuality)?.let { kwResolved ->
+            val configuredQuality = KuwoCarAudioEngine.qualityFromSourcePreference()
+            resolveViaKuwoCarEngine(item, configuredQuality)?.let { kwResolved ->
                 memorySourceCache.put(cacheKey, CachedResolvedSource(kwResolved, now + 15 * 60 * 1000L))
                 AppLogger.i(
                     TAG,
                     "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_OK primary=kuwo_car sourceId=${item.sourceId} " +
-                        "quality=${kwResolved.quality} url=${OnlinePlaybackDiagnostics.safeUrl(kwResolved.url)} " +
+                        "configured=$configuredQuality quality=${kwResolved.quality} url=${OnlinePlaybackDiagnostics.safeUrl(kwResolved.url)} " +
                         "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                 )
                 return kwResolved

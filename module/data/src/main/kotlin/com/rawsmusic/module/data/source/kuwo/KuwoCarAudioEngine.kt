@@ -2,6 +2,7 @@ package com.rawsmusic.module.data.source.kuwo
 
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.utils.AppLogger
+import com.rawsmusic.module.data.prefs.AppPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -216,14 +217,26 @@ object KuwoCarAudioEngine {
     }
 
     /**
+     * 将 Configure Sources（音源配置页）的偏好音质字符串统一映射为 RawSourceQuality。
+     */
+    fun qualityFromSourcePreference(pref: String = AppPreferences.Source.preferredQuality): RawSourceQuality =
+        when (pref.trim().lowercase()) {
+            "flac24bit", "hires", "hr" -> RawSourceQuality.HiRes
+            "flac", "sq", "lossless" -> RawSourceQuality.Lossless
+            "320k", "hq", "high", "super" -> RawSourceQuality.High
+            else -> RawSourceQuality.Standard
+        }
+
+    /**
      * 依据目标音质策略，向官方车机接口请求真实下载链接与解密密钥。
-     * - HiRes / Super：优先 192kHz/24bit 臻品母带（20900kmflac）→ 4000k flac → 2000k flac；
-     * - Lossless：优先标准无损 FLAC（2000k flac，体积约 30MB、无加密、下载最快）→ 4000k flac → 20900kmflac；
-     * - High / Standard：优先 320k / 128k MP3。
+     * - HiRes：优先 192kHz/24bit 臻品母带（20900kmflac）→ 4000k flac → 2000k flac；
+     * - Lossless：优先标准无损 FLAC（2000k flac，体积约 30MB、无加密、下载最快）→ 4000k flac；
+     * - High / Super（320K）：优先 320k MP3 → 128k MP3（绝不反向升级成大体积 FLAC）；
+     * - Standard（128K）：优先 128k MP3 → 320k MP3。
      */
     suspend fun resolveDownloadResource(
         songMatch: KuwoSongMatch,
-        requestedQuality: RawSourceQuality = RawSourceQuality.Lossless,
+        requestedQuality: RawSourceQuality = qualityFromSourcePreference(),
         allowEncrypted: Boolean = true,
     ): KuwoDownloadResource? = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<KuwoQualityOption>()
@@ -237,7 +250,7 @@ object KuwoCarAudioEngine {
         }
 
         when (requestedQuality) {
-            RawSourceQuality.HiRes, RawSourceQuality.Super -> {
+            RawSourceQuality.HiRes -> {
                 if (allowEncrypted) addOption(20900, "zply", "mflac")
                 addOption(4000, "hr", "flac")
                 addOption(2000, "ff", "flac")
@@ -251,10 +264,10 @@ object KuwoCarAudioEngine {
                 addOption(320, "p", "mp3")
                 songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
             }
-            RawSourceQuality.High -> {
+            RawSourceQuality.Super, RawSourceQuality.High -> {
                 addOption(320, "p", "mp3")
-                addOption(2000, "ff", "flac")
                 songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+                    ?: addOption(128, "h", "mp3")
             }
             RawSourceQuality.Standard -> {
                 songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }

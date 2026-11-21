@@ -6,7 +6,9 @@ import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.PlaylistArtworkFallbackDelegate
 import com.rawsmusic.module.data.prefs.PlaylistStore
+import com.rawsmusic.module.data.prefs.ResolvedOnlineTrackMetadata
 import com.rawsmusic.module.online.model.OnlinePlatform
+import com.rawsmusic.module.online.model.OnlineSongItem
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +35,7 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     private const val TAG = "OnlineArtworkResolver"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val memoryCache = LruCache<String, String>(1000)
+    private val metadataCache = LruCache<String, ResolvedOnlineTrackMetadata>(1000)
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
     private val fetchSemaphore = Semaphore(3)
     @Volatile
@@ -50,6 +53,12 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     override fun getCachedArtworkUrl(title: String, artist: String): String? {
         val key = cacheKey(title, artist)
         return memoryCache.get(key)?.takeIf { it.isNotBlank() }
+            ?: metadataCache.get(key)?.coverUrl?.takeIf { it.isNotBlank() }
+    }
+
+    override fun getCachedMetadata(title: String, artist: String): ResolvedOnlineTrackMetadata? {
+        val key = cacheKey(title, artist)
+        return metadataCache.get(key)
     }
 
     override fun requestArtworkResolution(title: String, artist: String, songKey: String) {
@@ -58,25 +67,32 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         if (cleanTitle.isBlank()) return
 
         val key = cacheKey(cleanTitle, cleanArtist)
-        if (memoryCache.get(key) != null) return
+        if (metadataCache.get(key) != null) return
         if (!inFlight.add(key)) return
 
         scope.launch {
             try {
                 fetchSemaphore.withPermit {
-                    val coverUrl = fetchCoverFromOnline(cleanTitle, cleanArtist)
-                    if (!coverUrl.isNullOrBlank()) {
-                        memoryCache.put(key, coverUrl)
-                        AppLogger.i(TAG, "Successfully resolved online artwork for '$cleanTitle - $cleanArtist': $coverUrl")
+                    val meta = fetchMetadataFromOnline(cleanTitle, cleanArtist)
+                    if (meta != null) {
+                        metadataCache.put(key, meta)
+                        if (meta.coverUrl.isNotBlank()) {
+                            memoryCache.put(key, meta.coverUrl)
+                        }
+                        AppLogger.i(
+                            TAG,
+                            "Resolved online metadata (${meta.platformId}) for '$cleanTitle - $cleanArtist': " +
+                                "album=${meta.album}, cover=${meta.coverUrl.take(64)}"
+                        )
                         appContext?.let { ctx ->
-                            PlaylistStore.getInstance(ctx).updateSongArtworkInMemoryAndDb(cleanTitle, cleanArtist, coverUrl)
+                            PlaylistStore.getInstance(ctx).updateSongMetadataInMemoryAndDb(cleanTitle, cleanArtist, meta)
                         }
                     }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Throwable) {
-                AppLogger.w(TAG, "Failed to resolve online artwork for '$cleanTitle - $cleanArtist': ${e.message}")
+                AppLogger.w(TAG, "Failed to resolve online metadata for '$cleanTitle - $cleanArtist': ${e.message}")
             } finally {
                 inFlight.remove(key)
             }
@@ -109,9 +125,9 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     }
 
     /**
-     * 智能多平台级联搜索获取歌曲高清封面。
+     * 智能多平台级联搜索获取歌曲完整标签与高清封面（优先 QQ 音乐 → 次选网易云 → 兜底酷我音乐）。
      */
-    private suspend fun fetchCoverFromOnline(title: String, artist: String): String? {
+    private suspend fun fetchMetadataFromOnline(title: String, artist: String): ResolvedOnlineTrackMetadata? {
         val keyword = if (artist.isNotBlank() && !artist.equals("未知", true) && !artist.equals("<unknown>", true)) {
             "$title $artist"
         } else {
@@ -119,49 +135,55 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         }
 
         val repository = OnlineMusicRepository.getInstance()
+        val platforms = listOf(
+            OnlinePlatform.QQ,
+            OnlinePlatform.NETEASE,
+            OnlinePlatform.KUWO,
+        )
 
-        // 1. 优先网易云
-        try {
-            val neteaseResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.NETEASE)
-            val cover = neteaseResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf {
+        for (platform in platforms) {
+            try {
+                val items = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = platform)
+                    .getOrNull()
+                    .orEmpty()
+                if (items.isEmpty()) continue
+                val best = pickBestMetadataMatch(items, title, artist) ?: continue
+                val validCover = best.coverUrl?.takeIf {
                     (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
-                    !isPlaceholderUrl(it)
-                }
+                        !isPlaceholderUrl(it)
+                }.orEmpty()
+                return ResolvedOnlineTrackMetadata(
+                    platformId = platform.id,
+                    songId = best.id,
+                    title = best.title.ifBlank { title },
+                    artist = best.artist.ifBlank { artist },
+                    album = best.album,
+                    durationMs = best.durationMs,
+                    coverUrl = validCover,
+                )
+            } catch (t: Throwable) {
+                AppLogger.d(TAG, "${platform.displayName} metadata search '$keyword' skipped: ${t.message}")
             }
-            if (!cover.isNullOrBlank()) return cover
-        } catch (t: Throwable) {
-            AppLogger.d(TAG, "Netease search '$keyword' skipped: ${t.message}")
-        }
-
-        // 2. 次选 QQ 音乐
-        try {
-            val qqResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.QQ)
-            val cover = qqResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf {
-                    (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
-                    !isPlaceholderUrl(it)
-                }
-            }
-            if (!cover.isNullOrBlank()) return cover
-        } catch (t: Throwable) {
-            AppLogger.d(TAG, "QQ search '$keyword' skipped: ${t.message}")
-        }
-
-        // 3. 兜底酷我音乐
-        try {
-            val kuwoResult = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = OnlinePlatform.KUWO)
-            val cover = kuwoResult.getOrNull()?.firstNotNullOfOrNull { item ->
-                item.coverUrl?.takeIf {
-                    (it.startsWith("http://", true) || it.startsWith("https://", true)) &&
-                    !isPlaceholderUrl(it)
-                }
-            }
-            if (!cover.isNullOrBlank()) return cover
-        } catch (t: Throwable) {
-            AppLogger.d(TAG, "Kuwo search '$keyword' skipped: ${t.message}")
         }
 
         return null
+    }
+
+    private fun pickBestMetadataMatch(
+        items: List<OnlineSongItem>,
+        title: String,
+        artist: String,
+    ): OnlineSongItem? {
+        val exact = items.firstOrNull { item ->
+            item.title.equals(title, ignoreCase = true) &&
+                (artist.isBlank() || item.artist.contains(artist, ignoreCase = true) || artist.contains(item.artist, ignoreCase = true))
+        }
+        if (exact != null) return exact
+        return items.firstOrNull { item ->
+            val hasValidCover = item.coverUrl?.let {
+                (it.startsWith("http://", true) || it.startsWith("https://", true)) && !isPlaceholderUrl(it)
+            } == true
+            hasValidCover
+        } ?: items.firstOrNull()
     }
 }

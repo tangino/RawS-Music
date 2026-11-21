@@ -1472,16 +1472,6 @@ object MusicSourcePlaybackController {
     }
 
     private fun loadPreferredQuality(): RawSourceQuality = runCatching {
-        val rawName = AppPreferences.storage.decodeString(PREFERRED_QUALITY_KEY, null)
-        if (rawName != null) {
-            RawSourceQuality.valueOf(rawName)
-        } else {
-            when (AppPreferences.Source.preferredQuality) {
-                "flac24bit" -> RawSourceQuality.HiRes
-                "flac" -> RawSourceQuality.Lossless
-                "320k" -> RawSourceQuality.Super
-                else -> RawSourceQuality.Standard
-            }
-        }
+        com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.qualityFromSourcePreference()
     }.getOrDefault(RawSourceQuality.Standard)
 }

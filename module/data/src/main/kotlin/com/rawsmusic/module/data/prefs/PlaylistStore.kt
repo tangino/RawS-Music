@@ -67,10 +67,24 @@ data class PlaylistEntries(
 private const val DEFAULT_IMPORT_PLAYLIST_NAME = "Imported playlist"
 
 /**
- * 混合歌单中非本地或缺失封面条目的在线封面寻源与缓存委托。
+ * 从在线平台（优先 QQ 音乐）获取的歌曲标签信息，用于本地歌单缺失物理文件时的元数据补齐。
+ */
+data class ResolvedOnlineTrackMetadata(
+    val platformId: String,
+    val songId: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationMs: Long,
+    val coverUrl: String,
+)
+
+/**
+ * 混合歌单中非本地或缺失封面/标签条目的在线寻源与缓存委托。
  */
 interface PlaylistArtworkFallbackDelegate {
     fun getCachedArtworkUrl(title: String, artist: String): String?
+    fun getCachedMetadata(title: String, artist: String): ResolvedOnlineTrackMetadata? = null
     fun requestArtworkResolution(title: String, artist: String, songKey: String = "")
 }
 
@@ -165,6 +179,67 @@ class PlaylistStore private constructor(private val context: Context) {
                 dao.updateArtworkPathByTitleAndArtist(title, artist, artworkUrl)
             }
         }
+    }
+
+    /**
+     * 异步回填在线平台（优先 QQ 音乐）获取的完整歌曲标签与封面至内存歌单与数据库。
+     */
+    fun updateSongMetadataInMemoryAndDb(
+        queryTitle: String,
+        queryArtist: String,
+        metadata: ResolvedOnlineTrackMetadata,
+    ) {
+        if (queryTitle.isBlank()) return
+        val currentPlaylists = _playlists.value
+        var anyUpdated = false
+        val newPlaylists = currentPlaylists.map { playlist ->
+            var playlistChanged = false
+            val newSongs = playlist.songs.map { song ->
+                if (song.title.equals(queryTitle, ignoreCase = true) &&
+                    (queryArtist.isBlank() || song.artist.equals(queryArtist, ignoreCase = true))
+                ) {
+                    val nextAlbum = song.album.ifBlank { metadata.album }
+                    val nextArtist = song.artist.ifBlank { metadata.artist }
+                    val nextDuration = if (song.duration > 0L) song.duration else metadata.durationMs
+                    val nextCover = if (song.albumArtPath.startsWith("http://", true) ||
+                        song.albumArtPath.startsWith("https://", true)
+                    ) {
+                        song.albumArtPath
+                    } else {
+                        metadata.coverUrl.ifBlank { song.albumArtPath }
+                    }
+                    if (nextAlbum != song.album || nextArtist != song.artist ||
+                        nextDuration != song.duration || nextCover != song.albumArtPath
+                    ) {
+                        playlistChanged = true
+                        anyUpdated = true
+                        onlineToLocalMatchCache.remove(song.path)
+                        onlineToLocalMatchCache.remove(song.key)
+                        song.copy(
+                            artist = nextArtist,
+                            album = nextAlbum,
+                            duration = nextDuration,
+                            albumArtPath = nextCover,
+                        )
+                    } else {
+                        song
+                    }
+                } else {
+                    song
+                }
+            }
+            if (playlistChanged) playlist.copy(songs = newSongs) else playlist
+        }
+        resolvedPlaylistSnapshotCache.evictAll()
+        if (anyUpdated) {
+            _playlists.value = newPlaylists
+            if (metadata.coverUrl.isNotBlank()) {
+                databaseScope.launch {
+                    dao.updateArtworkPathByTitleAndArtist(queryTitle, queryArtist, metadata.coverUrl)
+                }
+            }
+        }
+        _matchCacheVersion.value++
     }
 
     private val _matchCacheVersion = MutableStateFlow(0L)
@@ -904,22 +979,43 @@ class PlaylistStore private constructor(private val context: Context) {
                         matched
                     }
                 } else {
-                    // 本地歌曲未在曲库中精确索引（例如正在重新扫描中或路径调整）：
-                    // 必须保留其原有的本地音频身份，绝不能篡改成 online:// 强行联网寻源！
-                    val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
+                    // 本地歌曲在手机中已无物理文件（被删除或换机）：
+                    // 1. 优先从 QQ 音乐平台获取并补齐歌曲标签信息（专辑/歌手/时长/封面）；
+                    // 2. 运行时转为在线播放身份（online://qq/...），点击播放时由 MusicSourceAudioResolver
+                    //    优先从酷我车载平台获取无损/高品质音乐流，避免弹出“本地文件不存在”；
+                    // 3. 数据库仍保留原 stored.key，后续本地文件恢复或离线下载后自动无缝切回本地。
+                    val cachedMeta = artworkFallbackDelegate?.getCachedMetadata(stored.title, stored.artist)
+                    val cachedCover = cachedMeta?.coverUrl?.takeIf(String::isNotBlank)
+                        ?: artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist).orEmpty()
                     val cleanedArtPath = stored.albumArtPath.takeIf {
                         it.startsWith("http://", true) || it.startsWith("https://", true)
                     }.orEmpty().ifBlank { cachedCover }
 
-                    // 若当前仍无网络封面，触发后台异步寻源，完成后自动持久化并通知刷新
-                    if (cleanedArtPath.isBlank() && stored.title.isNotBlank() && artworkResolutionCount < 30) {
+                    if (cachedMeta == null && stored.title.isNotBlank() && artworkResolutionCount < 30) {
                         artworkResolutionCount++
                         artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
                     }
 
-                    stored.toAudioFile().copy(
-                        albumArtPath = cleanedArtPath
-                    )
+                    val baseAudio = stored.toAudioFile()
+                    if (stored.title.isNotBlank()) {
+                        val platformId = cachedMeta?.platformId?.takeIf(String::isNotBlank) ?: "qq"
+                        val virtualSongId = cachedMeta?.songId?.takeIf(String::isNotBlank)
+                            ?: "${stored.title}_${stored.artist}".hashCode().toString()
+                        val onlinePath = "online://$platformId/$virtualSongId"
+                        val virtualAudio = baseAudio.copy(
+                            path = onlinePath,
+                            title = baseAudio.title.ifBlank { cachedMeta?.title.orEmpty() },
+                            artist = baseAudio.artist.ifBlank { cachedMeta?.artist.orEmpty() },
+                            album = baseAudio.album.ifBlank { cachedMeta?.album.orEmpty() },
+                            duration = if (baseAudio.duration > 0L) baseAudio.duration else (cachedMeta?.durationMs ?: 0L),
+                            albumArtPath = cleanedArtPath,
+                            encodingFormat = com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
+                        )
+                        onlineToLocalMatchCache.put(stored.key, virtualAudio)
+                        virtualAudio
+                    } else {
+                        baseAudio.copy(albumArtPath = cleanedArtPath)
+                    }
                 }
             }
 

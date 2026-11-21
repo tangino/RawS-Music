@@ -6401,7 +6401,7 @@ class PlayerController private constructor(context: Context) {
                 MusicSourcePlaybackController.stop()
                 val virtualId = if (song.id > 0) song.id.toString() else "${song.title}_${song.artist}".hashCode().toString()
                 val onlineFallbackSong = song.copy(
-                    path = "online://netease/$virtualId",
+                    path = "online://qq/$virtualId",
                     albumArtPath = song.albumArtPath.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }.orEmpty()
                 )
                 val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs
