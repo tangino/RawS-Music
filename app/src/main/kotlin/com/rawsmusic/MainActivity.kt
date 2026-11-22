@@ -1811,7 +1811,51 @@ class MainActivity : ComponentActivity() {
         // twice. The direct value is only a cold-start fallback until the restored queue arrives.
         val liveCurrentSongForMain by playerController?.currentSong?.collectAsState()
             ?: androidx.compose.runtime.mutableStateOf(null)
-        val canonicalCurrentSong = liveCurrentSongForMain ?: playbackQueue.currentSong ?: playerController?.currentSong?.value
+        val onlinePlaybackSnapshotForMain by com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.collectAsState()
+        val hostCurrentSong = liveCurrentSongForMain ?: playbackQueue.currentSong ?: playerController?.currentSong?.value
+        // 当在线播放处于活跃态（含 MediaPlayer 降级流式播放或底层尚未提交的窗口期）且宿主 currentSong 仍停留在上一首时，
+        // 立即以权威在线快照作为 canonicalCurrentSong，确保底部导航 MiniPlayer 实时同步新歌标题、歌手与封面。
+        val canonicalCurrentSong = remember(
+            hostCurrentSong,
+            onlinePlaybackSnapshotForMain.currentItem,
+            onlinePlaybackSnapshotForMain.status,
+        ) {
+            val onlineItem = onlinePlaybackSnapshotForMain.currentItem
+            val isOnlineActive = onlineItem != null && (
+                onlinePlaybackSnapshotForMain.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing ||
+                    onlinePlaybackSnapshotForMain.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing ||
+                    onlinePlaybackSnapshotForMain.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving ||
+                    onlinePlaybackSnapshotForMain.status == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Paused
+                )
+            if (!isOnlineActive || onlineItem == null) {
+                hostCurrentSong
+            } else {
+                val onlinePathKey = com.rawsmusic.core.common.model.onlineSongKey(onlineItem.sourceId, onlineItem.remoteId)
+                val onlineArtist = onlineItem.artists.joinToString(", ")
+                val hostMatchesOnline = hostCurrentSong != null && (
+                    hostCurrentSong.path == onlinePathKey ||
+                        (hostCurrentSong.title.equals(onlineItem.title, ignoreCase = true) &&
+                            (onlineArtist.isBlank() ||
+                                hostCurrentSong.artist.equals(onlineArtist, ignoreCase = true) ||
+                                hostCurrentSong.artist.contains(onlineItem.artists.firstOrNull().orEmpty(), ignoreCase = true)))
+                    )
+                if (hostMatchesOnline) {
+                    hostCurrentSong
+                } else {
+                    com.rawsmusic.core.common.model.AudioFile(
+                        id = onlineItem.stableIdentity.hashCode().toLong(),
+                        path = onlinePathKey,
+                        title = onlineItem.title,
+                        artist = onlineArtist,
+                        album = onlineItem.album,
+                        duration = onlineItem.durationMs.coerceAtLeast(0L),
+                        format = "ONLINE",
+                        albumArtPath = onlineItem.artworkUrl,
+                        encodingFormat = com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
+                    )
+                }
+            }
+        }
         val homeCarouselQueue = remember(
             playbackQueue,
             canonicalCurrentSong,

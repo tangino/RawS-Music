@@ -273,21 +273,40 @@ object MusicSourceAudioResolver {
         if (item.title.isBlank()) return null
         return runCatching {
             val artist = item.artists.joinToString(" & ")
-            val match = KuwoCarAudioEngine.matchBestSong(item.title, artist, item.durationMs)
-                ?: return null
-            val resource = KuwoCarAudioEngine.resolveDownloadResource(
-                songMatch = match,
+            val validator = audioUrlValidator
+            var verifiedUrl = ""
+            val pair = KuwoCarAudioEngine.resolveValidatedSongResource(
+                title = item.title,
+                artist = artist,
+                expectedDurationMs = item.durationMs,
                 requestedQuality = requestedQuality,
                 allowEncrypted = false,
-            ) ?: return null
+                maxRidCandidates = 3,
+            ) { match, candidate ->
+                val probeExpectedDur = if (item.durationMs > 0L) item.durationMs else match.durationSec * 1000L
+                if (validator != null) {
+                    val validated = validator.validate(candidate.downloadUrl, probeExpectedDur, "kuwo")
+                    if (validated != null) {
+                        verifiedUrl = validated.first
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    verifiedUrl = candidate.downloadUrl
+                    true
+                }
+            } ?: return null
+            val resource = pair.second
+            val finalUrl = verifiedUrl.ifBlank { resource.downloadUrl }
             val quality = when {
                 resource.bitrate >= 4000 -> RawSourceQuality.HiRes
                 resource.bitrate >= 1000 -> RawSourceQuality.Lossless
-                resource.bitrate >= 320 -> RawSourceQuality.High
+                resource.bitrate >= 300 -> RawSourceQuality.High
                 else -> RawSourceQuality.Standard
             }
             RawResolvedAudioSource(
-                url = resource.downloadUrl,
+                url = finalUrl,
                 quality = quality,
                 userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 platform = "kuwo_car",

@@ -95,6 +95,7 @@ fun LiquidGlassAudioSettingsScreen(
     }
     var replayGainMode by remember { mutableStateOf(AppPreferences.Player.effectiveReplayGainMode()) }
     var gapless by remember { mutableStateOf(AppPreferences.Player.gaplessPlaybackEnabled) }
+    var songPreloadEnabled by remember { mutableStateOf(AppPreferences.Source.preloadNextSongEnabled) }
     var playbackSpeed by remember { mutableStateOf(AppPreferences.Player.playbackSpeed) }
     var playbackSpeedChangesPitch by remember {
         mutableStateOf(AppPreferences.Player.playbackSpeedChangesPitch)
@@ -361,6 +362,15 @@ fun LiquidGlassAudioSettingsScreen(
                 gapless = checked
                 AppPreferences.Player.gaplessPlaybackEnabled = checked
             }
+            SwitchPreference(
+                title = "歌曲预加载",
+                summary = "播放时提前解析并缓存下一首在线歌曲，关闭可节省流量与后台资源",
+                checked = songPreloadEnabled,
+                onCheckedChange = { checked ->
+                    songPreloadEnabled = checked
+                    com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.setPreloadEnabled(checked)
+                },
+            )
             SliderPreference(
                 title = stringResource(R.string.settings_audio_speed_title),
                 summary = stringResource(R.string.settings_audio_speed_summary),

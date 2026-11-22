@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import java.util.concurrent.atomic.AtomicLong
 
 /** 在线歌曲起播的结果。文案映射交给 UI 层，数据层不产出用户可见字符串。 */
 sealed interface OnlinePlayResult {
@@ -50,6 +51,7 @@ sealed interface OnlinePlayResult {
 object OnlinePlaybackLauncher {
 
     private const val TAG = "OnlineSource"
+    private val playLaunchToken = AtomicLong(0L)
 
     init {
         com.rawsmusic.module.online.recommend.GuessLikeOptimizer.setFavoriteSeedsProvider {
@@ -135,6 +137,10 @@ object OnlinePlaybackLauncher {
         queue: List<OnlineSongItem> = listOf(item),
         index: Int = 0,
     ): OnlinePlayResult = try {
+        // 每次点击切歌签发单调递增令牌，并立即停止/卸载上一首音频，避免旧歌未卸载或并发寻源回写导致双歌同播
+        val launchToken = playLaunchToken.incrementAndGet()
+        MusicSourcePlaybackController.stopForSwitch()
+
         val rawQueue = if (queue.isNotEmpty()) {
             queue.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
         } else {
@@ -211,15 +217,28 @@ object OnlinePlaybackLauncher {
             explicitQuality = AppPreferences.Source.preferredQuality,
         )
 
+        if (launchToken != playLaunchToken.get()) {
+            AppLogger.d(TAG, "[OnlinePlaybackLauncher] 丢弃过期切歌寻源结果：${item.title}")
+            return OnlinePlayResult.Started
+        }
+
         if (resolved != null) {
             val quality = OnlineAudioSourceResolver.stringToRawSourceQuality(resolved.quality)
             val rawMediaItem = OnlineSourceMediaMapper.toRawSourceMediaItem(item).copy(
                 durationMs = if (resolved.durationMs > 0L) resolved.durationMs else item.durationMs,
             )
+            val platformReferer = when (resolved.platform) {
+                com.rawsmusic.module.online.model.OnlinePlatform.KUWO -> "http://www.kuwo.cn/"
+                com.rawsmusic.module.online.model.OnlinePlatform.QQ -> "https://y.qq.com/"
+                com.rawsmusic.module.online.model.OnlinePlatform.NETEASE -> "https://music.163.com/"
+                com.rawsmusic.module.online.model.OnlinePlatform.MIGU -> "https://m.music.migu.cn/"
+                com.rawsmusic.module.online.model.OnlinePlatform.KUGOU -> "https://www.kugou.com/"
+            }
             val rawResolved = com.rawsmusic.core.common.source.RawResolvedAudioSource(
                 url = resolved.url,
                 quality = quality,
-                headers = emptyMap(),
+                headers = mapOf("Referer" to platformReferer),
+                userAgent = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
             )
             MusicSourcePlaybackController.playResolved(
                 context = context,
@@ -235,6 +254,10 @@ object OnlinePlaybackLauncher {
         } else {
             // 2. 补充兜底：若全平台多源搜救未果，尝试从用户安装的 MusicFree 插件库检索
             val candidate = findPlayableCandidate(context, item)
+            if (launchToken != playLaunchToken.get()) {
+                AppLogger.d(TAG, "[OnlinePlaybackLauncher] 丢弃过期兜底寻源结果：${item.title}")
+                return OnlinePlayResult.Started
+            }
             if (candidate != null) {
                 val updatedQueue = rawQueue.toMutableList()
                 if (resolvedIndex in updatedQueue.indices) {

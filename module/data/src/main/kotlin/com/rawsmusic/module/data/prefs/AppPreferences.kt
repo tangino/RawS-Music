@@ -2422,6 +2422,11 @@ object AppPreferences {
                 kv.decodeString("resolve_strategy", com.rawsmusic.module.data.source.ResolveStrategy.MODERN_CONCURRENT.id)
             )
             set(value) { kv.encode("resolve_strategy", value.id) }
+
+        /** 是否允许在播放时预加载下一首在线歌曲（提前解析直链并缓存至本地，默认开启） */
+        var preloadNextSongEnabled: Boolean
+            get() = kv.decodeBool("source_preload_next_song_enabled", true)
+            set(value) { kv.encode("source_preload_next_song_enabled", value) }
     }
 
     object FloatingWindow {

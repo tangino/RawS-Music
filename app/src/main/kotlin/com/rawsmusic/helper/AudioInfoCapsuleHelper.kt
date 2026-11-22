@@ -562,7 +562,11 @@ class AudioInfoCapsuleHelper(
         val pc = getPlayerController() ?: return
         val song = pc.currentSong.value ?: return
         val queue = pc.queue.value
-        val fmt = song.encodingFormat.ifBlank { song.format.ifBlank { song.extension } }.uppercase()
+        val cleanEncodingFormat = song.encodingFormat
+            .takeUnless { it.equals(com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER, ignoreCase = true) }
+            .orEmpty()
+        val cleanFormat = song.format.takeUnless { it.equals("ONLINE", ignoreCase = true) }.orEmpty()
+        val fmt = cleanEncodingFormat.ifBlank { cleanFormat.ifBlank { song.extension } }.uppercase()
         val srcSr = if (song.sampleRate > 0) song.sampleRate else 0
         val srcBd = if (song.bitsPerSample > 0) song.bitsPerSample else 0
         val usbSr = pc.getUsbOutputSampleRate() ?: 0
@@ -673,10 +677,17 @@ class AudioInfoCapsuleHelper(
                 )
             )
         }
+        val displayEncoding = cleanEncodingFormat.ifBlank {
+            fmt.ifBlank {
+                if (song.encodingFormat.equals(com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER, ignoreCase = true) ||
+                    song.path.startsWith("online://", ignoreCase = true)
+                ) "在线音频" else "未知"
+            }
+        }
         val decoderLines = listOf(
             InfoLine("FFmpeg Decoder"),
             InfoLine("解码状态：${formatDecoderState(ffmpegPlayer?.state?.name)}"),
-            InfoLine("编码格式：${song.encodingFormat.ifBlank { fmt.ifBlank { "未知" } }}"),
+            InfoLine("编码格式：$displayEncoding"),
             InfoLine("源文件：${formatFileSize(song.fileSize)}")
         )
         val resampleLines = buildResampleLines(

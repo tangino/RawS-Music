@@ -147,6 +147,22 @@ object BitmapProvider {
 
 
     /**
+     * 本地音频文件确认无内嵌封面与同目录封面时的在线封面回退委托（优先 QQ 音乐）。
+     * 由应用启动时注入，避免 `core:ui` 直接依赖 `module:online`。
+     */
+    interface LocalArtworkOnlineFallbackDelegate {
+        fun lookupCachedOnlineCoverUrl(audioPath: String): String?
+        fun requestOnlineCoverForLocalAudio(
+            audioPath: String,
+            storageKey: String,
+            onResolved: (resolvedUrl: String) -> Unit,
+        )
+    }
+
+    @Volatile
+    var localOnlineFallbackDelegate: LocalArtworkOnlineFallbackDelegate? = null
+
+    /**
      * Bumped when library scan or manual artwork edit makes visible items re-check their cover.
      * This is intentionally UI-observable but very cheap: existing bitmaps stay cached; only stale
      * no-art decisions / LaunchedEffect keys are refreshed.
@@ -2231,9 +2247,49 @@ object BitmapProvider {
             } else {
                 decoded
             }
-            when (withExternalFallback) {
+            // 本地音频确认无内嵌封面、无同目录封面且无有效外置封面时，优先通过在线委托（QQ 音乐优先）拉取真实封面，避免空白
+            val withOnlineFallback = if (
+                withExternalFallback is SourceDecodeResult.ConfirmedAbsent &&
+                ArtworkSourceSelectionPolicy.isAudioArtworkKey(decodeKey) &&
+                !RemoteArtworkDownloader.isRemoteUrl(decodeKey)
+            ) {
+                val audioPath = pathPartFromArtworkKey(decodeKey.removePrefix("audio://"))
+                val delegate = localOnlineFallbackDelegate
+                if (audioPath.isNotBlank() && delegate != null) {
+                    val cachedUrl = delegate.lookupCachedOnlineCoverUrl(audioPath)
+                    if (!cachedUrl.isNullOrBlank() &&
+                        RemoteArtworkDownloader.isRemoteUrl(cachedUrl) &&
+                        !RemoteArtworkDownloader.isPlaceholderUrl(cachedUrl)
+                    ) {
+                        decodeRemoteImage(
+                            storageKey = storageKey,
+                            url = cachedUrl,
+                            targetWidth = targetWidth,
+                            targetHeight = targetHeight,
+                            aspectPolicy = aspectPolicy,
+                        )
+                    } else {
+                        delegate.requestOnlineCoverForLocalAudio(audioPath, storageKey) { resolvedUrl ->
+                            if (RemoteArtworkDownloader.isRemoteUrl(resolvedUrl) &&
+                                !RemoteArtworkDownloader.isPlaceholderUrl(resolvedUrl)
+                            ) {
+                                invalidateArtworkKeys(
+                                    keys = listOf(storageKey, decodeKey, audioPath),
+                                    reason = "local_online_cover_resolved",
+                                )
+                            }
+                        }
+                        withExternalFallback
+                    }
+                } else {
+                    withExternalFallback
+                }
+            } else {
+                withExternalFallback
+            }
+            when (withOnlineFallback) {
                 is SourceDecodeResult.Found -> {
-                    val decodedBitmap = withExternalFallback.bitmap
+                    val decodedBitmap = withOnlineFallback.bitmap
                     if (decodedBitmap.isRecycled) return ArtworkDecodeResult.LightweightMiss
                     if (surface.allowDiskThumbnailWrite) {
                         saveDiskThumbnailAsync(cacheStorageKey, targetWidth, targetHeight, decodedBitmap)
@@ -2252,7 +2308,7 @@ object BitmapProvider {
                         // avoidable CPU/power spike in the Raw pipeline. reference player promotes the
                         // same low/high record instead; only the background indexer coalesces.
                         coalesceSourceTiers = surface == ArtworkSurface.Indexer,
-                        providerSourceString = withExternalFallback.providerSourceString,
+                        providerSourceString = withOnlineFallback.providerSourceString,
                     )
                 }
 
@@ -2300,7 +2356,19 @@ object BitmapProvider {
         targetHeight: Int,
         aspectPolicy: ArtworkAspectPolicy,
     ): SourceDecodeResult? {
-        val cleanPath = pathPartFromArtworkKey(artworkPath.trim())
+        val rawTrimmed = artworkPath.trim()
+        if (rawTrimmed.isBlank()) return null
+        if (RemoteArtworkDownloader.isRemoteUrl(rawTrimmed)) {
+            if (RemoteArtworkDownloader.isPlaceholderUrl(rawTrimmed)) return SourceDecodeResult.ConfirmedAbsent
+            return decodeRemoteImage(
+                storageKey = storageKey,
+                url = rawTrimmed,
+                targetWidth = targetWidth,
+                targetHeight = targetHeight,
+                aspectPolicy = aspectPolicy,
+            )
+        }
+        val cleanPath = pathPartFromArtworkKey(rawTrimmed)
         if (cleanPath.isBlank()) return null
         if (cleanPath.startsWith("content://", ignoreCase = true)) {
             val sourceString = canonicalFailureSourceKey(cleanPath)

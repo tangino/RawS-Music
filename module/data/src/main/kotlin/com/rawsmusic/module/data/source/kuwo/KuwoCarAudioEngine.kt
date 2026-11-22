@@ -40,7 +40,8 @@ object KuwoCarAudioEngine {
         val level: String,
         val bitrate: Int,
         val format: String,
-        val sizeStr: String
+        val sizeStr: String,
+        val sizeBytes: Long = 0L,
     )
 
     data class KuwoSongMatch(
@@ -62,13 +63,23 @@ object KuwoCarAudioEngine {
     )
 
     /**
-     * 搜索并按歌名、歌手与时长对齐最佳候选曲目。
+     * 搜索并按歌名、歌手与时长对齐最佳候选曲目（兼容旧调用方）。
      */
     suspend fun matchBestSong(
         title: String,
         artist: String,
         expectedDurationMs: Long = 0L
-    ): KuwoSongMatch? = withContext(Dispatchers.IO) {
+    ): KuwoSongMatch? = matchTopSongs(title, artist, expectedDurationMs, limit = 1).firstOrNull()
+
+    /**
+     * 搜索并按匹配得分降序返回 Top N 同曲候选（支持主 RID 返回版权提示音时无缝切换同曲其他专辑 RID）。
+     */
+    suspend fun matchTopSongs(
+        title: String,
+        artist: String,
+        expectedDurationMs: Long = 0L,
+        limit: Int = 3,
+    ): List<KuwoSongMatch> = withContext(Dispatchers.IO) {
         val cleanT = cleanKeyword(title)
         val cleanA = cleanKeyword(artist)
         val normA = normalizeArtist(cleanA)
@@ -103,16 +114,21 @@ object KuwoCarAudioEngine {
             }
         }
 
-        var bestMatch: KuwoSongMatch? = null
-        var highestScore = -1
+        val scored = ArrayList<Pair<Int, KuwoSongMatch>>()
+        val seenRids = HashSet<String>()
 
         for (item in candidateItems) {
             val rawRid = item.optString("MUSICRID").ifBlank { item.optString("id") }
             val rid = rawRid.replace("MUSIC_", "").trim()
-            if (rid.isBlank()) continue
+            if (rid.isBlank() || !seenRids.add(rid)) continue
 
-            val candTitle = item.optString("SONGNAME").ifEmpty { item.optString("name") }
-            val candArtist = item.optString("ARTIST").ifEmpty { item.optString("artist") }
+            val candTitle = item.optString("SONGNAME")
+                .ifEmpty { item.optString("NAME") }
+                .ifEmpty { item.optString("FSONGNAME").trim('"') }
+                .ifEmpty { item.optString("name") }
+            val candArtist = item.optString("ARTIST")
+                .ifEmpty { item.optString("AARTIST") }
+                .ifEmpty { item.optString("artist") }
             val candAlbum = item.optString("ALBUM").ifEmpty { item.optString("album") }
             val candDurSec = item.optLong("DURATION", 0L)
 
@@ -129,25 +145,32 @@ object KuwoCarAudioEngine {
                 qualities
             )
 
-            if (score > highestScore && score >= 40) {
-                highestScore = score
-                bestMatch = KuwoSongMatch(
-                    rid = rid,
-                    songName = candTitle,
-                    artist = candArtist,
-                    album = candAlbum,
-                    durationSec = candDurSec,
-                    qualities = qualities
+            if (score >= 40) {
+                scored.add(
+                    score to KuwoSongMatch(
+                        rid = rid,
+                        songName = candTitle,
+                        artist = candArtist,
+                        album = candAlbum,
+                        durationSec = candDurSec,
+                        qualities = qualities
+                    )
                 )
             }
         }
 
-        if (bestMatch != null) {
-            AppLogger.i(TAG, "酷我母带引擎精准匹配成功: ${bestMatch.songName} - ${bestMatch.artist} (RID: ${bestMatch.rid}, 音质项: ${bestMatch.qualities.size}个, 得分: $highestScore)")
+        val topMatches = scored
+            .sortedByDescending { it.first }
+            .take(limit.coerceAtLeast(1))
+            .map { it.second }
+
+        if (topMatches.isNotEmpty()) {
+            val lead = topMatches.first()
+            AppLogger.i(TAG, "酷我引擎匹配成功: ${lead.songName} - ${lead.artist} (主RID: ${lead.rid}, 候选数: ${topMatches.size}, 音质项: ${lead.qualities.size}个)")
         } else {
             AppLogger.w(TAG, "酷我搜索未命中合适曲目: '$title' - '$artist'")
         }
-        bestMatch
+        topMatches
     }
 
     /**
@@ -194,7 +217,7 @@ object KuwoCarAudioEngine {
     }
 
     /**
-     * 解析酷我 N_MINFO / MINFO 字符串。
+     * 解析酷我 N_MINFO / MINFO 字符串（对齐 HotDownloader parser.rs：解析 size 字节数并过滤无效占位条目）。
      */
     private fun parseMinfo(infoStr: String): List<KuwoQualityOption> {
         if (infoStr.isBlank()) return emptyList()
@@ -208,12 +231,28 @@ object KuwoCarAudioEngine {
             val bitrate = matcher.group(2)?.toIntOrNull() ?: continue
             val format = matcher.group(3) ?: ""
             val sizeStr = matcher.group(4) ?: ""
+            val sizeBytes = parseSizeBytes(sizeStr)
+            if (sizeBytes <= 0L) continue
 
             if (seenBitrates.add(bitrate)) {
-                list.add(KuwoQualityOption(level, bitrate, format, sizeStr))
+                list.add(KuwoQualityOption(level, bitrate, format, sizeStr, sizeBytes))
             }
         }
         return list
+    }
+
+    private fun parseSizeBytes(sizeStr: String): Long {
+        val m = Pattern.compile("(?i)^([\\d.]+)([kmg]?b)$").matcher(sizeStr.trim())
+        if (!m.matches()) return 0L
+        val num = m.group(1)?.toDoubleOrNull() ?: return 0L
+        val multiplier = when (m.group(2)?.lowercase()) {
+            "b" -> 1.0
+            "kb" -> 1024.0
+            "mb" -> 1024.0 * 1024.0
+            "gb" -> 1024.0 * 1024.0 * 1024.0
+            else -> 1.0
+        }
+        return (num * multiplier).toLong()
     }
 
     /**
@@ -228,16 +267,14 @@ object KuwoCarAudioEngine {
         }
 
     /**
-     * 依据目标音质策略，向官方车机接口请求真实下载链接与解密密钥。
-     * - HiRes：优先 192kHz/24bit 臻品母带（20900kmflac）→ 4000k flac → 2000k flac；
-     * - Lossless：优先标准无损 FLAC（2000k flac，体积约 30MB、无加密、下载最快）→ 4000k flac；
-     * - High / Super（320K）：优先 320k MP3 → 128k MP3（绝不反向升级成大体积 FLAC）；
-     * - Standard（128K）：优先 128k MP3 → 320k MP3。
+     * 依据目标音质策略，向官方车机接口请求真实下载链接与解密密钥（对齐 HotDownloader playback.rs 全明文音质降级链）。
+     * - 若传入 [urlValidator]，每拿到直链会立即校验（拦截版权提示音/试听截断），不通过则自动顺延尝试下一档音质。
      */
     suspend fun resolveDownloadResource(
         songMatch: KuwoSongMatch,
         requestedQuality: RawSourceQuality = qualityFromSourcePreference(),
         allowEncrypted: Boolean = true,
+        urlValidator: (suspend (KuwoDownloadResource) -> Boolean)? = null,
     ): KuwoDownloadResource? = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<KuwoQualityOption>()
         val hasQualityManifest = songMatch.qualities.isNotEmpty()
@@ -255,24 +292,40 @@ object KuwoCarAudioEngine {
                 addOption(4000, "hr", "flac")
                 addOption(2000, "ff", "flac")
                 addOption(320, "p", "mp3")
-                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+                addOption(300, "p", "ogg")
+                addOption(192, "p", "ogg")
+                addOption(128, "h", "mp3")
+                addOption(100, "h", "ogg")
+                addOption(48, "s", "aac")
             }
             RawSourceQuality.Lossless -> {
                 addOption(2000, "ff", "flac")
                 addOption(4000, "hr", "flac")
                 if (allowEncrypted) addOption(20900, "zply", "mflac")
                 addOption(320, "p", "mp3")
-                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
+                addOption(300, "p", "ogg")
+                addOption(192, "p", "ogg")
+                addOption(128, "h", "mp3")
+                addOption(100, "h", "ogg")
+                addOption(48, "s", "aac")
             }
             RawSourceQuality.Super, RawSourceQuality.High -> {
                 addOption(320, "p", "mp3")
-                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
-                    ?: addOption(128, "h", "mp3")
+                addOption(300, "p", "ogg")
+                addOption(192, "p", "ogg")
+                addOption(128, "h", "mp3")
+                addOption(100, "h", "ogg")
+                addOption(48, "s", "aac")
+                addOption(2000, "ff", "flac")
             }
             RawSourceQuality.Standard -> {
-                songMatch.qualities.find { it.bitrate == 128 }?.let { candidates.add(it) }
-                    ?: addOption(128, "h", "mp3")
+                addOption(128, "h", "mp3")
                 addOption(320, "p", "mp3")
+                addOption(100, "h", "ogg")
+                addOption(192, "p", "ogg")
+                addOption(300, "p", "ogg")
+                addOption(48, "s", "aac")
+                addOption(2000, "ff", "flac")
             }
         }
 
@@ -280,14 +333,44 @@ object KuwoCarAudioEngine {
             candidates
         } else {
             candidates.filterNot {
-                it.format.equals("mflac", ignoreCase = true) || it.format.equals("mgg", ignoreCase = true)
+                it.format.equals("mflac", ignoreCase = true) ||
+                    it.format.equals("mgg", ignoreCase = true) ||
+                    it.format.equals("mmp4", ignoreCase = true)
             }
         }
 
         for (opt in filtered) {
-            val res = requestCarApi(songMatch.rid, opt.bitrate, opt.format)
-            if (res != null) {
+            val res = requestCarApi(songMatch.rid, opt.bitrate, opt.format) ?: continue
+            if (urlValidator == null || urlValidator(res)) {
                 return@withContext res
+            }
+            AppLogger.w(TAG, "酷我音质档位校验未通过（疑似提示音/试听），尝试下一档位: rid=${songMatch.rid}, br=${opt.bitrate}${opt.format}")
+        }
+        null
+    }
+
+    /**
+     * 在 Top N 匹配曲目 × 全明文音质降级链中寻找首个通过真实流校验的完整正片资源。
+     */
+    suspend fun resolveValidatedSongResource(
+        title: String,
+        artist: String,
+        expectedDurationMs: Long = 0L,
+        requestedQuality: RawSourceQuality = qualityFromSourcePreference(),
+        allowEncrypted: Boolean = false,
+        maxRidCandidates: Int = 3,
+        urlValidator: suspend (KuwoSongMatch, KuwoDownloadResource) -> Boolean,
+    ): Pair<KuwoSongMatch, KuwoDownloadResource>? = withContext(Dispatchers.IO) {
+        val matches = matchTopSongs(title, artist, expectedDurationMs, limit = maxRidCandidates)
+        for (match in matches) {
+            val res = resolveDownloadResource(
+                songMatch = match,
+                requestedQuality = requestedQuality,
+                allowEncrypted = allowEncrypted,
+                urlValidator = { candidate -> urlValidator(match, candidate) },
+            )
+            if (res != null) {
+                return@withContext match to res
             }
         }
         null

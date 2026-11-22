@@ -279,15 +279,21 @@ object MusicSourcePlaybackController {
         applicationContext = context.applicationContext
         val generation = generations.incrementAndGet()
         resolveJob?.cancel()
+        resolveJob = null
         mediaFallbackJob?.cancel()
         mediaFallbackJob = null
         cacheJob?.cancel()
         cacheJob = null
+        preloadJob?.cancel()
+        preloadJob = null
         prepared = false
         completionHandledGeneration = Long.MIN_VALUE
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
+        // 切歌起播前必须同时卸载旧的 MediaPlayer 与底层 backend 会话，杜绝双引擎同时出声
+        releaseMediaPlayer(abandonFocus = false)
+        backend?.stop()
         val activeQueue = if (queue.isNotEmpty()) {
             queue
         } else {
@@ -469,6 +475,29 @@ object MusicSourcePlaybackController {
         mutableSnapshot.value = mutableSnapshot.value.copy(positionMs = target)
     }
 
+    /**
+     * 在线列表主动切换新歌曲、进入异步寻源前立即卸载上一首音频，避免寻源期间旧歌残留或与新歌重叠播放。
+     * 保留队列与预加载映射（避免误删刚命中的下一首预加载），仅停止当前发声引擎与进行中的解析/缓存任务。
+     */
+    fun stopForSwitch() {
+        generations.incrementAndGet()
+        resolveJob?.cancel()
+        resolveJob = null
+        mediaFallbackJob?.cancel()
+        mediaFallbackJob = null
+        cacheJob?.cancel()
+        cacheJob = null
+        preloadJob?.cancel()
+        preloadJob = null
+        prepared = false
+        completionHandledGeneration = Long.MIN_VALUE
+        backendReachedPlayingGeneration = Long.MIN_VALUE
+        fallbackAttemptedGeneration = Long.MIN_VALUE
+        activeResolvedSource = null
+        releaseMediaPlayer(abandonFocus = false)
+        backend?.stop()
+    }
+
     fun stop() {
         generations.incrementAndGet()
         resolveJob?.cancel()
@@ -559,6 +588,7 @@ object MusicSourcePlaybackController {
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
         releaseMediaPlayer(abandonFocus = false)
+        backend?.stop()
 
         val origPlatform = resolvePlatformDisplayName(item.sourceId)
 
@@ -758,7 +788,33 @@ object MusicSourcePlaybackController {
         return null
     }
 
+    /**
+     * 动态开关下一首歌曲预加载：
+     * - 关闭时立即取消后台预加载任务并清理未消费的预加载直链；
+     * - 开启时若当前处于在线播放态且队列有后续曲目，立即触发下一首预加载。
+     */
+    fun setPreloadEnabled(enabled: Boolean) {
+        AppPreferences.Source.preloadNextSongEnabled = enabled
+        if (!enabled) {
+            preloadJob?.cancel()
+            preloadJob = null
+            preloadedResolvedMap.clear()
+            AppLogger.i(TAG, "Song preload disabled; active preload job canceled")
+        } else {
+            AppLogger.i(TAG, "Song preload enabled")
+            val snap = mutableSnapshot.value
+            if (snap.status == MusicSourcePlaybackStatus.Playing || snap.status == MusicSourcePlaybackStatus.Paused) {
+                schedulePreloadNext()
+            }
+        }
+    }
+
     private fun schedulePreloadNext() {
+        if (!AppPreferences.Source.preloadNextSongEnabled) {
+            preloadJob?.cancel()
+            preloadJob = null
+            return
+        }
         if (preloadJob?.isActive == true) {
             // 已有预加载任务正在后台平稳寻源或下载，避免被打断
             return
@@ -999,6 +1055,20 @@ object MusicSourcePlaybackController {
                     startPositionMs = startPositionMs,
                     autoPlay = autoPlay,
                 )
+            } catch (timeout: TimeoutCancellationException) {
+                if (generation != generations.get()) return@launch
+                AppLogger.w(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_TIMEOUT generation=$generation " +
+                        "timeoutMs=$MATERIALIZE_TIMEOUT_MS url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}"
+                )
+                prepareMediaPlayer(
+                    generation = generation,
+                    source = source,
+                    startPositionMs = startPositionMs,
+                    autoPlay = autoPlay,
+                    reason = "cache_download_timeout",
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -1028,6 +1098,9 @@ object MusicSourcePlaybackController {
         startPositionMs: Long,
         autoPlay: Boolean,
     ) {
+        if (generation != generations.get()) return
+        // 确保交由宿主底层播放前，内部 MediaPlayer 已彻底释放，杜绝双路同时出声
+        releaseMediaPlayer(abandonFocus = false)
         val state = mutableSnapshot.value
         backend.play(
             MusicSourcePlaybackRequest(
@@ -1068,9 +1141,11 @@ object MusicSourcePlaybackController {
                     state.status != MusicSourcePlaybackStatus.Completed
                 ) {
                     prepared = false
-                    // 若底层渲染器在 Playing 状态意外停止为 Idle，必须同步退出 Playing 状态，
-                    // 防止播放/暂停按钮永远卡死在“正在播放(暂停图标)”假状态。
-                    if (state.status == MusicSourcePlaybackStatus.Playing) {
+                    // 若底层渲染器在 Playing 或 Preparing（非缓存下载阶段）意外停止为 Idle，
+                    // 必须同步退出，防止按钮或“正在缓冲”永久卡死。
+                    if (state.status == MusicSourcePlaybackStatus.Playing ||
+                        (state.status == MusicSourcePlaybackStatus.Preparing && cacheJob?.isActive != true)
+                    ) {
                         mutableSnapshot.value = state.copy(
                             status = MusicSourcePlaybackStatus.Idle,
                         )
@@ -1200,6 +1275,8 @@ object MusicSourcePlaybackController {
             return
         }
         if (generation != generations.get()) return
+        // 切入内部 MediaPlayer 前，强制停止底层 backend，杜绝与上一首 Native 音频引擎同时播放
+        backend?.stop()
         releaseMediaPlayer(abandonFocus = false)
 
         val player = MediaPlayer()
@@ -1224,7 +1301,11 @@ object MusicSourcePlaybackController {
         try {
             player.setAudioAttributes(audioAttributes)
             player.setOnPreparedListener { preparedPlayer ->
-                if (generation != generations.get() || mediaPlayer !== preparedPlayer) return@setOnPreparedListener
+                if (generation != generations.get() || mediaPlayer !== preparedPlayer) {
+                    runCatching { preparedPlayer.stop() }
+                    runCatching { preparedPlayer.release() }
+                    return@setOnPreparedListener
+                }
                 mediaFallbackJob?.cancel()
                 mediaFallbackJob = null
                 prepared = true

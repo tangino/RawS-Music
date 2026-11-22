@@ -1141,37 +1141,50 @@ object OnlineAudioSourceResolver {
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
         kotlinx.coroutines.withTimeoutOrNull(15_000L) {
             val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
-            // 0. 优先尝试酷我车载非加密直链（音质统一由 Configure Sources 页面的 preferredQuality 控制），未命中再沿用原有寻源策略
+            // 0. 优先尝试酷我车载非加密直链（对齐 HotDownloader：支持多 RID + 全明文音质降级 + 逐条探活防版权提示音），未命中再沿用原有寻源策略
             if (title.isNotBlank()) {
                 val kwResolved = runCatching {
                     val requestedQuality = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.qualityFromSourcePreference(
                         AppPreferences.Source.preferredQuality
                     )
-                    val match = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.matchBestSong(
-                        title,
-                        artist,
-                        expectedDurationMs,
-                    )
-                    val resource = match?.let {
-                        com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.resolveDownloadResource(
-                            songMatch = it,
-                            requestedQuality = requestedQuality,
-                            allowEncrypted = false,
+                    var verifiedUrl = ""
+                    var verifiedDur = 0L
+                    val pair = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.resolveValidatedSongResource(
+                        title = title,
+                        artist = artist,
+                        expectedDurationMs = expectedDurationMs,
+                        requestedQuality = requestedQuality,
+                        allowEncrypted = false,
+                        maxRidCandidates = 3,
+                    ) { match, candidate ->
+                        val probeExpectedDur = if (expectedDurationMs > 0L) expectedDurationMs else match.durationSec * 1000L
+                        val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(
+                            rawUrl = candidate.downloadUrl,
+                            expectedDurationMs = probeExpectedDur,
+                            targetPlatform = OnlinePlatform.KUWO,
                         )
+                        if (probePair != null) {
+                            verifiedUrl = probePair.first
+                            verifiedDur = if (probePair.second > 0L) probePair.second else probeExpectedDur
+                            true
+                        } else {
+                            false
+                        }
                     }
-                    if (match != null && resource != null) {
+                    if (pair != null && verifiedUrl.isNotBlank()) {
+                        val (_, resource) = pair
                         val qualityLabel = when {
                             resource.bitrate >= 4000 -> "HR"
                             resource.bitrate >= 1000 -> "SQ"
-                            resource.bitrate >= 320 -> "HQ"
+                            resource.bitrate >= 300 -> "HQ"
                             else -> "PQ"
                         }
                         ResolvedAudioSource(
-                            url = resource.downloadUrl,
+                            url = verifiedUrl,
                             platform = OnlinePlatform.KUWO,
                             sourceName = "酷我车载",
                             quality = qualityLabel,
-                            durationMs = if (match.durationSec > 0L) match.durationSec * 1000L else expectedDurationMs,
+                            durationMs = verifiedDur,
                             isFallback = platform != OnlinePlatform.KUWO,
                         )
                     } else null

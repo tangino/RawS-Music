@@ -110,11 +110,23 @@ internal fun SourceConfigurationPage(
             Spacer(Modifier.height(14.dp))
 
             var currentStrategy by remember { mutableStateOf(AppPreferences.Source.resolveStrategy) }
+            var preloadEnabled by remember { mutableStateOf(AppPreferences.Source.preloadNextSongEnabled) }
             ResolveStrategyCard(
                 currentStrategy = currentStrategy,
+                preloadEnabled = preloadEnabled,
                 onSelectStrategy = { newStrategy ->
                     currentStrategy = newStrategy
                     AppPreferences.Source.resolveStrategy = newStrategy
+                },
+            )
+            Spacer(Modifier.height(14.dp))
+
+            SongPreloadCard(
+                enabled = preloadEnabled,
+                onToggle = { checked ->
+                    preloadEnabled = checked
+                    MusicSourcePlaybackController.setPreloadEnabled(checked)
+                    AppNoticeBus.post(if (checked) "已开启歌曲预加载" else "已关闭歌曲预加载")
                 },
             )
             Spacer(Modifier.height(20.dp))
@@ -582,6 +594,7 @@ internal fun SourceUrlImportDialog(
 @Composable
 private fun ResolveStrategyCard(
     currentStrategy: ResolveStrategy,
+    preloadEnabled: Boolean,
     onSelectStrategy: (ResolveStrategy) -> Unit,
 ) {
     val scheme = MiuixTheme.colorScheme
@@ -604,9 +617,9 @@ private fun ResolveStrategyCard(
                 color = scheme.onBackground,
             )
             Text(
-                text = "支持双向预加载",
+                text = if (preloadEnabled) "支持双向预加载" else "已关闭预加载",
                 fontSize = 11.sp,
-                color = scheme.primary,
+                color = if (preloadEnabled) scheme.primary else scheme.onSurfaceVariantSummary,
             )
         }
         Spacer(modifier = Modifier.height(10.dp))
@@ -652,6 +665,46 @@ private fun ResolveStrategyCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * 歌曲预加载开关卡片
+ */
+@Composable
+private fun SongPreloadCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val scheme = MiuixTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(scheme.surfaceContainer.copy(alpha = 0.74f))
+            .clickable { onToggle(!enabled) }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "歌曲预加载",
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.onBackground,
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = "播放时提前解析并缓存下一首音源以实现切歌秒开，关闭可减少后台流量与性能消耗",
+                fontSize = 11.sp,
+                color = scheme.onSurfaceVariantSummary,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = enabled,
+            onCheckedChange = onToggle,
+        )
     }
 }
 

@@ -2,6 +2,7 @@ package com.rawsmusic.module.online.sync
 
 import android.content.Context
 import android.util.LruCache
+import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylistSong
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.module.data.prefs.AppPreferences
@@ -9,6 +10,7 @@ import com.rawsmusic.module.data.prefs.PlaylistArtworkFallbackDelegate
 import com.rawsmusic.module.data.prefs.PlaylistStore
 import com.rawsmusic.module.data.prefs.ResolvedMetadataUpdate
 import com.rawsmusic.module.data.prefs.ResolvedOnlineTrackMetadata
+import com.rawsmusic.module.data.repository.MusicRepository
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlineSongItem
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
@@ -46,9 +48,114 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val memoryCache = LruCache<String, String>(2000)
     private val metadataCache = LruCache<String, ResolvedOnlineTrackMetadata>(2000)
+    private val localPathCoverCache = LruCache<String, String>(3000)
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
     private val failedTimestamps = ConcurrentHashMap<String, Long>()
     private val fetchSemaphore = Semaphore(5)
+
+    private class LocalPathMetaIndex(
+        val sourceSongs: List<AudioFile>,
+        val byPath: Map<String, Pair<String, String>>,
+    )
+    @Volatile
+    private var localPathMetaIndex: LocalPathMetaIndex? = null
+
+    private fun resolveTitleAndArtistForLocalPath(audioPath: String): Pair<String, String>? {
+        val cleanPath = audioPath.trim()
+        if (cleanPath.isBlank()) return null
+        val songs = MusicRepository.songs.value
+        if (songs.isNotEmpty()) {
+            val cached = localPathMetaIndex
+            val map = if (cached != null && cached.sourceSongs === songs) {
+                cached.byPath
+            } else {
+                buildMap<String, Pair<String, String>>(songs.size) {
+                    songs.forEach { song ->
+                        if (song.path.isNotBlank() && song.title.isNotBlank()) {
+                            putIfAbsent(song.path, song.title to song.artist)
+                        }
+                    }
+                }.also { localPathMetaIndex = LocalPathMetaIndex(songs, it) }
+            }
+            map[cleanPath]?.let { return it }
+        }
+        // 兜底：从文件名解析（支持 "歌手 - 歌名" 或纯歌名）
+        val stem = cleanPath.substringAfterLast('/').substringBeforeLast('.').trim()
+        if (stem.isBlank()) return null
+        val dashIdx = stem.indexOf(" - ")
+        return if (dashIdx > 0 && dashIdx + 3 < stem.length) {
+            stem.substring(dashIdx + 3).trim() to stem.substring(0, dashIdx).trim()
+        } else {
+            stem to ""
+        }
+    }
+
+    /**
+     * 供 BitmapProvider 同步查询本地无内嵌封面音频的已缓存网络封面（内存 LRU + MMKV 持久化）。
+     */
+    fun lookupCachedOnlineCoverForLocalPath(audioPath: String): String? {
+        val cleanPath = audioPath.trim()
+        if (cleanPath.isBlank()) return null
+        localPathCoverCache.get(cleanPath)?.takeIf { isValidRemoteCoverUrl(it) }?.let { return it }
+        val (title, artist) = resolveTitleAndArtistForLocalPath(cleanPath) ?: return null
+        val cachedUrl = getCachedArtworkUrl(title, artist)?.takeIf { isValidRemoteCoverUrl(it) } ?: return null
+        localPathCoverCache.put(cleanPath, cachedUrl)
+        return cachedUrl
+    }
+
+    /**
+     * 供 BitmapProvider 在本地音乐库歌曲确认无内嵌/同目录封面时，异步从网络平台（优先 QQ 音乐）拉取真实封面。
+     */
+    fun requestOnlineCoverForLocalPath(
+        audioPath: String,
+        onResolved: (String) -> Unit,
+    ) {
+        val cleanPath = audioPath.trim()
+        if (cleanPath.isBlank()) return
+        lookupCachedOnlineCoverForLocalPath(cleanPath)?.let { cachedUrl ->
+            onResolved(cachedUrl)
+            return
+        }
+        val (rawTitle, rawArtist) = resolveTitleAndArtistForLocalPath(cleanPath) ?: return
+        val cleanTitle = rawTitle.trim()
+        val cleanArtist = rawArtist.trim()
+        if (cleanTitle.isBlank()) return
+
+        val key = cacheKey(cleanTitle, cleanArtist)
+        val lastFail = failedTimestamps[key]
+        if (lastFail != null && System.currentTimeMillis() - lastFail < FAILED_COOLDOWN_MS) return
+        if (!inFlight.add(key)) return
+
+        scope.launch {
+            try {
+                fetchSemaphore.withPermit {
+                    val meta = fetchMetadataFromOnline(cleanTitle, cleanArtist)
+                    if (meta != null && isValidRemoteCoverUrl(meta.coverUrl)) {
+                        failedTimestamps.remove(key)
+                        metadataCache.put(key, meta)
+                        memoryCache.put(key, meta.coverUrl)
+                        localPathCoverCache.put(cleanPath, meta.coverUrl)
+                        writeDiskMetadata(key, meta)
+                        AppLogger.i(
+                            TAG,
+                            "Resolved local library cover (${meta.platformId}) for '$cleanTitle - $cleanArtist': ${meta.coverUrl.take(64)}"
+                        )
+                        onResolved(meta.coverUrl)
+                        enqueueBatchUpdate(ResolvedMetadataUpdate(cleanTitle, cleanArtist, meta))
+                    } else {
+                        failedTimestamps[key] = System.currentTimeMillis()
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Throwable) {
+                failedTimestamps[key] = System.currentTimeMillis()
+                AppLogger.w(TAG, "Failed to resolve local library cover for '$cleanTitle - $cleanArtist': ${e.message}")
+            } finally {
+                inFlight.remove(key)
+            }
+        }
+    }
 
     private val pendingUpdates = ConcurrentLinkedQueue<ResolvedMetadataUpdate>()
     private val flushLock = Any()
@@ -95,6 +202,23 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
                 put("c", meta.coverUrl)
             }.toString()
             AppPreferences.putOnlineTrackMetadataJson(key, json)
+        }
+    }
+
+    override fun peekCachedArtworkUrlInMemory(title: String, artist: String): String? {
+        val key = cacheKey(title, artist)
+        memoryCache.get(key)?.takeIf { isValidRemoteCoverUrl(it) }?.let { return it }
+        return metadataCache.get(key)?.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }
+    }
+
+    override fun peekCachedMetadataInMemory(title: String, artist: String): ResolvedOnlineTrackMetadata? {
+        val key = cacheKey(title, artist)
+        return metadataCache.get(key)?.let { cached ->
+            if (cached.coverUrl.isNotBlank() && isPlaceholderUrl(cached.coverUrl)) {
+                cached.copy(coverUrl = "")
+            } else {
+                cached
+            }
         }
     }
 

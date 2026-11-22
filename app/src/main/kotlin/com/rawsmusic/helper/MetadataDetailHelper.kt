@@ -172,7 +172,9 @@ class MetadataDetailHelper(
             context.getString(R.string.metadata_field_bpm) to song.bpm.takeIf { it > 0 }?.toString().orEmpty(),
             context.getString(R.string.metadata_detail_duration) to AudioUtils.formatDuration(song.duration),
             context.getString(R.string.metadata_detail_format) to song.format.ifBlank { song.extension },
-            context.getString(R.string.metadata_detail_encoding_format) to song.encodingFormat,
+            context.getString(R.string.metadata_detail_encoding_format) to song.encodingFormat
+                .takeUnless { it.equals(com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER, ignoreCase = true) }
+                .orEmpty(),
             context.getString(R.string.metadata_detail_bitrate) to bitRateDisplay,
             context.getString(R.string.metadata_detail_sample_rate) to srDisplay,
             context.getString(R.string.metadata_detail_bit_depth) to formatBitDepth(song),

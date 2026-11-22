@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,16 +86,27 @@ fun PlaylistDetailScreen(
     val context = LocalContext.current
     val matchVersion by playlistStore.matchCacheVersion.collectAsState()
     val allDownloadTasks by MusicSourceDownloadController.tasks.collectAsState()
-    // 首帧使用纯内存零 I/O 快照立即渲染（彻底消除点击本地歌单下钻时的主线程卡顿），
-    // 随后在 IO 线程异步执行完整的本地曲库对齐与磁盘核验并无缝刷新。
+    // 首帧使用纯内存零 I/O 快照立即渲染（彻底消除点击本地歌单下钻时的主线程卡顿）：
+    // 1. 若已命中精确整单快照（例如列表页已预热或刚返回再进入），直接 0 计算、0 线程切换秒开；
+    // 2. 未命中时，若首帧已有预览列表，短暂避让入场转场动画核心帧后再在 IO 线程静默对齐，避免转场期间整页重组掉帧。
     var songs by remember(playlist?.id) {
         mutableStateOf(playlistStore.peekCachedPlaylistSongs(playlist, librarySongs))
     }
-    LaunchedEffect(playlist, librarySongs, matchVersion) {
+    LaunchedEffect(playlist?.id, playlist?.updatedAt, playlist?.songs?.size, librarySongs, matchVersion) {
+        val exact = playlistStore.peekExactSnapshot(playlist, librarySongs)
+        if (exact != null) {
+            if (exact !== songs) {
+                songs = exact
+            }
+            return@LaunchedEffect
+        }
+        if (songs.isNotEmpty()) {
+            delay(220L)
+        }
         val resolved = withContext(Dispatchers.IO) {
             playlistStore.resolveOrderedPlaylistSongs(playlist, librarySongs)
         }
-        if (resolved != songs) {
+        if (resolved !== songs && resolved != songs) {
             songs = resolved
         }
     }

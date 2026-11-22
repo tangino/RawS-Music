@@ -16,6 +16,7 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -44,9 +45,11 @@ object OnlineAudioFileCache {
     const val MAX_SINGLE_FILE_BYTES = 768L * 1_024L * 1_024L
     const val RESERVED_FREE_BYTES = 96L * 1_024L * 1_024L
     const val MIN_VALID_BYTES = 128L * 1_024L
-    const val CONNECT_TIMEOUT_MS = 12_000
-    const val READ_TIMEOUT_MS = 30_000
+    const val CONNECT_TIMEOUT_MS = 10_000
+    const val READ_TIMEOUT_MS = 12_000
     const val MAX_REDIRECTS = 6
+    private const val DEFAULT_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
     fun getCacheDir(context: Context): File = File(context.cacheDir, CACHE_DIR).apply { mkdirs() }
 
@@ -193,12 +196,22 @@ object OnlineAudioFileCache {
                     }
                 }
                 if (source.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
-                    source.userAgent?.takeIf { it.isNotBlank() }?.let {
-                        setRequestProperty("User-Agent", it)
+                    val ua = source.userAgent?.takeIf { it.isNotBlank() } ?: DEFAULT_USER_AGENT
+                    setRequestProperty("User-Agent", ua)
+                }
+                if (source.headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                    inferRefererForUrl(currentUrl)?.let { ref ->
+                        setRequestProperty("Referer", ref)
                     }
                 }
             }
 
+            // 协程取消或超时时主动 disconnect，立即打断阻塞中的 input.read() 并释放 downloadMutex
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    runCatching { connection.disconnect() }
+                }
+            }
             try {
                 val status = connection.responseCode
                 if (status in 300..399) {
@@ -293,8 +306,20 @@ object OnlineAudioFileCache {
                 )
                 return DownloadResult(downloaded, contentType)
             } finally {
+                cancelHandle?.dispose()
                 connection.disconnect()
             }
+        }
+    }
+
+    private fun inferRefererForUrl(url: String): String? {
+        val lower = url.lowercase(Locale.US)
+        return when {
+            lower.contains("kuwo.cn") -> "http://www.kuwo.cn/"
+            lower.contains("qq.com") || lower.contains("gtimg.cn") || lower.contains("qqmusic.qq.com") -> "https://y.qq.com/"
+            lower.contains("126.net") || lower.contains("163.com") -> "https://music.163.com/"
+            lower.contains("migu.cn") -> "https://m.music.migu.cn/"
+            else -> null
         }
     }
 

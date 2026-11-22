@@ -46,6 +46,21 @@ class RawSMusicApp : Application() {
         DataModule.init(this)
         com.rawsmusic.module.online.playback.OnlineAudioSourceResolver.init(this)
         com.rawsmusic.module.online.sync.OnlineArtworkResolver.install(this)
+        BitmapProvider.localOnlineFallbackDelegate = object : BitmapProvider.LocalArtworkOnlineFallbackDelegate {
+            override fun lookupCachedOnlineCoverUrl(audioPath: String): String? =
+                com.rawsmusic.module.online.sync.OnlineArtworkResolver.lookupCachedOnlineCoverForLocalPath(audioPath)
+
+            override fun requestOnlineCoverForLocalAudio(
+                audioPath: String,
+                storageKey: String,
+                onResolved: (resolvedUrl: String) -> Unit,
+            ) {
+                com.rawsmusic.module.online.sync.OnlineArtworkResolver.requestOnlineCoverForLocalPath(
+                    audioPath = audioPath,
+                    onResolved = onResolved,
+                )
+            }
+        }
         // VirtualList's retained artwork-style Modifier.Node talks directly to BitmapProvider rather
         // than Coil. Initialize the provider once at process start so cold list/grid holders have
         // a live worker lane before their first loadViewportThumbnail() request. init() is
