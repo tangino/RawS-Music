@@ -13,7 +13,15 @@ object AppPreferences {
 
     private val kv by lazy { MMKV.defaultMMKV() }
     val storage: MMKV get() = kv
+    private val onlineMetadataKv by lazy { MMKV.mmkvWithID("online_track_metadata_v1") }
     private val gson = Gson()
+
+    fun getOnlineTrackMetadataJson(cacheKey: String): String? =
+        runCatching { onlineMetadataKv.decodeString(cacheKey) }.getOrNull()
+
+    fun putOnlineTrackMetadataJson(cacheKey: String, json: String) {
+        runCatching { onlineMetadataKv.encode(cacheKey, json) }
+    }
 
     /** Flush pending mmap writes before the process is intentionally terminated. */
     fun sync() {
@@ -1221,10 +1229,10 @@ object AppPreferences {
             get() = kv.decodeBool("aa_always", true)
             set(value) { kv.encode("aa_always", value) }
 
-        /** 无真实专辑图时是否显示播放器内置默认专辑图。 */
+        /** 无真实专辑图时是否显示播放器内置默认专辑图（已全局取消默认封面显示）。 */
         var useDefaultArtwork: Boolean
-            get() = kv.decodeBool("aa_use_default_artwork", true)
-            set(value) { kv.encode("aa_use_default_artwork", value) }
+            get() = false
+            set(@Suppress("UNUSED_PARAMETER") value) { kv.encode("aa_use_default_artwork", false) }
 
         /** 封面切换动画 */
         var coverAnimation: Boolean

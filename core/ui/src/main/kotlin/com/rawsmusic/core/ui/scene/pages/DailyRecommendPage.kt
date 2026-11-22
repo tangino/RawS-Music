@@ -866,7 +866,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.renderDailySongList(
                             modifier = Modifier.fillMaxSize(),
                             targetWidth = 120,
                             targetHeight = 120,
-                            showDefaultArtwork = true,
+                            showDefaultArtwork = false,
                         )
                     } else {
                         Text(

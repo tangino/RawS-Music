@@ -65,12 +65,47 @@ interface UserPlaylistDao {
     )
     suspend fun updatePlaylistGroup(playlistId: String, groupName: String, updatedAt: Long)
 
-    /** 批量或单曲按标题和歌手更新缺失的网络封面路径（混合歌单云同步自愈用）。 */
+    /** 批量或单曲按标题和歌手更新缺失或为默认占位图的网络封面路径（混合歌单自愈用）。 */
     @Query(
         "UPDATE user_playlist_songs SET album_art_path = :artworkPath " +
-            "WHERE title = :title AND artist = :artist AND (album_art_path = '' OR album_art_path IS NULL)"
+            "WHERE LOWER(title) = LOWER(:title) AND (:artist = '' OR LOWER(artist) = LOWER(:artist)) " +
+            "AND (album_art_path = '' OR album_art_path IS NULL " +
+            "OR LOWER(album_art_path) LIKE '%default_album%' " +
+            "OR LOWER(album_art_path) LIKE '%default_avatar%' " +
+            "OR LOWER(album_art_path) LIKE '%default_cover%' " +
+            "OR LOWER(album_art_path) LIKE '%5639395138885805%' " +
+            "OR LOWER(album_art_path) LIKE '%109951163250233892%' " +
+            "OR LOWER(album_art_path) LIKE '%6y-uleoritedbvrolvq8a==%' " +
+            "OR LOWER(album_art_path) LIKE '%m00000000000000%')"
     )
     suspend fun updateArtworkPathByTitleAndArtist(title: String, artist: String, artworkPath: String)
+
+    /** 批量或单曲按标题和歌手补齐缺失或为默认占位图的在线元数据（专辑、时长与网络封面），不覆盖已有有效字段。 */
+    @Query(
+        "UPDATE user_playlist_songs SET " +
+            "artist = CASE WHEN (artist = '' OR artist IS NULL) AND :resolvedArtist != '' THEN :resolvedArtist ELSE artist END, " +
+            "album = CASE WHEN (album = '' OR album IS NULL) AND :resolvedAlbum != '' THEN :resolvedAlbum ELSE album END, " +
+            "duration = CASE WHEN duration <= 0 AND :resolvedDuration > 0 THEN :resolvedDuration ELSE duration END, " +
+            "album_art_path = CASE WHEN (" +
+            "(album_art_path NOT LIKE 'http://%' AND album_art_path NOT LIKE 'https://%') " +
+            "OR LOWER(album_art_path) LIKE '%default_album%' " +
+            "OR LOWER(album_art_path) LIKE '%default_avatar%' " +
+            "OR LOWER(album_art_path) LIKE '%default_cover%' " +
+            "OR LOWER(album_art_path) LIKE '%5639395138885805%' " +
+            "OR LOWER(album_art_path) LIKE '%109951163250233892%' " +
+            "OR LOWER(album_art_path) LIKE '%6y-uleoritedbvrolvq8a==%' " +
+            "OR LOWER(album_art_path) LIKE '%m00000000000000%'" +
+            ") AND :resolvedArtwork != '' THEN :resolvedArtwork ELSE album_art_path END " +
+            "WHERE LOWER(title) = LOWER(:queryTitle) AND (:queryArtist = '' OR LOWER(artist) = LOWER(:queryArtist))"
+    )
+    suspend fun updateMetadataByTitleAndArtist(
+        queryTitle: String,
+        queryArtist: String,
+        resolvedArtist: String,
+        resolvedAlbum: String,
+        resolvedDuration: Long,
+        resolvedArtwork: String,
+    )
 
     /** 按歌曲唯一标识更新缺失的网络封面路径。 */
     @Query(

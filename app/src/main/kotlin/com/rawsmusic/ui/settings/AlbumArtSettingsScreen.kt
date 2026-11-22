@@ -30,7 +30,6 @@ fun LiquidGlassAlbumArtSettingsScreen(
         mutableStateOf(AppPreferences.AlbumArt.sendHighResolutionArtwork)
     }
     var alwaysShowCover by remember { mutableStateOf(AppPreferences.AlbumArt.alwaysShowCover) }
-    var useDefaultArtwork by remember { mutableStateOf(DefaultAlbumArtworkPolicy.enabled) }
     var coverAnimation by remember { mutableStateOf(AppPreferences.AlbumArt.coverAnimation) }
     var artistBiographyEnabled by remember { mutableStateOf(AppPreferences.AlbumArt.artistBiographyEnabled) }
     var artistArtworkViewerEnabled by remember { mutableStateOf(AppPreferences.AlbumArt.artistArtworkViewerEnabled) }
@@ -90,14 +89,6 @@ fun LiquidGlassAlbumArtSettingsScreen(
         }
 
         SettingsSection(stringResource(R.string.settings_album_art_display)) {
-            SwitchRow(stringResource(R.string.settings_album_art_default_artwork), useDefaultArtwork) { checked ->
-                useDefaultArtwork = checked
-                DefaultAlbumArtworkPolicy.updateEnabled(checked)
-            }
-            SettingsInfoEntry(
-                title = stringResource(R.string.settings_album_art_default_artwork_title),
-                description = stringResource(R.string.settings_album_art_default_artwork_desc)
-            )
             SwitchRow(stringResource(R.string.settings_album_art_always_show_cover), alwaysShowCover) { checked ->
                 alwaysShowCover = checked
                 AppPreferences.AlbumArt.alwaysShowCover = checked

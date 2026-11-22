@@ -298,7 +298,7 @@ internal fun ArtistArtworkViewer(
                 aspectPolicy = ArtworkAspectPolicy.KeepAspect,
                 exactTarget = false,
                 fadeInMillis = 0,
-                showDefaultArtwork = true,
+                showDefaultArtwork = false,
                 onBitmapReady = { currentBitmap = it },
             )
         }
@@ -400,7 +400,7 @@ internal fun ArtistArtworkViewer(
                             targetHeight = 256,
                             aspectPolicy = ArtworkAspectPolicy.Crop,
                             fadeInMillis = 0,
-                            showDefaultArtwork = true,
+                            showDefaultArtwork = false,
                         )
                     }
                 }

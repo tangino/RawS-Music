@@ -84,12 +84,21 @@ object RemoteArtworkDownloader {
      */
     fun isPlaceholderUrl(url: String?): Boolean {
         if (url.isNullOrBlank()) return true
-        val u = url.lowercase()
+        val u = url.trim().lowercase()
         return u.contains("default_avatar") ||
             u.contains("5639395138885805") ||
             u.contains("6y-uleoritedbvrolvq8a==") ||
             u.contains("109951163250233892") ||
-            u.contains("default_album_art")
+            u.contains("default_album_art") ||
+            u.contains("ic_default_album_art") ||
+            u.contains("default_album") ||
+            u.contains("default_cover") ||
+            u.contains("default_pic") ||
+            u.contains("no_cover") ||
+            u.contains("nopic") ||
+            u.contains("m00000000000000") ||
+            u.endsWith("m000.jpg") ||
+            u.endsWith("m0000.jpg")
     }
 
     /**

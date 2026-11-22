@@ -21,22 +21,20 @@ import com.rawsmusic.module.data.prefs.AppPreferences
 
 /** Shared policy and renderer for songs that have no real embedded or external artwork. */
 object DefaultAlbumArtworkPolicy {
-    var enabled by mutableStateOf(AppPreferences.AlbumArt.useDefaultArtwork)
+    // 全局取消所有默认封面的显示：无真实封面时保持干净留白并等待在线封面（优先 QQ 音乐）回填
+    var enabled by mutableStateOf(false)
         private set
 
-    fun updateEnabled(value: Boolean) {
-        enabled = value
-        AppPreferences.AlbumArt.useDefaultArtwork = value
+    fun updateEnabled(@Suppress("UNUSED_PARAMETER") value: Boolean) {
+        enabled = false
+        AppPreferences.AlbumArt.useDefaultArtwork = false
     }
 }
 
 fun shouldShowDefaultAlbumArtwork(key: String?, targetWidth: Int, targetHeight: Int): Boolean {
-    if (!DefaultAlbumArtworkPolicy.enabled) return false
-    val normalizedKey = key.orEmpty()
     @Suppress("UNUSED_VARIABLE")
-    val requestedSize = targetWidth to targetHeight
-    return normalizedKey.isBlank() ||
-        BitmapProvider.isKnownNoArtwork(normalizedKey, targetWidth, targetHeight)
+    val ignored = Triple(key, targetWidth, targetHeight)
+    return false
 }
 
 fun decodeDefaultAlbumArtwork(resources: Resources, targetSide: Int): Bitmap? {
@@ -54,18 +52,6 @@ fun DefaultAlbumArtwork(
     contentDescription: String? = null,
     contentScale: ContentScale = ContentScale.Fit
 ) {
-    if (!DefaultAlbumArtworkPolicy.enabled) return
-    val alpha = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        alpha.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(durationMillis = RawArtworkPolicy.VIEW_FADE_MS)
-        )
-    }
-    Image(
-        painter = painterResource(R.drawable.default_album_art),
-        contentDescription = contentDescription,
-        modifier = modifier.graphicsLayer { this.alpha = alpha.value },
-        contentScale = contentScale
-    )
+    // 全局取消默认封面显示
+    return
 }
