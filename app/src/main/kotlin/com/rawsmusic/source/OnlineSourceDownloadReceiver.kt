@@ -11,6 +11,7 @@ import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
 import com.rawsmusic.module.scanner.MetadataParser
 import com.rawsmusic.module.scanner.ScanScheduler
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +52,8 @@ class OnlineSourceDownloadReceiver : BroadcastReceiver() {
                         val parsed = path.takeIf { it.isNotBlank() && File(it).isFile }
                             ?.let { MetadataParser.parseFromFile(it) }
                         if (parsed != null) {
+                            // 续期内部写入抑制标记，防止延迟到达的 MediaStore 回调误触发整库扫盘
+                            MusicSourceDownloadController.recordInternalMediaWrite(path)
                             // 直接将单曲完整标签（歌名、歌手、专辑、采样率、位深等）精扫入库，
                             // 避免全目录两阶段扫描的第一阶段用“文件名占位”覆盖真实标签
                             MusicRepository.init(appContext)
@@ -58,6 +61,16 @@ class OnlineSourceDownloadReceiver : BroadcastReceiver() {
                                 songs = listOf(parsed),
                                 refreshLibrary = true,
                             )
+                            // 同步更新父目录的 scan_directory 时间戳基线，避免前台巡检或 MediaStore 误判目录变更
+                            val parentDir = File(path).parentFile
+                            if (parentDir != null && parentDir.isDirectory) {
+                                val modifiedAt = parentDir.lastModified()
+                                if (modifiedAt > 0L) {
+                                    MusicRepository.commitScanDirectories(
+                                        mapOf(fileSystemDirKey(parentDir.path) to modifiedAt)
+                                    )
+                                }
+                            }
                             PlaylistStore.getInstance(appContext).invalidateMatchCache()
                             AppLogger.i(
                                 TAG,
@@ -77,6 +90,16 @@ class OnlineSourceDownloadReceiver : BroadcastReceiver() {
                 }
             }
         }
+    }
+
+    private fun fileSystemDirKey(path: String): String {
+        val normalized = runCatching { File(path).canonicalPath }
+            .getOrElse { File(path).absolutePath }
+            .trim()
+            .replace('\\', '/')
+            .trimEnd('/')
+            .lowercase(Locale.ROOT)
+        return "fs:$normalized"
     }
 
     private companion object {

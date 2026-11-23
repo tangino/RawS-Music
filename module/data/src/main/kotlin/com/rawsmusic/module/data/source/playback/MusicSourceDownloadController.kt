@@ -102,10 +102,54 @@ object MusicSourceDownloadController {
     private const val STORAGE_KEY = "music_source_download_tasks_v1"
     private const val MAX_TASKS = 80
     private const val MAX_PAYLOAD_CHARS = 64 * 1024
+    private const val INTERNAL_WRITE_SUPPRESS_TTL_MS = 30_000L
     const val ACTION_DOWNLOAD_MEDIA_READY = "com.rawsmusic.action.ONLINE_DOWNLOAD_MEDIA_READY"
     const val EXTRA_DOWNLOAD_PATH = "download_path"
     const val EXTRA_DOWNLOAD_ID = "download_id"
     const val PUBLIC_DOWNLOAD_DIRECTORY = "RawSMusic"
+
+    private val recentlyWrittenPaths = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile
+    private var lastInternalWriteAtMs: Long = 0L
+
+    /** 登记由本应用自身写入的下载文件路径，用于短期抑制 MediaStore 回调引发的重复全盘扫描。 */
+    fun recordInternalMediaWrite(path: String) {
+        val normalized = normalizePathForSuppression(path)
+        if (normalized.isBlank()) return
+        val now = System.currentTimeMillis()
+        recentlyWrittenPaths[normalized] = now
+        lastInternalWriteAtMs = now
+        // 顺手清理已过期记录，避免长期运行内存增长
+        if (recentlyWrittenPaths.size > 32) {
+            val cutoff = now - INTERNAL_WRITE_SUPPRESS_TTL_MS
+            recentlyWrittenPaths.entries.removeIf { it.value < cutoff }
+        }
+    }
+
+    /** 判断指定物理路径是否为本应用近期自身写入并已单曲入库的下载文件。 */
+    fun isRecentlyWrittenPath(path: String, ttlMs: Long = INTERNAL_WRITE_SUPPRESS_TTL_MS): Boolean {
+        val normalized = normalizePathForSuppression(path)
+        if (normalized.isBlank()) return false
+        val recordedAt = recentlyWrittenPaths[normalized] ?: return false
+        val age = System.currentTimeMillis() - recordedAt
+        if (age in 0..ttlMs) return true
+        recentlyWrittenPaths.remove(normalized, recordedAt)
+        return false
+    }
+
+    /** 判断最近短窗口内是否刚发生过本应用内部下载写盘，用于抑制泛 MediaStore 通知的竞态扫盘。 */
+    fun hasRecentInternalWrite(windowMs: Long = 5_000L): Boolean {
+        val last = lastInternalWriteAtMs
+        return last > 0L && (System.currentTimeMillis() - last) in 0..windowMs
+    }
+
+    private fun normalizePathForSuppression(path: String): String =
+        runCatching { File(path).canonicalPath }
+            .getOrElse { File(path).absolutePath }
+            .trim()
+            .replace('\\', '/')
+            .trimEnd('/')
+            .lowercase(Locale.ROOT)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     // 限制同时进行的直连下载并发数，避免批量下载时抢占带宽导致连接被系统或 CDN 中断
@@ -628,6 +672,8 @@ object MusicSourceDownloadController {
         }
         PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
 
+        // 登记内部自写路径，避免随后的 MediaScannerConnection 回调再次触发全盘扫描提示
+        recordInternalMediaWrite(outputFile.absolutePath)
         // 触发 Android 媒体扫描并广播完成事件
         MediaScannerConnection.scanFile(
             context,
@@ -844,6 +890,7 @@ object MusicSourceDownloadController {
                     )
                 }
                 PlaylistStore.getInstance(context.applicationContext).invalidateMatchCache()
+                recordInternalMediaWrite(output.absolutePath)
                 MediaScannerConnection.scanFile(
                     context,
                     arrayOf(output.absolutePath),

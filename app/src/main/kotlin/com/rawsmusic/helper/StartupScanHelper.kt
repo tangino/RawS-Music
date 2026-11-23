@@ -14,6 +14,7 @@ import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.locale.localizedErrorMessage
 import com.rawsmusic.module.data.prefs.AppPreferences
+import com.rawsmusic.module.data.source.playback.MusicSourceDownloadController
 import com.rawsmusic.module.scanner.AudioLibraryRepository
 import com.rawsmusic.module.scanner.LibraryScanCoordinator
 import com.rawsmusic.module.scanner.LibraryScanSummary
@@ -222,16 +223,25 @@ class StartupScanHelper(
         if (scanPaths.isEmpty() && safUris.isEmpty()) return false
 
         // 1. 若变更 URI 指向具体音频记录，先核对其物理路径是否落在已选扫描目录内，
-        //    彻底屏蔽微信语音、录音、第三方缓存等无关 MediaStore 变动引发的“突然反复扫描”。
+        //    同时屏蔽本应用近期自身下载/播完自动保存写入的文件（已由单曲精扫入库），
+        //    彻底避免微信语音、录音、第三方缓存以及自身下载引发的“频繁扫盘提示”。
         if (uri != null && uri.lastPathSegment?.toLongOrNull() != null && safUris.isEmpty()) {
             val changedPath = queryMediaStorePath(uri)
             if (changedPath != null) {
+                if (MusicSourceDownloadController.isRecentlyWrittenPath(changedPath)) {
+                    AppLogger.d(TAG, "MediaStore change ignored (app-managed online download): path=$changedPath")
+                    return false
+                }
                 val normalized = normalizeDirPath(changedPath)
                 val inSelected = scanPaths.any { root ->
                     normalized == root || normalized.startsWith("$root/")
                 }
                 if (!inSelected) return false
             }
+        } else if (MusicSourceDownloadController.hasRecentInternalWrite()) {
+            // 泛 MediaStore 通知在内部刚写盘的短窗口内直接忽略，交由单曲精扫与目录基线同步处理
+            AppLogger.d(TAG, "Generic MediaStore change ignored during internal download write window: uri=$uri")
+            return false
         }
 
         // 2. 若仅配置了文件系统路径，进一步快速核对所选目录是否真的发生了文件增删或时间戳变更
@@ -417,24 +427,27 @@ class StartupScanHelper(
                         message = context.getString(R.string.scan_completed, reason, event.songs.size, event.timeMs)
                     )
                     val stats = finalSync
-                    LibraryScanToast.show(
-                        context,
-                        LibraryScanSummary(
-                            scanned = event.songs.size,
-                            added = stats?.added ?: 0,
-                            updated = stats?.updated ?: 0,
-                            removed = stats?.deleted ?: 0,
-                            elapsedMs = event.timeMs,
-                            mode = if (event.incremental) {
-                                LibraryScanSummary.Mode.INCREMENTAL
-                            } else {
-                                LibraryScanSummary.Mode.FULL
-                            },
-                            skippedDirectories = event.skippedDirectoryCount,
-                            reused = event.baselineHits,
-                            metadataParsed = event.metadataParsed
+                    // 仅手动触发扫描时弹出结果 Toast；后台自动增量扫描静默完成，避免听歌过程中频繁弹窗打扰
+                    if (!request.coldStart) {
+                        LibraryScanToast.show(
+                            context,
+                            LibraryScanSummary(
+                                scanned = event.songs.size,
+                                added = stats?.added ?: 0,
+                                updated = stats?.updated ?: 0,
+                                removed = stats?.deleted ?: 0,
+                                elapsedMs = event.timeMs,
+                                mode = if (event.incremental) {
+                                    LibraryScanSummary.Mode.INCREMENTAL
+                                } else {
+                                    LibraryScanSummary.Mode.FULL
+                                },
+                                skippedDirectories = event.skippedDirectoryCount,
+                                reused = event.baselineHits,
+                                metadataParsed = event.metadataParsed
+                            )
                         )
-                    )
+                    }
                 }
                 is LibraryScanCoordinator.Event.Error -> {
                     _scanUiState.value = _scanUiState.value.copy(
@@ -526,7 +539,7 @@ class StartupScanHelper(
 
     companion object {
         private const val TAG = "StartupScanHelper"
-        private const val MEDIA_STORE_DEBOUNCE_MS = 2_000L
+        private const val MEDIA_STORE_DEBOUNCE_MS = 3_500L
         private const val FOREGROUND_CHECK_INTERVAL_MS = 15_000L
         private val coldStartScanRequested = AtomicBoolean(false)
     }
