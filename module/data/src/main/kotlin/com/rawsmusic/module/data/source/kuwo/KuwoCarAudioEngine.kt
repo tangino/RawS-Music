@@ -80,11 +80,11 @@ object KuwoCarAudioEngine {
         expectedDurationMs: Long = 0L,
         limit: Int = 3,
     ): List<KuwoSongMatch> = withContext(Dispatchers.IO) {
-        val cleanT = cleanKeyword(title)
+        val cleanT = extractCoreTitle(title)
         val cleanA = cleanKeyword(artist)
         val normA = normalizeArtist(cleanA)
 
-        // 第一阶段：精准关键词搜索（歌名 + 规范化歌手）
+        // 第一阶段：精准关键词搜索（纯净主歌名 + 规范化歌手）
         val keyword1 = if (normA.isNotBlank() && !cleanT.contains(normA, ignoreCase = true)) {
             "$cleanT $normA"
         } else {
@@ -93,13 +93,23 @@ object KuwoCarAudioEngine {
 
         var candidateItems = searchApi(keyword1)
 
-        // 检查第一阶段候选池是否已包含母带或无损；若未包含且原曲有歌手名，进行纯歌名降级搜索补全
-        val hasHighQuality = candidateItems.any { item ->
+        // 检查第一阶段候选池中是否已有与目标主歌名相符的高品质结果；
+        // 避免无关曲目带母带标记导致跳过纯歌名补全搜索。
+        val cleanTLower = cleanT.lowercase()
+        val hasMatchedHighQuality = candidateItems.any { item ->
+            val candTitle = item.optString("SONGNAME")
+                .ifEmpty { item.optString("NAME") }
+                .ifEmpty { item.optString("FSONGNAME").trim('"') }
+                .ifEmpty { item.optString("name") }
+            val candCore = extractCoreTitle(candTitle).lowercase()
+            val titleHit = cleanTLower.isNotBlank() &&
+                (candCore == cleanTLower || candCore.contains(cleanTLower) || cleanTLower.contains(candCore))
+            if (!titleHit) return@any false
             val info = item.optString("N_MINFO").ifEmpty { item.optString("MINFO") }
             info.contains("bitrate:20900") || info.contains("bitrate:2000") || info.contains("bitrate:4000")
         }
 
-        if (!hasHighQuality && cleanT.isNotBlank()) {
+        if (!hasMatchedHighQuality && cleanT.isNotBlank() && keyword1 != cleanT) {
             val fallbackItems = searchApi(cleanT)
             if (fallbackItems.isNotEmpty()) {
                 val existingRids = candidateItems.map { it.optString("MUSICRID").ifBlank { it.optString("id") } }.toSet()
@@ -474,9 +484,71 @@ object KuwoCarAudioEngine {
         }
     }
 
+    private enum class VersionTag {
+        LIVE,
+        INSTRUMENTAL,
+        DJ_REMIX,
+        COVER,
+        SPEED,
+        ACOUSTIC,
+    }
+
+    private val pairedBracketsRegex = Regex("""\s*[\(\[\{（【].*?[\]\)\}】]""")
+    private val unclosedTrailingBracketRegex = Regex("""\s*[\(\[\{（【].*$""")
+    private val dashSubtitleRegex = Regex(
+        """(?i)\s*[-–—~|]\s*(《.*|.*?(电视剧|电影|网剧|动画|动漫|番剧|游戏|综艺|纪录片|主题曲|片头曲|片尾曲|插曲|推广曲|宣传曲|概念曲|印象曲|人物曲|原声|ost|feat\.?|ft\.?|remaster|重制版|完整版).*)$"""
+    )
+    private val trailingBookSubtitleRegex = Regex(
+        """(?i)\s*《[^》]*》?\s*(电视剧|电影|网剧|动画|动漫|游戏|综艺|主题曲|片头曲|片尾曲|插曲|推广曲|宣传曲|原声|ost)?.*$"""
+    )
+    private val versionLiveRegex = Regex("""(?i)(\blive\b|现场版?|演唱会|音乐节|unplugged|演唱会现场)""")
+    private val versionInstrumentalRegex = Regex("""(?i)(伴奏|纯音乐|\binstrumental\b|\boff\s*vocal\b|\binst\.?\b|消音版|无人声)""")
+    private val versionDjRemixRegex = Regex("""(?i)(\bdj\b|\bremix\b|串烧|蹦迪|慢摇|电音版|舞曲版|mashup)""")
+    private val versionCoverRegex = Regex("""(?i)(翻唱|\bcover\b)""")
+    private val versionSpeedRegex = Regex("""(?i)(加速版?|降调版?|变速版?|0\.\d+x|1\.\d+x|\bnightcore\b|\bslowed\b|\bsped\s*up\b)""")
+    private val versionAcousticRegex = Regex("""(?i)(吉他版|钢琴版|清唱|阿卡贝拉|\bacoustic\b|口琴版|古筝版|二胡版|笛子版)""")
+
+    /**
+     * 提取纯净主歌名：剥离括号、连字符后的影视/综艺/OST 副标题以及尾部书名号说明，
+     * 解决如「遗失的美好-《海豚湾恋人》电视剧片尾曲」与「遗失的美好」无法精确对齐的问题。
+     */
+    private fun extractCoreTitle(input: String): String {
+        val trimmed = input.trim()
+        if (trimmed.isBlank()) return ""
+        var core = trimmed
+            .replace(pairedBracketsRegex, "")
+            .replace(unclosedTrailingBracketRegex, "")
+            .replace(dashSubtitleRegex, "")
+            .replace(trailingBookSubtitleRegex, "")
+            .replace(Regex("""[-–—_/\\|&]+$"""), "")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        // 若整首歌名本身就是书名号或被全部剥空，回退到基础清洗结果
+        if (core.isBlank()) {
+            core = cleanKeyword(trimmed)
+        }
+        return core
+    }
+
+    /**
+     * 从清洗前的完整歌名中提取会改变音频内容的版本特征标签，用于对称校验，防止伴奏/Live/DJ 误匹配原版。
+     */
+    private fun extractVersionTags(rawTitle: String): Set<VersionTag> {
+        if (rawTitle.isBlank()) return emptySet()
+        val tags = HashSet<VersionTag>(2)
+        if (versionLiveRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.LIVE)
+        if (versionInstrumentalRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.INSTRUMENTAL)
+        if (versionDjRemixRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.DJ_REMIX)
+        if (versionCoverRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.COVER)
+        if (versionSpeedRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.SPEED)
+        if (versionAcousticRegex.containsMatchIn(rawTitle)) tags.add(VersionTag.ACOUSTIC)
+        return tags
+    }
+
     private fun cleanKeyword(input: String): String {
-        return input.replace(Regex("""\s*[\(\[\{（【].*?[\]\)\}】]"""), "")
+        return input.replace(pairedBracketsRegex, "")
             .replace(Regex("""[-_/\\|&]"""), " ")
+            .replace(Regex("""\s+"""), " ")
             .trim()
     }
 
@@ -499,19 +571,46 @@ object KuwoCarAudioEngine {
         qualities: List<KuwoQualityOption>
     ): Int {
         var score = 0
-        val sT = cleanKeyword(srcTitle).lowercase()
-        val cT = cleanKeyword(candTitle).lowercase()
+        val sT = extractCoreTitle(srcTitle).lowercase()
+        val cT = extractCoreTitle(candTitle).lowercase()
         val sA = normalizeArtist(cleanKeyword(srcArtist))
         val cA = normalizeArtist(cleanKeyword(candArtist))
 
-        // 歌名匹配
-        if (sT == cT) {
-            score += 50
-        } else if (cT.contains(sT) || sT.contains(cT)) {
-            score += 30
+        // 1. 纯净主歌名匹配（已剥离 -《剧名》/括号等无害附加信息）
+        var titleMatched = false
+        if (sT.isNotBlank() && cT.isNotBlank()) {
+            if (sT == cT) {
+                score += 55
+                titleMatched = true
+            } else if (cT.contains(sT) || sT.contains(cT)) {
+                score += 32
+                titleMatched = true
+            }
         }
 
-        // 歌手匹配（兼容多歌手拆分）
+        // 2. 版本特征对称校验：防止 Live / 伴奏 / DJ / 翻唱 / 加速版靠高音质挤掉原版
+        val srcTags = extractVersionTags(srcTitle)
+        val candTags = extractVersionTags(candTitle)
+        var hasVersionConflict = false
+        for (tag in candTags) {
+            if (tag !in srcTags) {
+                hasVersionConflict = true
+                score -= when (tag) {
+                    VersionTag.INSTRUMENTAL, VersionTag.DJ_REMIX, VersionTag.COVER, VersionTag.SPEED -> 60
+                    VersionTag.LIVE, VersionTag.ACOUSTIC -> 45
+                }
+            }
+        }
+        for (tag in srcTags) {
+            if (tag in candTags) {
+                score += 20
+            } else {
+                hasVersionConflict = true
+                score -= 25
+            }
+        }
+
+        // 3. 歌手匹配（兼容多歌手拆分）
         if (sA.isNotBlank() && cA.isNotBlank()) {
             if (sA == cA) {
                 score += 35
@@ -526,7 +625,8 @@ object KuwoCarAudioEngine {
             }
         }
 
-        // 时长精准对齐校验
+        // 4. 时长精准对齐校验
+        var durationSeverelyOff = false
         if (expectedDurMs > 0L && candDurMs > 0L) {
             val diff = kotlin.math.abs(expectedDurMs - candDurMs)
             if (diff <= 3500L) {
@@ -535,17 +635,21 @@ object KuwoCarAudioEngine {
                 score += 15
             } else if (diff > 25000L) {
                 score -= 35
+                durationSeverelyOff = true
             }
         }
 
-        // 品质加权
+        // 5. 品质加权：仅在主歌名命中、版本无冲突且时长未严重偏离时才加分，避免低相关母带逆袭
         val hasMaster = qualities.any { it.bitrate == 20900 }
         val hasFlac = qualities.any { it.bitrate == 2000 || it.bitrate == 4000 }
-        if (hasMaster) {
-            score += 40
-        } else if (hasFlac) {
-            score += 25
-        } else if (qualities.isNotEmpty() && qualities.all { it.bitrate <= 128 }) {
+        if (titleMatched && !hasVersionConflict && !durationSeverelyOff) {
+            if (hasMaster) {
+                score += 40
+            } else if (hasFlac) {
+                score += 25
+            }
+        }
+        if (qualities.isNotEmpty() && qualities.all { it.bitrate <= 128 }) {
             score -= 20
         }
 

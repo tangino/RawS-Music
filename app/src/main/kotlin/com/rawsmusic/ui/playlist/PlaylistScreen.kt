@@ -420,24 +420,31 @@ fun PlaylistScreen(
         }
     }
 
-    // 处理在线歌单导入为本地
+    // 处理收藏的在线歌单导出为本地歌单
     val handleImportOnlineToLocal: (OnlinePlaylistFavoriteEntity) -> Unit = { op ->
         scope.launch {
-            AppNoticeBus.post("正在导入为本地歌单...", AppNoticeIcon.PLAYLIST)
+            AppNoticeBus.post("正在导出为本地歌单...", AppNoticeIcon.PLAYLIST)
             val platform = OnlinePlatform.fromId(op.platform)
             if (platform != null) {
                 val repo = OnlineMusicRepository.getInstance()
                 repo.getPlaylistDetail(op.remoteId, platform).onSuccess { (detail, songs) ->
-                    val pl = playlistStore.createPlaylist(detail.title.ifBlank { op.title })
+                    val baseTitle = detail.title.ifBlank { op.title }.ifBlank { "在线歌单" }
+                    var pl = playlistStore.createPlaylist(baseTitle)
+                    if (pl == null) {
+                        for (suffix in 2..20) {
+                            pl = playlistStore.createPlaylist("$baseTitle ($suffix)")
+                            if (pl != null) break
+                        }
+                    }
                     if (pl != null) {
                         val playlistSongs = songs.map { OnlineSourceMediaMapper.toUserPlaylistSong(it) }
                         playlistStore.addOnlineSongsToPlaylistAndReportAddedKeys(pl.id, playlistSongs)
-                        AppNoticeBus.post("已成功导入为本地歌单「${pl.name}」", AppNoticeIcon.PLAYLIST)
+                        AppNoticeBus.post("已成功导出为本地歌单「${pl.name}」", AppNoticeIcon.PLAYLIST)
                     } else {
                         AppNoticeBus.error("创建本地歌单失败")
                     }
                 }.onFailure {
-                    AppNoticeBus.error("导入歌单失败: ${it.localizedMessage}")
+                    AppNoticeBus.error("导出歌单失败: ${it.localizedMessage}")
                 }
             }
         }
@@ -977,6 +984,7 @@ fun PlaylistScreen(
         onGroupCreated = { newName -> selectedPlaylistGroup = "GRP:$newName" },
         onRenamePlaylist = { renameTarget = it },
         onDeletePlaylist = { deleteTarget = it },
+        onExportOnlineToLocal = handleImportOnlineToLocal,
     )
 
     // 新建歌单弹窗

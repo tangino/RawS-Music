@@ -2790,4 +2790,5 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="playlist_added_to_queue_notice">Added %2$d songs from "%1$s" to queue</string>
     <string name="playlist_already_in_queue_notice">All songs from "%1$s" are already in queue</string>
     <string name="playlist_started_and_queued_notice">Queued and playing "%1$s" (%2$d songs)</string>
+    <string name="playlist_export_to_local_action">Export to local playlist</string>
 </resources>

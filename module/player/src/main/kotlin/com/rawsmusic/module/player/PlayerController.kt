@@ -1965,6 +1965,20 @@ class PlayerController private constructor(context: Context) {
                         }
                     }
                 }
+                if (state == FfmpegAudioPlayer.State.STOPPED) {
+                    val onlineStatus = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value.status
+                    if (onlineStatus == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving ||
+                        onlineStatus == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing
+                    ) {
+                        // 切下一首网络曲目寻源/缓冲期间，旧音轨 stop() 产生的 STOPPED 只是切歌过渡，
+                        // 严禁把公开状态刷成 STOPPED，防止 PlayerService 误降级前台服务并在后台 60 秒后被系统回收。
+                        AppLogger.i(TAG, "Ignoring transitional backend STOPPED while online song is $onlineStatus")
+                        if (_playState.value != PlayState.PREPARING) {
+                            smForceTransition(PlayState.PREPARING, "online_switch_keep_preparing")
+                        }
+                        return@launch
+                    }
+                }
                 if (state == FfmpegAudioPlayer.State.ERROR) {
                     if (transportTransitioning || elapsedSinceSwitch < 2_500L) {
                         AppLogger.w(TAG, "Ignoring transient ERROR during/shortly after track switch: elapsed=${elapsedSinceSwitch}ms")

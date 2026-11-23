@@ -119,6 +119,7 @@ internal fun PlaylistGroupDialogHost(
     onGroupCreated: ((String) -> Unit)? = null,
     onRenamePlaylist: (UserPlaylist) -> Unit,
     onDeletePlaylist: (UserPlaylist) -> Unit,
+    onExportOnlineToLocal: ((OnlinePlaylistFavoriteEntity) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -322,6 +323,12 @@ internal fun PlaylistGroupDialogHost(
         OnlinePlaylistActionsDialog(
             playlistName = favorite.title,
             onDismiss = { state.onlinePlaylistActionsTarget = null },
+            onExportToLocal = onExportOnlineToLocal?.let { exportAction ->
+                {
+                    state.onlinePlaylistActionsTarget = null
+                    exportAction(favorite)
+                }
+            },
             onMoveToGroup = {
                 state.onlinePlaylistActionsTarget = null
                 state.moveOnlineToGroupTarget = favorite
@@ -392,11 +399,12 @@ internal fun PlaylistGroupDialogHost(
     }
 }
 
-/** 在线歌单卡的长按 / more 菜单：移动到分组、取消收藏。 */
+/** 在线歌单卡的长按 / more 菜单：导出为本地歌单、移动到分组、取消收藏。 */
 @Composable
 internal fun OnlinePlaylistActionsDialog(
     playlistName: String,
     onDismiss: () -> Unit,
+    onExportToLocal: (() -> Unit)? = null,
     onMoveToGroup: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -412,6 +420,13 @@ internal fun OnlinePlaylistActionsDialog(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(DIALOG_ITEM_GAP),
         ) {
+            if (onExportToLocal != null) {
+                TextButton(
+                    text = stringResource(R.string.playlist_export_to_local_action),
+                    onClick = onExportToLocal,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             TextButton(
                 text = stringResource(R.string.playlist_group_move_title),
                 onClick = onMoveToGroup,

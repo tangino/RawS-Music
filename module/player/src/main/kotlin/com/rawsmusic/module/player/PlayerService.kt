@@ -2972,6 +2972,14 @@ class PlayerService : LifecycleService() {
      */
     private fun shouldOwnPlaybackForeground(): Boolean {
         if (!hasPublishedMediaIdentity()) return false
+        val onlineStatus = com.rawsmusic.module.data.source.playback.MusicSourcePlaybackController.snapshot.value.status
+        val onlineActiveOrResolving = onlineStatus == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving ||
+            onlineStatus == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing ||
+            onlineStatus == com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing
+        // 后台自动切下一首网络歌曲期间，旧音轨 stop() 会短暂把底层状态刷成 STOPPED，
+        // 此时在线控制器已进入 Resolving/Preparing 寻源缓冲阶段；若立刻 stopForeground() 降级，
+        // 1 秒后起播时再调 startForeground() 会被 Android 12+ 后台限制策略拒绝，导致 60 秒后被系统强杀。
+        if (onlineActiveOrResolving) return true
         if (currentPlayState == PlayState.STOPPED) return false
         val controllerState = playerController.playState.value
         val backendState = playerController.ffmpegPlayerRef.state
