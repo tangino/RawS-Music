@@ -44,6 +44,7 @@ import com.rawsmusic.core.common.model.AudioFile
 import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.common.model.toAudioFile
+import com.rawsmusic.core.common.prefs.PlaylistAutoDownloadStore
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
@@ -134,6 +135,9 @@ fun OfflineSavePlaylistDialog(
     val downloadDir = remember {
         MusicSourceDownloadController.publicDownloadDirectory().absolutePath
     }
+    val autoDownloadKeys by PlaylistAutoDownloadStore.enabledKeys.collectAsState()
+    val autoDownloadKey = remember(playlist.id) { PlaylistAutoDownloadStore.localKey(playlist.id) }
+    val autoDownloadEnabled = autoDownloadKey in autoDownloadKeys
 
     ActivityOverlayBackOwner(active = true)
     WindowDialog(
@@ -147,6 +151,22 @@ fun OfflineSavePlaylistDialog(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // 歌单选项：播完自动保存开关
+            PlaylistAutoDownloadToggleRow(
+                checked = autoDownloadEnabled,
+                onCheckedChange = { enabled ->
+                    PlaylistAutoDownloadStore.setEnabled(autoDownloadKey, enabled)
+                    AppNoticeBus.post(
+                        message = context.getString(
+                            if (enabled) R.string.playlist_auto_download_enabled_notice
+                            else R.string.playlist_auto_download_disabled_notice,
+                            playlist.name,
+                        ),
+                        icon = AppNoticeIcon.DOWNLOAD,
+                    )
+                },
+            )
+
             // 统计与全选控制条
             Row(
                 modifier = Modifier

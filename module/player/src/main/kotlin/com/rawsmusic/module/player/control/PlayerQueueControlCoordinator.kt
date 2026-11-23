@@ -595,6 +595,48 @@ internal class PlayerQueueControlCoordinator(
         addToPriorityQueue(song)
     }
 
+    /**
+     * 将一批歌曲（例如整张本地歌单）批量追加到当前主播放队列末尾（自动去重）。
+     * 不会打断当前正在播放的曲目，并在随机模式下自动重建随机序列。
+     *
+     * @return 实际新增到队列中的曲目数量。
+     */
+    fun appendSongsToQueue(songs: List<AudioFile>): Int {
+        if (songs.isEmpty()) return 0
+        val previous = callbacks.currentQueue()
+        val seenIdentities = HashSet<QueueIdentity>(previous.songs.size + songs.size)
+        previous.songs.forEach { seenIdentities.add(it.queueIdentity()) }
+        val toAppend = ArrayList<AudioFile>(songs.size)
+        for (song in songs) {
+            if (seenIdentities.add(song.queueIdentity())) {
+                toAppend.add(song)
+            }
+        }
+        if (toAppend.isEmpty()) return 0
+
+        val mergedSongs = ArrayList<AudioFile>(previous.songs.size + toAppend.size).apply {
+            addAll(previous.songs)
+            addAll(toAppend)
+        }
+        val mergedEntryIds = com.rawsmusic.module.player.QueueEntryIdGenerator.normalize(
+            mergedSongs.size,
+            previous.entryIds,
+        )
+        val newIndex = if (previous.songs.isEmpty()) 0 else previous.currentIndex.coerceIn(0, mergedSongs.lastIndex)
+        callbacks.updateQueue(
+            previous.copy(
+                songs = mergedSongs,
+                currentIndex = newIndex,
+                entryIds = mergedEntryIds,
+            )
+        )
+        if (mode.isShuffleEnabled() && mergedSongs.size > 1) {
+            mode.rebuildShuffleForCurrentQueue()
+        }
+        callbacks.saveState()
+        return toAppend.size
+    }
+
     fun removeFromQueue(index: Int) {
         val previous = callbacks.currentQueue()
         val songs = previous.songs.toMutableList()

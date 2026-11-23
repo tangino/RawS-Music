@@ -1747,10 +1747,10 @@ private fun FavoritePlaylistItemCard(
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_play),
-                    contentDescription = "播放全部",
+                    painter = painterResource(R.drawable.ic_play_list_add_fill),
+                    contentDescription = stringResource(R.string.playlist_action_add_to_queue),
                     tint = Color(0xFFFF3366),
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
@@ -1853,10 +1853,10 @@ private fun DislikedPlaylistItemCard(
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_play),
-                    contentDescription = "播放全部",
+                    painter = painterResource(R.drawable.ic_play_list_add_fill),
+                    contentDescription = stringResource(R.string.playlist_action_add_to_queue),
                     tint = Color(0xFFE57373),
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
@@ -2015,16 +2015,16 @@ private fun LocalPlaylistItemCard(
             }
         }
 
-        // 快捷播放按钮
+        // 添加到播放队列按钮（仅本地歌单）
         IconButton(
             onClick = onPlay,
             modifier = Modifier.size(36.dp)
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_play),
-                contentDescription = "播放",
+                painter = painterResource(R.drawable.ic_play_list_add_fill),
+                contentDescription = stringResource(R.string.playlist_action_add_to_queue),
                 tint = colors.primary,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(22.dp)
             )
         }
 

@@ -7798,6 +7798,34 @@ class PlayerController private constructor(context: Context) {
         queueControlCoordinator.addToPriorityQueue(song)
     }
 
+    /**
+     * 将整张本地歌单的歌曲追加到当前播放队列（支持连续添加多个歌单，自动去重）。
+     * 若当前播放队列为空，则直接以该歌单启动播放。
+     */
+    fun appendPlaylistToQueue(
+        songs: List<AudioFile>,
+        onResult: ((addedCount: Int, startedPlayback: Boolean) -> Unit)? = null,
+    ) {
+        if (songs.isEmpty()) {
+            onResult?.invoke(0, false)
+            return
+        }
+        submitQueueMutation("APPEND_PLAYLIST_QUEUE") {
+            val existing = _queue.value.songs
+            if (existing.isEmpty()) {
+                val first = songs.first()
+                play(first, songs, 0)
+                onResult?.invoke(songs.size, true)
+            } else {
+                val added = queueControlCoordinator.appendSongsToQueue(songs)
+                if (added > 0) {
+                    gaplessControlCoordinator.prepareNextSong()
+                }
+                onResult?.invoke(added, false)
+            }
+        }
+    }
+
     fun getPriorityQueue(): List<AudioFile> = queueControlCoordinator.priorityQueueSnapshot()
 
     fun clearPriorityQueue() = submitQueueMutation("CLEAR_PRIORITY") {

@@ -182,6 +182,69 @@ object MusicSourceDownloadController {
         return task.id
     }
 
+    /**
+     * 歌曲播放完自动保存入口：目录、音质、元数据嵌入与曲库扫描完全复用手动下载管线 [enqueue]，
+     * 并在入队前检查是否已有活跃任务或目标下载目录中已存在有效同名音频文件，避免重复下载。
+     *
+     * @return 新建/已存在的活跃任务 ID；若已保存于本地下载目录则跳过并返回 null。
+     */
+    fun enqueueAutoSaveIfNeeded(
+        context: Context,
+        item: RawSourceMediaItem,
+        quality: RawSourceQuality = RawSourceQuality.fromKey(AppPreferences.Download.defaultQuality),
+    ): String? {
+        if (item.mediaType != RawSourceMediaType.Music) return null
+        initialize(context)
+
+        val existingTasks = mutableTasks.value
+        val activeTask = existingTasks.firstOrNull {
+            it.item.stableIdentity == item.stableIdentity && it.isActive
+        }
+        if (activeTask != null) {
+            AppLogger.d("MusicSourceDownload", "AutoSave skipped (already active): ${item.title}")
+            return null
+        }
+
+        val dir = publicDownloadDirectory()
+        val completedTask = existingTasks.firstOrNull {
+            it.item.stableIdentity == item.stableIdentity && it.status == MusicSourceDownloadStatus.Completed
+        }
+        if (completedTask != null) {
+            val completedFile = completedTask.localUri
+                .takeIf(String::isNotBlank)
+                ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                ?.takeIf { it.scheme.equals("file", ignoreCase = true) }
+                ?.path
+                ?.let(::File)
+                ?: completedTask.fileName.takeIf(String::isNotBlank)?.let { File(dir, it) }
+            if (completedFile != null && isValidLocalAudioFile(completedFile)) {
+                AppLogger.d("MusicSourceDownload", "AutoSave skipped (completed file exists): ${completedFile.name}")
+                return null
+            }
+        }
+
+        if (hasExistingDownloadedFile(dir, item)) {
+            AppLogger.d("MusicSourceDownload", "AutoSave skipped (matching file exists in download dir): ${item.title}")
+            return null
+        }
+
+        AppLogger.i("MusicSourceDownload", "AutoSave on complete: enqueue '${item.title}' quality=$quality dir=${dir.absolutePath}")
+        return enqueue(context, item, quality)
+    }
+
+    private fun hasExistingDownloadedFile(directory: File, item: RawSourceMediaItem): Boolean {
+        if (!directory.isDirectory) return false
+        val artist = item.artists.joinToString(" & ").ifBlank { "" }
+        val title = item.title.ifBlank { "未知曲目" }
+        val rawBase = if (artist.isNotBlank()) "$artist - $title" else title
+        val base = sanitizeFileName(rawBase)
+        val extensions = listOf("flac", "mp3", "m4a", "mp4", "aac", "ogg", "opus", "wav")
+        return extensions.any { ext ->
+            val candidate = File(directory, "$base.$ext")
+            candidate.isFile && isValidLocalAudioFile(candidate)
+        }
+    }
+
     fun retry(context: Context, taskId: String) {
         initialize(context)
         val task = mutableTasks.value.firstOrNull { it.id == taskId } ?: return

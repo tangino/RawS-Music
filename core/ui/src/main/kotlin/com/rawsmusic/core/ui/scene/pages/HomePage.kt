@@ -108,6 +108,7 @@ import com.rawsmusic.core.ui.scene.LocalReferenceLibraryFullScenePreflight
 import com.rawsmusic.core.ui.scene.LocalRetainedSceneItemTransform
 import com.rawsmusic.core.ui.scene.LocalReferenceRetainedLibraryPopulation
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.scene.RawWindowWidthClass
 import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.labelRes
 import com.rawsmusic.core.ui.scene.HomeFullCoverSourceAnchor
@@ -548,6 +549,7 @@ private fun HomePageContent(
     sceneMotionFrozen: Boolean,
 ) {
     val windowLayoutProfile = LocalRawWindowLayoutProfile.current
+    val isLargeScreenHome = windowLayoutProfile.widthClass.ordinal >= RawWindowWidthClass.Medium.ordinal
     val homeCardColumns = windowLayoutProfile.homeCardColumns
     val homeCardRowMaxWidth = (windowLayoutProfile.homeCardContentMaxWidth - 32.dp)
         .coerceAtLeast(1.dp)
@@ -592,7 +594,7 @@ private fun HomePageContent(
             .padding(horizontal = 16.dp)
             .verticalScroll(listState)
             .bottomChromeNestedScroll(),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
+        verticalArrangement = Arrangement.spacedBy(if (isLargeScreenHome) 12.dp else 22.dp),
     ) {
         Column(
             modifier = Modifier
@@ -2065,6 +2067,7 @@ internal fun rememberHomeVirtualListProviderSpec(
         mostPlayed.associate { song -> song.id to songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0) }
     }
     val windowLayoutProfile = LocalRawWindowLayoutProfile.current
+    val isLargeScreenHome = windowLayoutProfile.widthClass.ordinal >= RawWindowWidthClass.Medium.ordinal
     val homeCardColumns = windowLayoutProfile.homeCardColumns
     val homeCardRowMaxWidth = (windowLayoutProfile.homeCardContentMaxWidth - 32.dp)
         .coerceAtLeast(1.dp)
@@ -2108,23 +2111,28 @@ internal fun rememberHomeVirtualListProviderSpec(
         headerOptions.carouselVisible,
         headerOptions.carouselLyricVisible,
         headerOptions.carouselStyle,
+        isLargeScreenHome,
         fontScale,
     ) {
         // Keep the heterogeneous HOME hero holder equal to the content it actually composes. The
         // header/search area plus the original ~22dp section gap is 182dp; the carousel contributes
         // its real runtime height only while enabled, so hiding it removes the blank 360dp reserve.
+        // 大屏幕布局下收紧顶部与封面墙下方冗余留白，使每日推荐卡片上移、避免与底部播放/导航栏重叠。
         val searchBarHeight = if (headerOptions.searchBarVisible) 70.dp else 0.dp
-        val headerHeight = 112.dp + searchBarHeight + if (headerOptions.weatherVisible) 64.dp else 0.dp
+        val baseHeaderHeight = if (isLargeScreenHome) 64.dp else 112.dp
+        val carouselTopGap = if (isLargeScreenHome) 6.dp else 20.dp
+        val headerHeight = baseHeaderHeight + searchBarHeight + if (headerOptions.weatherVisible) 64.dp else 0.dp
         if (!headerOptions.carouselVisible) {
             headerHeight
         } else {
-            headerHeight + 20.dp + homeArtworkCarouselHeight(
+            headerHeight + carouselTopGap + homeArtworkCarouselHeight(
                 style = headerOptions.carouselStyle,
                 showLyrics = headerOptions.carouselLyricVisible,
                 fontScale = fontScale,
             )
         }
     }
+    val dailyRecommendHolderHeight = if (isLargeScreenHome) 160.dp else 164.dp
 
     val isDailyRecommendVisible = homeCardLayoutState.isVisible(NavScene.DAILY_RECOMMEND)
     val items = remember(mostPlayed, libraryRows.size, toolRows.size, headerOptions.mostPlayedVisible, isDailyRecommendVisible) {
@@ -2167,6 +2175,8 @@ internal fun rememberHomeVirtualListProviderSpec(
         mostPlayedContentHeight,
         mostPlayedHolderHeight,
         heroHeight,
+        dailyRecommendHolderHeight,
+        isLargeScreenHome,
         mostPlayedById,
         mostPlayedIndex,
         headerOptions.carouselVisible,
@@ -2183,7 +2193,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                 val kind = song.encodingFormat.removePrefix(HOME_VIRTUAL_LIST_ENCODING_PREFIX)
                 when {
                     kind == HOME_HOLDER_HERO -> heroHeight
-                    kind == HOME_HOLDER_DAILY_RECOMMEND -> 164.dp
+                    kind == HOME_HOLDER_DAILY_RECOMMEND -> dailyRecommendHolderHeight
                     kind == HOME_HOLDER_LIBRARY_HEADER -> sectionHeaderHeight
                     kind.startsWith("$HOME_HOLDER_LIBRARY_ROW:") -> cardRowHeight
                     kind == HOME_HOLDER_MOST_HEADER -> sectionHeaderHeight
@@ -2231,7 +2241,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                                 )
                             }
                             if (headerOptions.carouselVisible) {
-                                Spacer(Modifier.height(20.dp))
+                                Spacer(Modifier.height(if (isLargeScreenHome) 6.dp else 20.dp))
                                 HomeArtworkCarousel(
                                     songs = latestCarouselSongs,
                                     currentSong = latestCarouselCurrentSong,
@@ -2268,7 +2278,7 @@ internal fun rememberHomeVirtualListProviderSpec(
                             modifier = modifier
                                 .fillMaxSize()
                                 .padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.Center,
+                            contentAlignment = if (isLargeScreenHome) Alignment.TopCenter else Alignment.Center,
                         ) {
                             DailyRecommendCard(
                                 dailyData = dailyRecommendData,

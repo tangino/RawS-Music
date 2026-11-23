@@ -9,7 +9,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import com.rawsmusic.core.common.prefs.PlaylistAutoDownloadStore
 import com.rawsmusic.core.common.source.RawResolvedAudioSource
+import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.OnlinePlaybackDiagnostics
 import com.rawsmusic.core.common.model.PlayMode
@@ -1190,6 +1193,13 @@ object MusicSourcePlaybackController {
                 if (completionHandledGeneration == generation) return
                 completionHandledGeneration = generation
                 prepared = false
+                val completedPos = maxOf(state.positionMs, backendSnapshot.positionMs)
+                val completedDur = duration.coerceAtLeast(state.durationMs)
+                maybeAutoSaveOnTrackCompleted(
+                    item = state.currentItem,
+                    positionMs = completedPos,
+                    durationMs = completedDur,
+                )
                 // 通过 PlayerController 宿主播放时，播放完成由 PlayerController 统一自动切歌推进（遵循全局循环/随机模式），
                 // 严禁在此处重复触发 next(automatic = true) 导致双跳竞争。
                 mutableSnapshot.value = state.copy(
@@ -1392,6 +1402,15 @@ object MusicSourcePlaybackController {
                 if (generation != generations.get() || mediaPlayer !== completedPlayer) return@setOnCompletionListener
                 val state = mutableSnapshot.value
                 prepared = false
+                val completedPos = maxOf(
+                    state.positionMs,
+                    runCatching { completedPlayer.currentPosition.toLong() }.getOrDefault(0L),
+                )
+                maybeAutoSaveOnTrackCompleted(
+                    item = state.currentItem,
+                    positionMs = completedPos,
+                    durationMs = state.durationMs,
+                )
                 if (state.canGoNext) {
                     next(automatic = true)
                 } else {
@@ -1550,6 +1569,41 @@ object MusicSourcePlaybackController {
             runCatching { manager.abandonAudioFocus(focusListener) }
         }
         resumeOnFocusGain = false
+    }
+
+    /**
+     * 歌曲自然播放完成后，若当前播放歌单开启了「播完自动保存（下载）」选项，
+     * 则自动通过 [MusicSourceDownloadController] 将该网络歌曲下载保存到与手动下载一致的目录。
+     */
+    private fun maybeAutoSaveOnTrackCompleted(
+        item: RawSourceMediaItem?,
+        positionMs: Long,
+        durationMs: Long,
+    ) {
+        if (item == null || item.mediaType != RawSourceMediaType.Music) return
+        if (!PlaylistAutoDownloadStore.isEnabledForCurrentPlaylist()) return
+        // 避免中途网络断流提前 EOF 触发误下载：需达到 80% 进度或距结尾不足 15 秒（无时长元数据时放行）
+        val reachedTail = durationMs <= 0L ||
+            positionMs >= (durationMs * 0.8f).toLong() ||
+            (durationMs >= 5_000L && positionMs >= durationMs - 15_000L)
+        if (!reachedTail) {
+            AppLogger.d(TAG, "AutoSave skipped (premature completion): title=${item.title} pos=$positionMs dur=$durationMs")
+            return
+        }
+        val context = applicationContext ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val taskId = MusicSourceDownloadController.enqueueAutoSaveIfNeeded(context, item)
+                if (taskId != null) {
+                    AppNoticeBus.post(
+                        message = "正在自动保存「${item.title}」",
+                        icon = AppNoticeIcon.DOWNLOAD,
+                    )
+                }
+            }.onFailure { error ->
+                AppLogger.w(TAG, "AutoSave on complete failed for '${item.title}': ${error.message}")
+            }
+        }
     }
 
     private fun loadPreferredQuality(): RawSourceQuality = runCatching {

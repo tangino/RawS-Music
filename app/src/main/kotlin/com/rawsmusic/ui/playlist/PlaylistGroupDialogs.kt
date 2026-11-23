@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawsmusic.R
 import com.rawsmusic.core.common.model.UserPlaylist
+import com.rawsmusic.core.common.model.isOnlineEntry
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
 import com.rawsmusic.core.ui.widget.ActivityOverlayBackOwner
 import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
@@ -57,10 +59,13 @@ import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import kotlinx.coroutines.launch
+import com.rawsmusic.core.common.prefs.PlaylistAutoDownloadStore
 import com.rawsmusic.core.common.ui.AppNoticeBus
+import com.rawsmusic.core.common.ui.AppNoticeIcon
 import com.rawsmusic.module.data.db.entity.OnlinePlaylistFavoriteEntity
 import com.rawsmusic.module.online.store.OnlinePlaylistFavoriteStore
 
@@ -117,6 +122,7 @@ internal fun PlaylistGroupDialogHost(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val autoDownloadKeys by PlaylistAutoDownloadStore.enabledKeys.collectAsState()
 
     if (state.manageGroupsDialog) {
         PlaylistGroupsManagementDialog(
@@ -245,8 +251,24 @@ internal fun PlaylistGroupDialogHost(
     }
 
     state.playlistActionsTarget?.let { playlist ->
+        val showAutoDownload = playlist.songs.any { it.isOnlineEntry() }
+        val autoDownloadKey = PlaylistAutoDownloadStore.localKey(playlist.id)
+        val autoDownloadEnabled = autoDownloadKey in autoDownloadKeys
         PlaylistActionsDialog(
             playlistName = playlist.name,
+            showAutoDownload = showAutoDownload,
+            autoDownloadEnabled = autoDownloadEnabled,
+            onToggleAutoDownload = { enabled ->
+                PlaylistAutoDownloadStore.setEnabled(autoDownloadKey, enabled)
+                AppNoticeBus.post(
+                    message = context.getString(
+                        if (enabled) R.string.playlist_auto_download_enabled_notice
+                        else R.string.playlist_auto_download_disabled_notice,
+                        playlist.name,
+                    ),
+                    icon = AppNoticeIcon.DOWNLOAD,
+                )
+            },
             onDismiss = { state.playlistActionsTarget = null },
             onRename = {
                 state.playlistActionsTarget = null
@@ -401,6 +423,47 @@ internal fun OnlinePlaylistActionsDialog(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+/** 歌单选项菜单与离线保存弹窗共用的「播完自动保存」开关行。 */
+@Composable
+internal fun PlaylistAutoDownloadToggleRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = themeColors()
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.onSurface.copy(alpha = 0.05f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.playlist_auto_download_title),
+                color = colors.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = appFontFamily(),
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.playlist_auto_download_summary),
+                color = colors.secondaryText,
+                fontSize = 11.sp,
+                fontFamily = appFontFamily(),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 
@@ -600,6 +663,9 @@ internal fun PlaylistMoveToGroupDialog(
 @Composable
 internal fun PlaylistActionsDialog(
     playlistName: String,
+    showAutoDownload: Boolean,
+    autoDownloadEnabled: Boolean,
+    onToggleAutoDownload: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onMoveToGroup: () -> Unit,
@@ -618,6 +684,12 @@ internal fun PlaylistActionsDialog(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(DIALOG_ITEM_GAP),
         ) {
+            if (showAutoDownload) {
+                PlaylistAutoDownloadToggleRow(
+                    checked = autoDownloadEnabled,
+                    onCheckedChange = onToggleAutoDownload,
+                )
+            }
             TextButton(
                 text = stringResource(R.string.playlist_rename),
                 onClick = onRename,

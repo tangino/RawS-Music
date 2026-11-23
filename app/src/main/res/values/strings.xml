@@ -2782,4 +2782,12 @@ When disabled, the system tries to output at the original sample rate; some devi
     <string name="download_dialog_all_cached">All online songs in this playlist already exist locally</string>
     <string name="download_queued_notice">Added %1$d songs to download queue</string>
     <string name="download_already_local">Already Local</string>
+    <string name="playlist_auto_download_title">Auto-save after playback</string>
+    <string name="playlist_auto_download_summary">Download finished online songs to the manual download folder</string>
+    <string name="playlist_auto_download_enabled_notice">Auto-save enabled for "%1$s"</string>
+    <string name="playlist_auto_download_disabled_notice">Auto-save disabled for "%1$s"</string>
+    <string name="playlist_action_add_to_queue">Add to playback queue</string>
+    <string name="playlist_added_to_queue_notice">Added %2$d songs from "%1$s" to queue</string>
+    <string name="playlist_already_in_queue_notice">All songs from "%1$s" are already in queue</string>
+    <string name="playlist_started_and_queued_notice">Queued and playing "%1$s" (%2$d songs)</string>
 </resources>

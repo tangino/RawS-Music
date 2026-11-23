@@ -179,20 +179,52 @@ class AppPageRendererImpl(
                         }
                         if (songs.isNotEmpty()) {
                             val first = songs.first()
-                            pc?.play(first, songs, 0)
                             val cover = playlist.coverUrl?.takeIf { it.isNotBlank() }
                                 ?: first.coverKey.takeIf { it.isNotBlank() }
                                 ?: first.albumArtPath.takeIf { it.isNotBlank() }.orEmpty()
-                            PlayedPlaylistManager.recordPlayedPlaylist(
-                                id = playlist.id,
-                                name = playlist.name,
-                                isOnline = false,
-                                platformId = "",
-                                coverUrl = cover,
-                                trackCount = songs.size,
-                                lastPlayedSongTitle = first.title,
-                                lastPlayedSongArtist = first.artist,
-                            )
+                            pc?.appendPlaylistToQueue(songs) { addedCount, startedPlayback ->
+                                when {
+                                    startedPlayback -> {
+                                        PlayedPlaylistManager.recordPlayedPlaylist(
+                                            id = playlist.id,
+                                            name = playlist.name,
+                                            isOnline = false,
+                                            platformId = "",
+                                            coverUrl = cover,
+                                            trackCount = songs.size,
+                                            lastPlayedSongTitle = first.title,
+                                            lastPlayedSongArtist = first.artist,
+                                        )
+                                        AppNoticeBus.post(
+                                            message = context.getString(
+                                                R.string.playlist_started_and_queued_notice,
+                                                playlist.name,
+                                                addedCount,
+                                            ),
+                                            icon = AppNoticeIcon.QUEUE,
+                                        )
+                                    }
+                                    addedCount > 0 -> {
+                                        AppNoticeBus.post(
+                                            message = context.getString(
+                                                R.string.playlist_added_to_queue_notice,
+                                                playlist.name,
+                                                addedCount,
+                                            ),
+                                            icon = AppNoticeIcon.QUEUE,
+                                        )
+                                    }
+                                    else -> {
+                                        AppNoticeBus.post(
+                                            message = context.getString(
+                                                R.string.playlist_already_in_queue_notice,
+                                                playlist.name,
+                                            ),
+                                            icon = AppNoticeIcon.QUEUE,
+                                        )
+                                    }
+                                }
+                            }
                         } else {
                             AppNoticeBus.error("歌单暂无可播放曲目")
                         }

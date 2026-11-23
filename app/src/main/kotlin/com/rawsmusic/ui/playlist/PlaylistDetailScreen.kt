@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -38,7 +39,9 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +55,7 @@ import com.rawsmusic.core.common.model.UserPlaylist
 import com.rawsmusic.core.common.source.RawSourceQuality
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.common.ui.AppNoticeIcon
+import com.rawsmusic.core.ui.scene.LocalSceneChromeAlpha
 import com.rawsmusic.core.ui.scene.NavScene
 import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
 import com.rawsmusic.core.ui.scene.pages.LibraryListScaffold
@@ -142,93 +146,25 @@ fun PlaylistDetailScreen(
         multiSelectState.exit()
     }
 
-    val headerTrailingContent: (@Composable () -> Unit)? = if (songs.isNotEmpty() || (playlist != null && !playlist.id.startsWith("attitude:"))) {
+    // 顶栏右侧保持克制留白：仅在多选模式激活时显示关闭按钮，平时由下方轻量快捷操作栏承载歌单操作
+    val headerTrailingContent: (@Composable () -> Unit)? = if (multiSelectState.isActive) {
         {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 多选模式切换入口
-                if (songs.isNotEmpty()) {
-                    IconButton(
-                        onClick = {
-                            if (multiSelectState.isActive) {
-                                multiSelectState.exit()
-                            } else {
-                                multiSelectState.enter()
-                            }
-                        },
-                        modifier = Modifier.size(42.dp),
-                    ) {
-                        if (multiSelectState.isActive) {
-                            Icon(
-                                imageVector = MiuixIcons.Regular.Close,
-                                contentDescription = stringResource(R.string.common_cancel),
-                                tint = colors.primary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        } else {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_select_all_line),
-                                contentDescription = stringResource(com.rawsmusic.core.ui.R.string.library_action_select),
-                                tint = colors.onSurface,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    }
-                }
-
-                // 离线保存入口（非多选且存在网络歌曲或存在进行中下载任务时显示）
-                if (!multiSelectState.isActive && (onlineCount > 0 || activeDownloadTasks.isNotEmpty()) && playlist != null) {
-                    IconButton(
-                        onClick = { offlineSaveDialog = true },
-                        modifier = Modifier.size(42.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            if (activeDownloadTasks.isNotEmpty()) {
-                                val lead = activeDownloadTasks.firstOrNull {
-                                    it.status == MusicSourceDownloadStatus.Downloading && it.totalBytes > 0L
-                                }
-                                if (lead != null) {
-                                    CircularProgressIndicator(
-                                        progress = lead.progressFraction,
-                                        color = colors.primary,
-                                        trackColor = colors.primary.copy(alpha = 0.18f),
-                                        strokeWidth = 2.2.dp,
-                                        modifier = Modifier.size(28.dp),
-                                    )
-                                } else {
-                                    CircularProgressIndicator(
-                                        color = colors.primary,
-                                        strokeWidth = 2.2.dp,
-                                        modifier = Modifier.size(28.dp),
-                                    )
-                                }
-                            }
-                            Icon(
-                                painter = painterResource(com.rawsmusic.core.ui.R.drawable.ic_source_download),
-                                contentDescription = stringResource(R.string.download_action_offline_save),
-                                tint = colors.primary,
-                                modifier = Modifier.size(if (activeDownloadTasks.isNotEmpty()) 16.dp else 22.dp),
-                            )
-                        }
-                    }
-                }
-
-                // 导出歌单入口（非多选时显示）
-                if (!multiSelectState.isActive && playlist != null) {
-                    IconButton(
-                        onClick = { exportDialog = true },
-                        modifier = Modifier.size(42.dp),
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_playlist_export),
-                            contentDescription = stringResource(R.string.playlist_export_action),
-                            tint = colors.onSurface,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                }
+            IconButton(
+                onClick = { multiSelectState.exit() },
+                modifier = Modifier.size(42.dp),
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Close,
+                    contentDescription = stringResource(R.string.common_cancel),
+                    tint = colors.primary,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     } else null
+
+    val showActionBar = !multiSelectState.isActive && (songs.isNotEmpty() || playlist != null)
+    val showOfflineSaveAction = (onlineCount > 0 || activeDownloadTasks.isNotEmpty()) && playlist != null
 
     val statsText = when {
         localCount > 0 && onlineCount > 0 ->
@@ -258,14 +194,17 @@ fun PlaylistDetailScreen(
         onSelect = { if (songs.isNotEmpty()) multiSelectState.enter() },
         onPlay = { if (songs.isNotEmpty()) onPlaySong(songs, 0) },
         onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
+        showHeaderShuffle = false,
         headerTrailingContent = headerTrailingContent,
         contentOverlap = 0.dp,
         modifier = Modifier.fillMaxSize().bottomChromeNestedScroll()
     ) { topPadding, backdropSource ->
+        val actionBarSpace = if (showActionBar) 54.dp else 8.dp
+        val bannerTopOffset = topPadding + actionBarSpace
         val listTopPadding = when {
-            activeDownloadTasks.isNotEmpty() -> topPadding + 78.dp
-            showFailedBanner -> topPadding + 68.dp
-            else -> topPadding
+            activeDownloadTasks.isNotEmpty() -> bannerTopOffset + 78.dp
+            showFailedBanner -> bannerTopOffset + 68.dp
+            else -> bannerTopOffset
         }
         if (songs.isEmpty()) {
             Box(
@@ -303,6 +242,39 @@ fun PlaylistDetailScreen(
             )
         }
 
+        // 歌单快捷操作栏：左主右次（播放全部 + 随机播放 / 离线保存 + 多选 + 导出），与顶栏留足呼吸间距
+        if (showActionBar) {
+            val sceneChrome = LocalSceneChromeAlpha.current
+            val isExitingScene = sceneChrome.topMenuExitSceneId == NavScene.PLAYLIST_DETAIL_PAGE.name
+            val exitProgress = sceneChrome.topMenuExitProgressProvider?.invoke() ?: 0f
+            if (!isExitingScene || exitProgress < 0.95f) {
+                PlaylistDetailActionBar(
+                    hasSongs = songs.isNotEmpty(),
+                    showOfflineSave = showOfflineSaveAction,
+                    showExport = playlist != null,
+                    activeDownloadTasks = activeDownloadTasks,
+                    onPlayAll = { if (songs.isNotEmpty()) onPlaySong(songs, 0) },
+                    onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
+                    onOfflineSave = { offlineSaveDialog = true },
+                    onMultiSelect = { if (songs.isNotEmpty()) multiSelectState.enter() },
+                    onExport = { exportDialog = true },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(top = topPadding + 6.dp, start = 14.dp, end = 14.dp)
+                        .zIndex(20f)
+                        .graphicsLayer {
+                            val progress = sceneChrome.topMenuExitProgressProvider?.invoke()
+                            alpha = if (isExitingScene && progress != null) {
+                                (1f - progress).coerceIn(0f, 1f)
+                            } else {
+                                sceneChrome.topMenuProvider?.invoke() ?: sceneChrome.topMenu
+                            }
+                        },
+                )
+            }
+        }
+
         // 歌单实时离线下载进度横幅（活跃下载期间浮于列表顶部）
         AnimatedVisibility(
             visible = activeDownloadTasks.isNotEmpty(),
@@ -310,7 +282,7 @@ fun PlaylistDetailScreen(
             exit = fadeOut() + shrinkVertically(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = topPadding + 4.dp, start = 14.dp, end = 14.dp),
+                .padding(top = bannerTopOffset + 4.dp, start = 14.dp, end = 14.dp),
         ) {
             PlaylistDownloadProgressBanner(
                 activeTasks = activeDownloadTasks,
@@ -328,7 +300,7 @@ fun PlaylistDetailScreen(
             exit = fadeOut() + shrinkVertically(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = topPadding + 4.dp, start = 14.dp, end = 14.dp),
+                .padding(top = bannerTopOffset + 4.dp, start = 14.dp, end = 14.dp),
         ) {
             PlaylistDownloadFailedBanner(
                 failedTasks = failedDownloadTasks,
@@ -588,5 +560,163 @@ private fun PlaylistDownloadFailedBanner(
                 .clickable(onClick = onDismiss)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         )
+    }
+}
+
+/**
+ * 歌单详情页轻量快捷操作栏：
+ * 左侧为主播放动作（播放全部胶囊 + 随机播放轻圆按钮），
+ * 右侧为歌单工具组（离线保存 / 多选 / 导出），与顶部标题区和首曲列表之间留足呼吸感。
+ */
+@Composable
+private fun PlaylistDetailActionBar(
+    hasSongs: Boolean,
+    showOfflineSave: Boolean,
+    showExport: Boolean,
+    activeDownloadTasks: List<MusicSourceDownloadTask>,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    onOfflineSave: () -> Unit,
+    onMultiSelect: () -> Unit,
+    onExport: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = themeColors()
+    val subtleChipBg = colors.onSurface.copy(alpha = 0.065f)
+
+    Row(
+        modifier = modifier.height(36.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        // 左侧：播放全部 + 随机播放
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (hasSongs) {
+                Row(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.primary.copy(alpha = 0.14f))
+                        .clickable(onClick = onPlayAll)
+                        .padding(start = 12.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_play),
+                        contentDescription = stringResource(com.rawsmusic.core.ui.R.string.online_detail_play_all),
+                        tint = colors.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = stringResource(com.rawsmusic.core.ui.R.string.online_detail_play_all),
+                        color = colors.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = appFontFamily(),
+                        maxLines = 1,
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(subtleChipBg)
+                        .clickable(onClick = onShuffle),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(com.rawsmusic.core.ui.R.drawable.ic_shuffle_custom),
+                        contentDescription = stringResource(com.rawsmusic.core.ui.R.string.songs_shuffle_all),
+                        tint = colors.onSurface.copy(alpha = 0.86f),
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+            }
+        }
+
+        // 右侧：离线保存 + 多选 + 导出
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (showOfflineSave) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary.copy(alpha = 0.12f))
+                        .clickable(onClick = onOfflineSave),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (activeDownloadTasks.isNotEmpty()) {
+                        val lead = activeDownloadTasks.firstOrNull {
+                            it.status == MusicSourceDownloadStatus.Downloading && it.totalBytes > 0L
+                        }
+                        if (lead != null) {
+                            CircularProgressIndicator(
+                                progress = lead.progressFraction,
+                                color = colors.primary,
+                                trackColor = colors.primary.copy(alpha = 0.20f),
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                color = colors.primary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(26.dp),
+                            )
+                        }
+                    }
+                    Icon(
+                        painter = painterResource(com.rawsmusic.core.ui.R.drawable.ic_source_download),
+                        contentDescription = stringResource(R.string.download_action_offline_save),
+                        tint = colors.primary,
+                        modifier = Modifier.size(if (activeDownloadTasks.isNotEmpty()) 14.dp else 18.dp),
+                    )
+                }
+            }
+
+            if (hasSongs) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(subtleChipBg)
+                        .clickable(onClick = onMultiSelect),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_select_all_line),
+                        contentDescription = stringResource(com.rawsmusic.core.ui.R.string.library_action_select),
+                        tint = colors.onSurface.copy(alpha = 0.86f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            if (showExport) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(subtleChipBg)
+                        .clickable(onClick = onExport),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_playlist_export),
+                        contentDescription = stringResource(R.string.playlist_export_action),
+                        tint = colors.onSurface.copy(alpha = 0.86f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
     }
 }
