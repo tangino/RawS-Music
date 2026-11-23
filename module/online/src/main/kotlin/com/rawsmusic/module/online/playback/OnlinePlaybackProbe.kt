@@ -43,6 +43,7 @@ object OnlinePlaybackProbe {
         rawUrl: String,
         expectedDurationMs: Long = 0L,
         targetPlatform: OnlinePlatform? = null,
+        expectedBitrateKbps: Int = 0,
     ): Pair<String, Long>? = withContext(Dispatchers.IO) {
         if (rawUrl.isBlank()) return@withContext null
         if (!rawUrl.startsWith("http://", ignoreCase = true) && !rawUrl.startsWith("https://", ignoreCase = true)) {
@@ -147,23 +148,29 @@ object OnlinePlaybackProbe {
                 return@withContext null
             }
 
-            // 3. 流长度下限：按 64kbps 极限低码率估算，每秒至少 8KB
+            // 3. 流长度下限：结合已知码率估算最低字节数（避免 320k/FLAC 的 30s~60s 短试听绕过 64kbps 下限）
+            val minBytesPerSec = when {
+                expectedBitrateKbps >= 1000 -> 35_000L // FLAC / Hi-Res 实际平均 ~80~120KB/s，35KB/s 为安全下限
+                expectedBitrateKbps >= 300 -> 24_000L  // 320kbps MP3/OGG ≈ 40KB/s，取 60% 下限
+                expectedBitrateKbps >= 120 -> (expectedBitrateKbps * 80L) // ~64% 码率下限
+                else -> 8_000L                         // 未知码率按 64kbps 极限下限
+            }
             if (expectedDurationMs >= 30_000L && totalContentLength > 0L) {
-                val minExpectedBytes = (expectedDurationMs / 1000L) * 8_000L
+                val minExpectedBytes = (expectedDurationMs / 1000L) * minBytesPerSec
                 if (totalContentLength < minExpectedBytes) {
                     AppLogger.w(
                         TAG,
                         "Audio probe rejected URL: stream length too short ($totalContentLength bytes, " +
-                            "min required $minExpectedBytes bytes for ${expectedDurationMs}ms) for $validUrl",
+                            "min required $minExpectedBytes bytes for ${expectedDurationMs}ms, br=${expectedBitrateKbps}k) for $validUrl",
                     )
                     return@withContext null
                 }
             }
 
-            // 4. 用 MediaMetadataRetriever 探真实时长（超时设为 2200ms，对齐 OrBitPlayer 的轻量高效探活）
+            // 4. 用 MediaMetadataRetriever 探真实时长（适当放宽至 3500ms，减少 FLAC/高码率流探活超时漏检）
             var detectedDurationMs = 0L
             try {
-                withTimeoutOrNull(2200L) {
+                withTimeoutOrNull(3500L) {
                     val retriever = android.media.MediaMetadataRetriever()
                     try {
                         val headers = mutableMapOf("User-Agent" to UA_MOBILE)
@@ -208,8 +215,8 @@ object OnlinePlaybackProbe {
                     AppLogger.w(TAG, "Audio probe rejected URL: preview snippet detected ($detectedDurationMs ms) for $validUrl")
                     return@withContext null
                 }
-                // 实际 <60s，但预期 ≥90s
-                if (detectedDurationMs < 60_000L && expectedDurationMs >= 90_000L) {
+                // 实际 ≤62s（覆盖酷我/QQ/网易典型 60s 整试听截断及其封装误差），但预期 ≥90s 或未知时长 → 拦截
+                if (detectedDurationMs <= 62_000L && (expectedDurationMs >= 90_000L || expectedDurationMs <= 0L)) {
                     AppLogger.w(
                         TAG,
                         "Audio probe rejected URL: preview duration too short " +
@@ -217,22 +224,40 @@ object OnlinePlaybackProbe {
                     )
                     return@withContext null
                 }
-                // 实际不足预期的 70% → 不完整流
-                if (expectedDurationMs >= 45_000L && detectedDurationMs < (expectedDurationMs * 0.70f).toLong()) {
+                // 实际时长与标签预期时长相差过大（超过 20 秒且超过 15% 误差，无论偏短还是错版偏长）→ 拦截
+                if (expectedDurationMs >= 30_000L) {
+                    val diffMs = kotlin.math.abs(detectedDurationMs - expectedDurationMs)
+                    val maxAllowedDiffMs = maxOf(20_000L, (expectedDurationMs * 0.15f).toLong())
+                    if (diffMs > maxAllowedDiffMs) {
+                        AppLogger.w(
+                            TAG,
+                            "Audio probe rejected URL: duration mismatch " +
+                                "(actual=${detectedDurationMs}ms vs expected=${expectedDurationMs}ms, diff=${diffMs}ms > max=${maxAllowedDiffMs}ms) for $validUrl",
+                        )
+                        return@withContext null
+                    }
+                }
+            } else {
+                // MediaMetadataRetriever 超时或未解析出时长时的兜底拦截：
+                // 1) 酷我平台若既无真实时长又无 Content-Length，拒绝盲目放行（回退原平台寻源）；
+                if (targetPlatform == OnlinePlatform.KUWO && totalContentLength <= 0L) {
                     AppLogger.w(
                         TAG,
-                        "Audio probe rejected URL: incomplete audio duration " +
-                            "($detectedDurationMs ms vs expected $expectedDurationMs ms) for $validUrl",
+                        "Audio probe rejected KUWO stream without duration and content-length for $validUrl",
                     )
                     return@withContext null
                 }
-            } else {
-                // 若 MediaMetadataRetriever 超时或未解析出时长，且已知文件流偏小 (如未知时长但流小于 1MB)，杜绝试听音频混入
-                if (expectedDurationMs <= 0L && totalContentLength in 1..1_000_000L) {
+                // 2) 未知预期时长时，按码率提高最小体积门槛（320k/FLAC 至少 3MB，普通流至少 1MB），杜绝 30s/60s 试听混入
+                val minUnknownDurBytes = when {
+                    expectedBitrateKbps >= 1000 -> 6_000_000L
+                    expectedBitrateKbps >= 300 -> 3_000_000L
+                    else -> 1_000_000L
+                }
+                if (expectedDurationMs <= 0L && totalContentLength in 1..minUnknownDurBytes) {
                     AppLogger.w(
                         TAG,
                         "Audio probe rejected suspicious small stream without duration verification " +
-                            "($totalContentLength bytes) for $validUrl",
+                            "($totalContentLength bytes < $minUnknownDurBytes, br=${expectedBitrateKbps}k) for $validUrl",
                     )
                     return@withContext null
                 }

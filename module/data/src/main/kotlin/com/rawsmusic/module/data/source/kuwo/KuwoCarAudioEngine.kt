@@ -349,12 +349,19 @@ object KuwoCarAudioEngine {
             }
         }
 
+        var validationRejectCount = 0
         for (opt in filtered) {
             val res = requestCarApi(songMatch.rid, opt.bitrate, opt.format) ?: continue
             if (urlValidator == null || urlValidator(res)) {
                 return@withContext res
             }
+            validationRejectCount++
             AppLogger.w(TAG, "酷我音质档位校验未通过（疑似提示音/试听），尝试下一档位: rid=${songMatch.rid}, br=${opt.bitrate}${opt.format}")
+            // 同一 RID 连续 2 个档位都被判定为短试听/版权提示音，说明该曲目在酷我受限，直接放弃当前 RID 以便快速回退原平台
+            if (validationRejectCount >= 2) {
+                AppLogger.w(TAG, "酷我同一 RID 连续 $validationRejectCount 档返回短音频，快速放弃当前 RID: rid=${songMatch.rid}")
+                break
+            }
         }
         null
     }

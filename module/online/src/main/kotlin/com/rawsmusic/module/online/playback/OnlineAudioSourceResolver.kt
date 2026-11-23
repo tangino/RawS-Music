@@ -112,9 +112,15 @@ object OnlineAudioSourceResolver {
                 return this@OnlineAudioSourceResolver.peekCachedSource(item, requestedQuality)
             }
         }
-        // 挂载直链探活校验器，确保第三方插件返回的直链经过防试听与流完整性校验
-        MusicSourceAudioResolver.audioUrlValidator = MusicSourceAudioResolver.AudioUrlValidator { url, expectedDurationMs, _ ->
-            OnlinePlaybackProbe.probeAndValidateAudioUrl(url, expectedDurationMs, null)
+        // 挂载直链探活校验器，确保第三方插件及酷我车载返回的直链经过防试听、码率体积与流完整性校验
+        MusicSourceAudioResolver.audioUrlValidator = MusicSourceAudioResolver.AudioUrlValidator { url, expectedDurationMs, sourceId, expectedBitrateKbps ->
+            val targetPlatform = OnlinePlatform.fromId(sourceId)
+            OnlinePlaybackProbe.probeAndValidateAudioUrl(
+                rawUrl = url,
+                expectedDurationMs = expectedDurationMs,
+                targetPlatform = targetPlatform,
+                expectedBitrateKbps = expectedBitrateKbps,
+            )
         }
         // 挂载 QuickJS 原生加速解析器，让已导入的洛雪插件在播放和预加载时享受毫秒级原地解析
         MusicSourceAudioResolver.quickJsLxAudioResolver = MusicSourceAudioResolver.QuickJsLxAudioResolver { context, source, item, quality ->
@@ -1138,11 +1144,12 @@ object OnlineAudioSourceResolver {
         album: String,
         expectedDurationMs: Long = 0L,
         explicitQuality: String? = null,
+        skipKuwoCarPrimary: Boolean = false,
     ): ResolvedAudioSource? = withContext(Dispatchers.IO) {
         kotlinx.coroutines.withTimeoutOrNull(15_000L) {
             val targetQuality = explicitQuality ?: AppPreferences.Source.preferredQuality
             // 0. 优先尝试酷我车载非加密直链（对齐 HotDownloader：支持多 RID + 全明文音质降级 + 逐条探活防版权提示音），未命中再沿用原有寻源策略
-            if (title.isNotBlank()) {
+            if (!skipKuwoCarPrimary && title.isNotBlank()) {
                 val kwResolved = runCatching {
                     val requestedQuality = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.qualityFromSourcePreference(
                         AppPreferences.Source.preferredQuality
@@ -1162,6 +1169,7 @@ object OnlineAudioSourceResolver {
                             rawUrl = candidate.downloadUrl,
                             expectedDurationMs = probeExpectedDur,
                             targetPlatform = OnlinePlatform.KUWO,
+                            expectedBitrateKbps = candidate.bitrate,
                         )
                         if (probePair != null) {
                             verifiedUrl = probePair.first
@@ -1273,6 +1281,9 @@ object OnlineAudioSourceResolver {
             album = item.album,
             expectedDurationMs = item.durationMs,
             explicitQuality = qualityStr,
+            // 外层 MusicSourceAudioResolver.resolve 对 Music 类型已先尝试过酷我车载，
+            // 命中兜底分支说明酷我未命中或返回短音频已被拦截，这里直接跳过重复的酷我探测，立即进入原平台寻源
+            skipKuwoCarPrimary = item.mediaType == com.rawsmusic.core.common.source.RawSourceMediaType.Music,
         ) ?: return null
 
         return RawResolvedAudioSource(

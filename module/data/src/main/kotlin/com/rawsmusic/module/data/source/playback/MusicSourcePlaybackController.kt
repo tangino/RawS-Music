@@ -984,7 +984,27 @@ object MusicSourcePlaybackController {
         // 优先检查本地是否已存在完整缓存文件（0ms 秒开）
         val cachedHit = OnlineAudioFileCache.findValidCachedFile(context, item, source.quality)
         if (cachedHit != null) {
-            val (cachedFile, cachedQuality) = cachedHit
+            val (cachedFile, _) = cachedHit
+            if (isKuwoCarSource(source)) {
+                val actualDurMs = probeLocalAudioDurationMs(cachedFile)
+                if (isDurationMismatched(actualDurMs, item.durationMs)) {
+                    AppLogger.w(
+                        TAG,
+                        "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_CACHE actual=${actualDurMs}ms " +
+                            "expected=${item.durationMs}ms title=${item.title}, deleting cache & falling back to origin"
+                    )
+                    runCatching { cachedFile.delete() }
+                    fallbackFromKuwoMismatch(
+                        context = context,
+                        generation = generation,
+                        item = item,
+                        requestedQuality = source.quality,
+                        startPositionMs = startPositionMs,
+                        autoPlay = autoPlay,
+                    )
+                    return
+                }
+            }
             AppLogger.i(
                 TAG,
                 "${OnlinePlaybackDiagnostics.PREFIX} CACHE_DIRECT_HIT bytes=${cachedFile.length()} " +
@@ -1038,6 +1058,27 @@ object MusicSourcePlaybackController {
                     }
                 }
                 if (generation != generations.get()) return@launch
+                // 本地落盘后用 100% 准确的本地文件时长做终极核验：若酷我返回了短试听或错版音频，立即删缓存并回退原平台寻源
+                if (isKuwoCarSource(source)) {
+                    val actualDurMs = probeLocalAudioDurationMs(cached.file)
+                    if (isDurationMismatched(actualDurMs, item.durationMs)) {
+                        AppLogger.w(
+                            TAG,
+                            "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_MATERIALIZED actual=${actualDurMs}ms " +
+                                "expected=${item.durationMs}ms title=${item.title}, deleting cache & falling back to origin"
+                        )
+                        runCatching { cached.file.delete() }
+                        fallbackFromKuwoMismatch(
+                            context = context,
+                            generation = generation,
+                            item = item,
+                            requestedQuality = source.quality,
+                            startPositionMs = startPositionMs,
+                            autoPlay = autoPlay,
+                        )
+                        return@launch
+                    }
+                }
                 val localSource = source.copy(
                     url = cached.file.absolutePath,
                     headers = emptyMap(),
@@ -1322,6 +1363,25 @@ object MusicSourcePlaybackController {
                 val reportedDuration = runCatching { preparedPlayer.duration.toLong() }
                     .getOrDefault(0L)
                     .coerceAtLeast(0L)
+                val currentItem = mutableSnapshot.value.currentItem
+                if (currentItem != null && isKuwoCarSource(source) && isDurationMismatched(reportedDuration, currentItem.durationMs)) {
+                    AppLogger.w(
+                        TAG,
+                        "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_MEDIAPLAYER actual=${reportedDuration}ms " +
+                            "expected=${currentItem.durationMs}ms title=${currentItem.title}, falling back to origin"
+                    )
+                    prepared = false
+                    releaseMediaPlayer(abandonFocus = false)
+                    fallbackFromKuwoMismatch(
+                        context = context,
+                        generation = generation,
+                        item = currentItem,
+                        requestedQuality = source.quality,
+                        startPositionMs = startPositionMs,
+                        autoPlay = autoPlay,
+                    )
+                    return@setOnPreparedListener
+                }
                 val duration = reportedDuration.takeIf { it > 0L }
                     ?: mutableSnapshot.value.currentItem?.durationMs
                     ?: 0L
@@ -1602,6 +1662,116 @@ object MusicSourcePlaybackController {
                 }
             }.onFailure { error ->
                 AppLogger.w(TAG, "AutoSave on complete failed for '${item.title}': ${error.message}")
+            }
+        }
+    }
+
+    @Volatile
+    private var kuwoMismatchFallbackGeneration: Long = Long.MIN_VALUE
+
+    private fun isKuwoCarSource(source: RawResolvedAudioSource): Boolean =
+        source.platform.equals("kuwo_car", ignoreCase = true) ||
+            source.sourceName == "酷我车载"
+
+    private fun probeLocalAudioDurationMs(file: java.io.File): Long {
+        if (!file.isFile || file.length() <= 0L) return 0L
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.coerceAtLeast(0L)
+                ?: 0L
+        } catch (_: Throwable) {
+            0L
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun isDurationMismatched(actualDurationMs: Long, expectedDurationMs: Long): Boolean {
+        if (actualDurationMs <= 0L) return false
+        // 典型 30s / 45s / 60s 试听短片段
+        if (actualDurationMs <= 62_000L && (expectedDurationMs >= 90_000L || expectedDurationMs <= 0L)) {
+            return true
+        }
+        // 与标签预期时长相差过大（超过 20 秒且超过 15% 误差）
+        if (expectedDurationMs >= 30_000L) {
+            val diffMs = kotlin.math.abs(actualDurationMs - expectedDurationMs)
+            val maxAllowedDiffMs = maxOf(20_000L, (expectedDurationMs * 0.15f).toLong())
+            if (diffMs > maxAllowedDiffMs) return true
+        }
+        return false
+    }
+
+    /**
+     * 酷我车载返回的音频在落盘/准备阶段被证实为短试听或错版时长时，
+     * 驱逐缓存并跳过酷我车载，自动回退至原平台/多源重新寻源播放。
+     */
+    private fun fallbackFromKuwoMismatch(
+        context: Context,
+        generation: Long,
+        item: RawSourceMediaItem,
+        requestedQuality: RawSourceQuality,
+        startPositionMs: Long,
+        autoPlay: Boolean,
+    ) {
+        if (kuwoMismatchFallbackGeneration == generation) {
+            fail("酷我返回短音频且原平台回退已尝试过")
+            return
+        }
+        kuwoMismatchFallbackGeneration = generation
+        MusicSourceAudioResolver.evictCache(item)
+        resolveJob?.cancel()
+        resolveJob = scope.launch {
+            try {
+                if (generation != generations.get()) return@launch
+                mutableSnapshot.value = mutableSnapshot.value.copy(
+                    status = MusicSourcePlaybackStatus.Resolving,
+                    bufferedPercent = 0,
+                    error = "",
+                )
+                val fallbackResolved = withTimeout(RESOLVE_TIMEOUT_MS) {
+                    MusicSourceAudioResolver.resolve(
+                        context = context,
+                        item = item,
+                        requestedQuality = requestedQuality,
+                        skipKuwoCar = true,
+                    )
+                }
+                if (generation != generations.get()) return@launch
+                val resPlatform = resolvePlatformDisplayName(fallbackResolved.platform ?: item.sourceId)
+                val tag = fallbackResolved.sourceName ?: "原平台"
+                mutableSnapshot.value = mutableSnapshot.value.copy(
+                    status = MusicSourcePlaybackStatus.Preparing,
+                    resolvedQuality = fallbackResolved.quality,
+                    resolvedPlatform = resPlatform,
+                    sourceTag = tag,
+                    error = "",
+                )
+                AppLogger.i(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} KUWO_MISMATCH_FALLBACK_OK title=${item.title} " +
+                        "platform=$resPlatform tag=$tag quality=${fallbackResolved.quality}"
+                )
+                prepareResolved(
+                    generation = generation,
+                    item = item,
+                    source = fallbackResolved,
+                    startPositionMs = startPositionMs,
+                    autoPlay = autoPlay,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (generation != generations.get()) return@launch
+                AppLogger.e(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} KUWO_MISMATCH_FALLBACK_FAIL title=${item.title} " +
+                        "error=${OnlinePlaybackDiagnostics.errorSummary(error)}",
+                    error,
+                )
+                fail(error.message.orEmpty().ifBlank { "原平台寻源失败" })
             }
         }
     }

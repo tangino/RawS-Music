@@ -73,6 +73,7 @@ object MusicSourceAudioResolver {
             url: String,
             expectedDurationMs: Long,
             sourceId: String,
+            expectedBitrateKbps: Int,
         ): Pair<String, Long>?
     }
 
@@ -127,22 +128,25 @@ object MusicSourceAudioResolver {
         context: Context,
         item: RawSourceMediaItem,
         requestedQuality: RawSourceQuality,
+        skipKuwoCar: Boolean = false,
     ): RawResolvedAudioSource {
         val startedAt = SystemClock.elapsedRealtime()
         val cacheKey = buildCacheKey(item, requestedQuality)
         val now = System.currentTimeMillis()
-        val cached = memorySourceCache.get(cacheKey)
-        if (cached != null && cached.expireAtMs > now) {
-            AppLogger.i(
-                TAG,
-                "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_HIT_MEMORY cacheKey=$cacheKey " +
-                    "quality=${cached.source.quality} url=${OnlinePlaybackDiagnostics.safeUrl(cached.source.url)}"
-            )
-            return cached.source
+        if (!skipKuwoCar) {
+            val cached = memorySourceCache.get(cacheKey)
+            if (cached != null && cached.expireAtMs > now) {
+                AppLogger.i(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} RESOLVE_HIT_MEMORY cacheKey=$cacheKey " +
+                        "quality=${cached.source.quality} url=${OnlinePlaybackDiagnostics.safeUrl(cached.source.url)}"
+                )
+                return cached.source
+            }
         }
 
-        // 1. 优先尝试酷我车载非加密直链引擎（音质统一由 Configure Sources 页面偏好控制）；未命中再沿用原有插件/多源寻源规则
-        if (item.mediaType == com.rawsmusic.core.common.source.RawSourceMediaType.Music) {
+        // 1. 优先尝试酷我车载非加密直链引擎（音质统一由 Configure Sources 页面偏好控制）；未命中或明确跳过时沿用原平台/多源寻源规则
+        if (!skipKuwoCar && item.mediaType == com.rawsmusic.core.common.source.RawSourceMediaType.Music) {
             val configuredQuality = KuwoCarAudioEngine.qualityFromSourcePreference()
             resolveViaKuwoCarEngine(item, configuredQuality)?.let { kwResolved ->
                 memorySourceCache.put(cacheKey, CachedResolvedSource(kwResolved, now + 15 * 60 * 1000L))
@@ -285,7 +289,12 @@ object MusicSourceAudioResolver {
             ) { match, candidate ->
                 val probeExpectedDur = if (item.durationMs > 0L) item.durationMs else match.durationSec * 1000L
                 if (validator != null) {
-                    val validated = validator.validate(candidate.downloadUrl, probeExpectedDur, "kuwo")
+                    val validated = validator.validate(
+                        url = candidate.downloadUrl,
+                        expectedDurationMs = probeExpectedDur,
+                        sourceId = "kuwo",
+                        expectedBitrateKbps = candidate.bitrate,
+                    )
                     if (validated != null) {
                         verifiedUrl = validated.first
                         true
@@ -338,7 +347,7 @@ object MusicSourceAudioResolver {
                 val resolved = MusicSourceRuntimeClient.resolveAudio(context, source, item, quality)
                 val validator = audioUrlValidator
                 if (validator != null && item.durationMs > 0L) {
-                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId)
+                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId, 0)
                     if (validatedPair == null) {
                         AppLogger.w(
                             TAG,
@@ -388,7 +397,7 @@ object MusicSourceAudioResolver {
                     ?: MusicSourceRuntimeClient.resolveLxAudio(context, source, item, quality)
                 val validator = audioUrlValidator
                 if (validator != null && item.durationMs > 0L) {
-                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId)
+                    val validatedPair = validator.validate(resolved.url, item.durationMs, sourceId, 0)
                     if (validatedPair == null) {
                         AppLogger.w(
                             TAG,
