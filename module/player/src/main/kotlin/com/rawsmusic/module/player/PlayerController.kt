@@ -1094,14 +1094,34 @@ class PlayerController private constructor(context: Context) {
     private fun startOnlineFailureMonitor() {
         scope.launch {
             MusicSourcePlaybackController.snapshot.collect { snapshot ->
+                val media3Active = MusicSourcePlaybackController.isMedia3Active()
+                if (media3Active) {
+                    if (snapshot.durationMs > 0L && _duration.value != snapshot.durationMs) {
+                        _duration.value = snapshot.durationMs
+                    }
+                    _position.value = snapshot.positionMs.coerceAtLeast(0L)
+                }
                 when (snapshot.status) {
                     MusicSourcePlaybackStatus.Error -> handleOnlinePlaybackError(snapshot)
-                    MusicSourcePlaybackStatus.Playing -> resetOnlineFailureFuse()
+                    MusicSourcePlaybackStatus.Playing -> {
+                        resetOnlineFailureFuse()
+                        if (media3Active && _playState.value != PlayState.PLAYING) {
+                            smForceTransition(PlayState.PLAYING, "media3_online_playing")
+                        }
+                    }
+                    MusicSourcePlaybackStatus.Paused -> {
+                        if (media3Active && _playState.value != PlayState.PAUSED) {
+                            smForceTransition(PlayState.PAUSED, "media3_online_paused")
+                        }
+                    }
                     MusicSourcePlaybackStatus.Preparing,
                     MusicSourcePlaybackStatus.Resolving -> {
                         // A retry entered a new preparation attempt; allow the next Error to be
                         // handled, but keep the per-song failure count so retry #2 skips.
                         lastHandledOnlineErrorItem = null
+                        if (media3Active && _playState.value != PlayState.PREPARING) {
+                            smForceTransition(PlayState.PREPARING, "media3_online_preparing")
+                        }
                     }
                     MusicSourcePlaybackStatus.Idle -> {
                         // 防状态撕裂：若在线引擎已回到 Idle，但 PlayerController 仍停留在 PLAYING/PREPARING 且底层解码器未在播，
@@ -5986,6 +6006,44 @@ class PlayerController private constructor(context: Context) {
     }
 
     /**
+     * 当在线歌曲改由 Media3 ExoPlayer 直接边播边缓存起播时，同步宿主 UI/队列/通知栏状态并停止底层 FFmpeg，
+     * 避免双路音频同时出声，同时保持锁屏控件、歌词、前台服务与混合队列完整联动。
+     */
+    internal fun prepareExternalOnlinePlayback(
+        song: AudioFile,
+        queue: List<AudioFile>,
+        index: Int,
+        startPositionMs: Long = 0L,
+    ) {
+        runCatching { ffmpegPlayer.stop() }
+        pendingRendererUiCommit = null
+        _currentSong.value = song
+        if (queue.isNotEmpty()) {
+            _queue.value = PlayQueue(
+                songs = queue,
+                currentIndex = index.coerceIn(0, queue.lastIndex),
+            )
+        }
+        _duration.value = song.duration.coerceAtLeast(0L)
+        _position.value = startPositionMs.coerceAtLeast(0L)
+        smForceTransition(PlayState.PREPARING, "media3_online_start")
+        androidPlaybackServiceController.ensurePlaybackWakeLock("media3_online_start")
+    }
+
+    /**
+     * 当 Media3 ExoPlayer 自然播完当前在线曲目时，按宿主全局播放模式推进下一首或单曲循环。
+     */
+    internal fun onExternalOnlineTrackCompleted() {
+        if (isReleased) return
+        if (AppPreferences.Player.playMode == PlayMode.REPEAT_ONE) {
+            MusicSourcePlaybackController.seekTo(0L)
+            MusicSourcePlaybackController.resumeExternal()
+            return
+        }
+        queueControlCoordinator.next()
+    }
+
+    /**
      * Refresh the semantic auto-transition recipe when lyrics arrive asynchronously.
      * Lyrics are tied to the current renderer identity, so a new/gapless committed track clears
      * this field until its own LyricData is published by MainActivity.
@@ -6595,6 +6653,10 @@ class PlayerController private constructor(context: Context) {
                         "source=${playbackPath.substringAfterLast('/')}",
                 )
             }
+            // 终极互斥防线：FFmpeg 即将开播前，强制释放任何活跃中的 Media3 ExoPlayer，绝不允许双引擎同时发声
+            if (MusicSourcePlaybackController.isMedia3Active()) {
+                MusicSourcePlaybackController.stopExoPlayerOnly()
+            }
             ffmpegPlayer.play(playbackPath)
 
             // No PlayState polling or delayed carrier retry here. The confirmed native
@@ -6729,9 +6791,21 @@ class PlayerController private constructor(context: Context) {
     private fun resolvePlayPauseSeedSong(): AudioFile? =
         playPauseSeedCoordinator.resolve()
 
-    fun playPause() = transportControlCoordinator.playPause()
+    fun playPause() {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            MusicSourcePlaybackController.playPause()
+            return
+        }
+        transportControlCoordinator.playPause()
+    }
 
-    fun pause() = transportControlCoordinator.pause()
+    fun pause() {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            MusicSourcePlaybackController.pauseExternal()
+            return
+        }
+        transportControlCoordinator.pause()
+    }
 
     private suspend fun pauseUsbWarmInternal() {
         transportTransitioning = true
@@ -6939,7 +7013,13 @@ class PlayerController private constructor(context: Context) {
         }
     }
 
-    fun resume() = transportControlCoordinator.resume()
+    fun resume() {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            MusicSourcePlaybackController.resumeExternal()
+            return
+        }
+        transportControlCoordinator.resume()
+    }
 
     private suspend fun resumeInternal() {
         resumeCoordinator.resume()
@@ -6980,6 +7060,9 @@ class PlayerController private constructor(context: Context) {
     fun stop() = transportControlCoordinator.stop()
 
     private suspend fun stopInternal() {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            MusicSourcePlaybackController.stop()
+        }
         webDavPrefetchJob?.cancel()
         com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelAll("player_stop")
         clearPendingUiSelection()
@@ -7145,8 +7228,14 @@ class PlayerController private constructor(context: Context) {
         android.util.Log.d("PlayerController", "applyTransitionSettingsChanged: transition settings updated")
     }
 
-    fun seekTo(positionMs: Long, userInitiated: Boolean = true) =
+    fun seekTo(positionMs: Long, userInitiated: Boolean = true) {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            MusicSourcePlaybackController.seekTo(positionMs)
+            _position.value = positionMs.coerceAtLeast(0L)
+            return
+        }
         seekControlCoordinator.seekTo(positionMs, userInitiated)
+    }
 
     private suspend fun executePausedSeekRequest(
         song: AudioFile,

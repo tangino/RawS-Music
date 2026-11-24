@@ -9,6 +9,7 @@ androidx-cardview = "1.0.0"
 androidx-swiperefreshlayout = "1.1.0"
 androidx-preference = "1.2.1"
 androidx-media = "1.7.0"
+media3 = "1.5.1"
 androidx-lifecycle = "2.7.0"
 androidx-navigation = "2.7.6"
 androidx-room = "2.7.1"
@@ -41,6 +42,9 @@ androidx-cardview = { group = "androidx.cardview", name = "cardview", version.re
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "androidx-swiperefreshlayout" }
 androidx-preference-ktx = { group = "androidx.preference", name = "preference-ktx", version.ref = "androidx-preference" }
 androidx-media = { group = "androidx.media", name = "media", version.ref = "androidx-media" }
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-datasource = { group = "androidx.media3", name = "media3-datasource", version.ref = "media3" }
+media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
 androidx-lifecycle-viewmodel-ktx = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-ktx", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-livedata-ktx = { group = "androidx.lifecycle", name = "lifecycle-livedata-ktx", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }

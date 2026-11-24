@@ -265,7 +265,7 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         scope.launch {
             try {
                 fetchSemaphore.withPermit {
-                    val meta = fetchMetadataFromOnline(cleanTitle, cleanArtist)
+                    val meta = fetchMetadataFromOnline(cleanTitle, cleanArtist, songKey)
                     if (meta != null) {
                         failedTimestamps.remove(key)
                         metadataCache.put(key, meta)
@@ -365,38 +365,68 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     }
 
     /**
-     * 智能多平台级联搜索获取歌曲完整标签与高清封面（优先 QQ 音乐 → 次选网易云 → 兜底酷我音乐）。
-     * 若 QQ 音乐命中了歌曲元数据但封面缺失或为默认占位图，继续尝试从同平台候选或后续平台补齐真实封面。
+     * 从本地歌单条目的 songKey（如 `online://netease/12345`）解析添加时的来源平台与原始 songId。
+     * 若条目来自本地音乐库路径（如 `/storage/...`）或其他无平台标识格式，则返回 null。
      */
-    private suspend fun fetchMetadataFromOnline(title: String, artist: String): ResolvedOnlineTrackMetadata? {
+    private fun parseOriginFromSongKey(songKey: String): Pair<OnlinePlatform, String>? {
+        val trimmed = songKey.trim()
+        if (!trimmed.startsWith("online://", ignoreCase = true)) return null
+        val rest = trimmed.substringAfter("://")
+        val platformRaw = rest.substringBefore('/', "")
+        val songId = rest.substringAfter('/', "").trim()
+        val platform = OnlinePlatform.fromId(platformRaw) ?: return null
+        return platform to songId
+    }
+
+    /**
+     * 智能多平台级联获取本地歌单歌曲的完整标签与高清封面：
+     * 1. 若能从 songKey 识别出添加时的来源平台（如网易云/酷狗/酷我/咪咕/QQ），直接优先从该原平台获取（支持按原始 songId 精确命中）；
+     * 2. 若找不到添加时的来源平台（例如从本地音乐库添加，但本地文件已缺失），直接优先从 QQ 音乐平台获取；
+     * 3. 首选平台未命中或缺失有效封面时，按 QQ 音乐 → 网易云 → 酷我音乐 级联补齐。
+     */
+    private suspend fun fetchMetadataFromOnline(
+        title: String,
+        artist: String,
+        songKey: String = "",
+    ): ResolvedOnlineTrackMetadata? {
         val keyword = if (artist.isNotBlank() && !artist.equals("未知", true) && !artist.equals("<unknown>", true)) {
             "$title $artist"
         } else {
             title
         }
 
+        val origin = parseOriginFromSongKey(songKey)
+        val originPlatform = origin?.first
+        val originSongId = origin?.second.orEmpty()
+
         val repository = OnlineMusicRepository.getInstance()
-        val platforms = listOf(
+        val defaultFallback = listOf(
             OnlinePlatform.QQ,
             OnlinePlatform.NETEASE,
             OnlinePlatform.KUWO,
         )
+        val platforms = if (originPlatform != null) {
+            listOf(originPlatform) + defaultFallback.filter { it != originPlatform }
+        } else {
+            defaultFallback
+        }
 
         var fallbackMetaWithoutCover: ResolvedOnlineTrackMetadata? = null
 
         for (platform in platforms) {
             try {
-                val items = repository.searchSongs(keyword, page = 1, pageSize = 5, platform = platform)
+                val items = repository.searchSongs(keyword, page = 1, pageSize = 8, platform = platform)
                     .getOrNull()
                     .orEmpty()
                 if (items.isEmpty()) continue
-                val best = pickBestMetadataMatch(items, title, artist) ?: continue
+                val expectedSongId = if (platform == originPlatform) originSongId else ""
+                val best = pickBestMetadataMatch(items, title, artist, expectedSongId) ?: continue
                 val validCover = best.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }.orEmpty()
                     .ifBlank {
-                        // 同平台（尤其是 QQ 音乐）若首选条目缺封面，从同批同名同歌手候选中补取有效封面
+                        // 同平台若首选条目缺封面，从同批通过歌名+歌手校验的候选中补取有效封面
                         items.firstOrNull { item ->
-                            item.title.equals(title, ignoreCase = true) &&
-                                (artist.isBlank() || item.artist.contains(artist, ignoreCase = true) || artist.contains(item.artist, ignoreCase = true)) &&
+                            com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isTitleMatched(title, item.title) &&
+                                com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isArtistMatched(artist, item.artist) &&
                                 isValidRemoteCoverUrl(item.coverUrl)
                         }?.coverUrl.orEmpty()
                     }
@@ -410,7 +440,7 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
                     coverUrl = validCover,
                 )
                 if (validCover.isNotBlank()) {
-                    // 若前面优先平台（QQ 音乐）已有元数据但缺封面，保留其元数据并仅补齐真实封面
+                    // 若前面优先平台（原平台或 QQ 音乐）已有元数据但缺封面，保留其元数据并仅补齐真实封面
                     return fallbackMetaWithoutCover?.copy(coverUrl = validCover) ?: candidate
                 }
                 if (fallbackMetaWithoutCover == null) {
@@ -428,18 +458,28 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         items: List<OnlineSongItem>,
         title: String,
         artist: String,
+        expectedSongId: String = "",
     ): OnlineSongItem? {
-        val exactWithCover = items.firstOrNull { item ->
-            item.title.equals(title, ignoreCase = true) &&
-                (artist.isBlank() || item.artist.contains(artist, ignoreCase = true) || artist.contains(item.artist, ignoreCase = true)) &&
-                isValidRemoteCoverUrl(item.coverUrl)
+        // 1. 若在添加时的原平台检索且命中原始 songId，直接首选该精确条目
+        if (expectedSongId.isNotBlank()) {
+            items.firstOrNull { it.id.equals(expectedSongId, ignoreCase = true) }?.let { return it }
         }
-        if (exactWithCover != null) return exactWithCover
-        val exact = items.firstOrNull { item ->
-            item.title.equals(title, ignoreCase = true) &&
-                (artist.isBlank() || item.artist.contains(artist, ignoreCase = true) || artist.contains(item.artist, ignoreCase = true))
+        // 2. 严格按歌名 + 歌手硬门控过滤，杜绝同名不同歌手的标签误回填
+        val matched = items.filter { item ->
+            com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isTitleMatched(title, item.title) &&
+                com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isArtistMatched(artist, item.artist)
         }
-        if (exact != null) return exact
-        return items.firstOrNull { item -> isValidRemoteCoverUrl(item.coverUrl) } ?: items.firstOrNull()
+        if (matched.isEmpty()) return null
+        return matched.maxByOrNull { item ->
+            val baseScore = com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.calculateMatchScore(
+                targetTitle = title,
+                targetArtist = artist,
+                candidateTitle = item.title,
+                candidateArtist = item.artist,
+                targetDurationMs = 0L,
+                candidateDurationMs = item.durationMs,
+            )
+            baseScore + if (isValidRemoteCoverUrl(item.coverUrl)) 5 else 0
+        }
     }
 }

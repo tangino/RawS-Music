@@ -63,6 +63,8 @@ object OnlinePlaybackBridge {
                 candidateArtist = candidate.artists.joinToString("/"),
                 targetDurationMs = target.durationMs,
                 candidateDurationMs = candidate.durationMs,
+                targetAlbum = target.album,
+                candidateAlbum = candidate.album,
             )
         }
     }
@@ -130,6 +132,8 @@ object OnlinePlaybackBridge {
             candidateArtist = candidate.artists.joinToString("/"),
             targetDurationMs = target.durationMs,
             candidateDurationMs = candidate.durationMs,
+            targetAlbum = target.album,
+            candidateAlbum = candidate.album,
         )
     }
 }

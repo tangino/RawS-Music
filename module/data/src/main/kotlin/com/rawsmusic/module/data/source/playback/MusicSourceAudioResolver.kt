@@ -283,6 +283,7 @@ object MusicSourceAudioResolver {
                 title = item.title,
                 artist = artist,
                 expectedDurationMs = item.durationMs,
+                expectedAlbum = item.album,
                 requestedQuality = requestedQuality,
                 allowEncrypted = false,
                 maxRidCandidates = 3,

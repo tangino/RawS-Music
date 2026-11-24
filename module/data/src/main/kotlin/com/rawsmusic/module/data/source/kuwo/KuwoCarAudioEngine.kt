@@ -78,6 +78,7 @@ object KuwoCarAudioEngine {
         title: String,
         artist: String,
         expectedDurationMs: Long = 0L,
+        expectedAlbum: String = "",
         limit: Int = 3,
     ): List<KuwoSongMatch> = withContext(Dispatchers.IO) {
         val cleanT = extractCoreTitle(title)
@@ -93,18 +94,21 @@ object KuwoCarAudioEngine {
 
         var candidateItems = searchApi(keyword1)
 
-        // 检查第一阶段候选池中是否已有与目标主歌名相符的高品质结果；
-        // 避免无关曲目带母带标记导致跳过纯歌名补全搜索。
+        // 检查第一阶段候选池中是否已有与目标主歌名+歌手相符的高品质结果；
+        // 避免同名不同歌手的母带曲目导致跳过补全搜索。
         val cleanTLower = cleanT.lowercase()
         val hasMatchedHighQuality = candidateItems.any { item ->
             val candTitle = item.optString("SONGNAME")
                 .ifEmpty { item.optString("NAME") }
                 .ifEmpty { item.optString("FSONGNAME").trim('"') }
                 .ifEmpty { item.optString("name") }
+            val candArtist = item.optString("ARTIST")
+                .ifEmpty { item.optString("AARTIST") }
+                .ifEmpty { item.optString("artist") }
             val candCore = extractCoreTitle(candTitle).lowercase()
             val titleHit = cleanTLower.isNotBlank() &&
                 (candCore == cleanTLower || candCore.contains(cleanTLower) || cleanTLower.contains(candCore))
-            if (!titleHit) return@any false
+            if (!titleHit || !isArtistMatched(artist, candArtist)) return@any false
             val info = item.optString("N_MINFO").ifEmpty { item.optString("MINFO") }
             info.contains("bitrate:20900") || info.contains("bitrate:2000") || info.contains("bitrate:4000")
         }
@@ -148,8 +152,10 @@ object KuwoCarAudioEngine {
             val score = calculateMatchScore(
                 title,
                 artist,
+                expectedAlbum,
                 candTitle,
                 candArtist,
+                candAlbum,
                 expectedDurationMs,
                 candDurSec * 1000L,
                 qualities
@@ -373,12 +379,13 @@ object KuwoCarAudioEngine {
         title: String,
         artist: String,
         expectedDurationMs: Long = 0L,
+        expectedAlbum: String = "",
         requestedQuality: RawSourceQuality = qualityFromSourcePreference(),
         allowEncrypted: Boolean = false,
         maxRidCandidates: Int = 3,
         urlValidator: suspend (KuwoSongMatch, KuwoDownloadResource) -> Boolean,
     ): Pair<KuwoSongMatch, KuwoDownloadResource>? = withContext(Dispatchers.IO) {
-        val matches = matchTopSongs(title, artist, expectedDurationMs, limit = maxRidCandidates)
+        val matches = matchTopSongs(title, artist, expectedDurationMs, expectedAlbum, limit = maxRidCandidates)
         for (match in matches) {
             val res = resolveDownloadResource(
                 songMatch = match,
@@ -559,11 +566,76 @@ object KuwoCarAudioEngine {
             .trim()
     }
 
+    private val unknownArtists = setOf("未知歌手", "群星", "variousartists", "unknown", "va")
+
     /**
      * 歌手常见艺名、同音字及别字归一化（如 钟欣桐 -> 钟欣潼）。
      */
     private fun normalizeArtist(artist: String): String {
         return artist.replace("桐", "潼")
+            .replace("·", "")
+            .replace("•", "")
+            .replace("'", "")
+            .replace("\"", "")
+            .replace(" ", "")
+            .lowercase()
+    }
+
+    /**
+     * 在去空格前按多歌手分隔符拆分，并同时保留括号内的中/英文别名（如 "陈奕迅(Eason Chan)"）。
+     */
+    private fun extractArtistTokens(rawArtist: String): List<String> {
+        val trimmed = rawArtist.trim()
+        if (trimmed.isBlank()) return emptyList()
+        val tokens = LinkedHashSet<String>()
+        // 1. 提取括号内的别名（常为英文名/中文名）
+        pairedBracketsRegex.findAll(trimmed).forEach { match ->
+            val inner = match.value.trim().trim('(', ')', '[', ']', '{', '}', '（', '）', '【', '】')
+            inner.split('/', '\\', ',', '，', '、', '&', '|', '+')
+                .map(::normalizeArtist)
+                .filter { it.isNotBlank() }
+                .forEach(tokens::add)
+        }
+        // 2. 提取主歌手列表
+        val withoutBrackets = trimmed.replace(pairedBracketsRegex, " ")
+        withoutBrackets.split('/', '\\', ',', '，', '、', '&', '|', '+')
+            .map(::normalizeArtist)
+            .filter { it.isNotBlank() }
+            .forEach(tokens::add)
+        return tokens.toList()
+    }
+
+    /**
+     * 歌手匹配硬门控：当双方均提供了有效歌手名时，必须存在共同歌手才允许匹配，
+     * 彻底杜绝同名不同歌手的曲目误命中酷我车载。
+     */
+    private fun isArtistMatched(srcArtist: String, candArtist: String): Boolean {
+        val srcTokens = extractArtistTokens(srcArtist)
+        val candTokens = extractArtistTokens(candArtist)
+        if (srcTokens.isEmpty() || candTokens.isEmpty()) return true
+        if (srcTokens.any { it in unknownArtists } || candTokens.any { it in unknownArtists }) return true
+
+        val srcWhole = normalizeArtist(cleanKeyword(srcArtist))
+        val candWhole = normalizeArtist(cleanKeyword(candArtist))
+        if (srcWhole.isNotBlank() && srcWhole == candWhole) return true
+
+        return srcTokens.any { s ->
+            candTokens.any { c ->
+                s == c || (minOf(s.length, c.length) >= 2 && (s.contains(c) || c.contains(s)))
+            }
+        }
+    }
+
+    private val unknownAlbums = setOf("未知专辑", "unknownalbum", "unknown", "单曲", "single")
+
+    private fun normalizeAlbum(album: String): String {
+        val core = extractCoreTitle(album)
+        return core.replace("·", "")
+            .replace("•", "")
+            .replace("'", "")
+            .replace("\"", "")
+            .replace("《", "")
+            .replace("》", "")
             .replace(" ", "")
             .lowercase()
     }
@@ -571,8 +643,10 @@ object KuwoCarAudioEngine {
     private fun calculateMatchScore(
         srcTitle: String,
         srcArtist: String,
+        srcAlbum: String,
         candTitle: String,
         candArtist: String,
+        candAlbum: String,
         expectedDurMs: Long,
         candDurMs: Long,
         qualities: List<KuwoQualityOption>
@@ -617,22 +691,25 @@ object KuwoCarAudioEngine {
             }
         }
 
-        // 3. 歌手匹配（兼容多歌手拆分）
-        if (sA.isNotBlank() && cA.isNotBlank()) {
-            if (sA == cA) {
+        // 3. 歌手硬门控 + 加权（先按分隔符拆分多歌手再归一化；若双方均有有效歌手且完全不匹配，直接淘汰）
+        val sTokens = extractArtistTokens(srcArtist)
+        val cTokens = extractArtistTokens(candArtist)
+        val hasValidBothArtists = sTokens.isNotEmpty() && cTokens.isNotEmpty() &&
+            sTokens.none { it in unknownArtists } && cTokens.none { it in unknownArtists }
+        if (hasValidBothArtists) {
+            if (!isArtistMatched(srcArtist, candArtist)) {
+                return -1000
+            }
+            if (sA.isNotBlank() && sA == cA) {
                 score += 35
-            } else if (cA.contains(sA) || sA.contains(cA)) {
+            } else if (sTokens.any { it in cTokens }) {
                 score += 35
             } else {
-                val sParts = sA.split('&', '/', '、', ' ').filter { it.isNotBlank() }
-                val cParts = cA.split('&', '/', '、', ' ').filter { it.isNotBlank() }
-                if (sParts.any { cA.contains(it) } || cParts.any { sA.contains(it) }) {
-                    score += 30
-                }
+                score += 30
             }
         }
 
-        // 4. 时长精准对齐校验
+        // 4. 时长精准对齐校验（第一梯队核心因子）
         var durationSeverelyOff = false
         if (expectedDurMs > 0L && candDurMs > 0L) {
             val diff = kotlin.math.abs(expectedDurMs - candDurMs)
@@ -646,7 +723,20 @@ object KuwoCarAudioEngine {
             }
         }
 
-        // 5. 品质加权：仅在主歌名命中、版本无冲突且时长未严重偏离时才加分，避免低相关母带逆袭
+        // 5. 专辑匹配（次级加权因子：不做硬淘汰，但在歌名/歌手/时长均达标时优先命中原专辑而非精选集/合辑）
+        val sAlb = normalizeAlbum(srcAlbum)
+        val cAlb = normalizeAlbum(candAlbum)
+        if (sAlb.isNotBlank() && cAlb.isNotBlank() &&
+            sAlb !in unknownAlbums && cAlb !in unknownAlbums
+        ) {
+            if (sAlb == cAlb) {
+                score += 18
+            } else if (minOf(sAlb.length, cAlb.length) >= 2 && (sAlb.contains(cAlb) || cAlb.contains(sAlb))) {
+                score += 10
+            }
+        }
+
+        // 6. 品质加权：仅在主歌名命中、版本无冲突且时长未严重偏离时才加分，避免低相关母带逆袭
         val hasMaster = qualities.any { it.bitrate == 20900 }
         val hasFlac = qualities.any { it.bitrate == 2000 || it.bitrate == 4000 }
         if (titleMatched && !hasVersionConflict && !durationSeverelyOff) {

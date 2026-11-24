@@ -1,14 +1,17 @@
 package com.rawsmusic.module.data.source.playback
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes as Media3AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.rawsmusic.core.common.prefs.PlaylistAutoDownloadStore
 import com.rawsmusic.core.common.source.RawResolvedAudioSource
 import com.rawsmusic.core.common.ui.AppNoticeBus
@@ -117,9 +120,11 @@ object MusicSourcePlaybackController {
     private var prepared = false
     private var completionHandledGeneration = Long.MIN_VALUE
 
-    private var mediaPlayer: MediaPlayer? = null
-    private var mediaPlayerGeneration = Long.MIN_VALUE
-    private var mediaPlayerProgressJob: Job? = null
+    @Volatile
+    private var exoPlayer: ExoPlayer? = null
+    @Volatile
+    private var exoPlayerGeneration = Long.MIN_VALUE
+    private var exoProgressJob: Job? = null
     private var mediaFallbackJob: Job? = null
     private var preloadJob: Job? = null
     private val preloadedResolvedMap = java.util.concurrent.ConcurrentHashMap<String, RawResolvedAudioSource>()
@@ -127,12 +132,8 @@ object MusicSourcePlaybackController {
     private val playHistory = ArrayDeque<Int>()
     private const val MAX_HISTORY_SIZE = 50
     private const val RESOLVE_TIMEOUT_MS = 15_000L
-    private const val MATERIALIZE_TIMEOUT_MS = 25_000L
     private const val PRELOAD_TIMEOUT_MS = 12_000L
-    private const val MEDIA_PLAYER_PREPARE_TIMEOUT_MS = 20_000L
-    private var audioManager: AudioManager? = null
-    private var focusRequest: AudioFocusRequest? = null
-    private var resumeOnFocusGain = false
+    private const val EXO_PREPARE_TIMEOUT_MS = 20_000L
     private var backendReachedPlayingGeneration = Long.MIN_VALUE
     private var fallbackAttemptedGeneration = Long.MIN_VALUE
     private var activeResolvedSource = null as RawResolvedAudioSource?
@@ -140,36 +141,31 @@ object MusicSourcePlaybackController {
     private var activeAutoPlay = true
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val audioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-        .build()
 
-    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        mainHandler.post {
-            when (change) {
-                AudioManager.AUDIOFOCUS_GAIN -> {
-                    mediaPlayer?.setVolume(1f, 1f)
-                    if (resumeOnFocusGain && isMediaPlayerPrepared()) {
-                        resumeOnFocusGain = false
-                        resumeMediaPlayer()
-                    }
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                    mediaPlayer?.setVolume(0.22f, 0.22f)
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                    resumeOnFocusGain = mutableSnapshot.value.isPlaying
-                    pauseMediaPlayer()
-                }
-                AudioManager.AUDIOFOCUS_LOSS -> {
-                    resumeOnFocusGain = false
-                    pauseMediaPlayer()
-                    abandonAudioFocus()
-                }
-            }
+    /** 保证所有 ExoPlayer 访问（建实例/起播/暂停/恢复/seek/释放）都在 MainLooper 执行，杜绝跨线程异常导致旧音轨残留。 */
+    private inline fun runOnMainThread(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post { block() }
         }
     }
+    private val media3AudioAttributes = Media3AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+        .build()
+
+    /** 当前是否由 Media3 ExoPlayer 接管在线歌曲边播边缓存。 */
+    fun isMedia3Active(): Boolean = exoPlayer != null && exoPlayerGeneration == generations.get()
+
+    /** 供宿主 PlayerController（通知栏/锁屏/迷你播放器/蓝牙线控）转发暂停动作。 */
+    fun pauseExternal() = pauseExoPlayer()
+
+    /** 供宿主 PlayerController（通知栏/锁屏/迷你播放器/蓝牙线控）转发恢复播放动作。 */
+    fun resumeExternal() = resumeExoPlayer()
+
+    /** 供宿主在 FFmpeg 即将开播前做终极互斥：强制停掉并释放当前 ExoPlayer，杜绝双引擎同时出声。 */
+    fun stopExoPlayerOnly() = releaseExoPlayer()
 
     @Synchronized
     fun installBackend(newBackend: MusicSourcePlaybackBackend) {
@@ -187,7 +183,7 @@ object MusicSourcePlaybackController {
         backendStateJob?.cancel()
         backendStateJob = null
         backend = null
-        if (mediaPlayer == null) prepared = false
+        if (exoPlayer == null) prepared = false
     }
 
     fun play(
@@ -294,8 +290,8 @@ object MusicSourcePlaybackController {
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        // 切歌起播前必须同时卸载旧的 MediaPlayer 与底层 backend 会话，杜绝双引擎同时出声
-        releaseMediaPlayer(abandonFocus = false)
+        // 切歌起播前必须同时卸载旧的 ExoPlayer 与底层 backend 会话，杜绝双引擎同时出声
+        releaseExoPlayer()
         backend?.stop()
         val activeQueue = if (queue.isNotEmpty()) {
             queue
@@ -458,19 +454,15 @@ object MusicSourcePlaybackController {
     }
 
     fun seekTo(positionMs: Long) {
-        if (!prepared) return
-        val target = positionMs.coerceIn(0L, mutableSnapshot.value.durationMs.coerceAtLeast(0L))
-        if (isMediaPlayerPrepared()) {
-            val player = mediaPlayer ?: return
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    player.seekTo(target, MediaPlayer.SEEK_CLOSEST)
-                } else {
-                    @Suppress("DEPRECATION")
-                    player.seekTo(target.toInt())
+        if (!prepared && !isMedia3Active()) return
+        val maxDur = mutableSnapshot.value.durationMs.coerceAtLeast(0L)
+        val target = if (maxDur > 0L) positionMs.coerceIn(0L, maxDur) else positionMs.coerceAtLeast(0L)
+        if (isMedia3Active()) {
+            runOnMainThread {
+                val player = exoPlayer ?: return@runOnMainThread
+                runCatching { player.seekTo(target) }.onFailure {
+                    AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} EXO_SEEK_FAIL generation=$exoPlayerGeneration targetMs=$target", it)
                 }
-            }.onFailure {
-                AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_SEEK_FAIL generation=$mediaPlayerGeneration targetMs=$target", it)
             }
         } else {
             backend?.seekTo(target)
@@ -497,7 +489,7 @@ object MusicSourcePlaybackController {
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        releaseMediaPlayer(abandonFocus = false)
+        releaseExoPlayer()
         backend?.stop()
     }
 
@@ -518,7 +510,7 @@ object MusicSourcePlaybackController {
         completionHandledGeneration = Long.MIN_VALUE
         activeResolvedSource = null
         backend?.stop()
-        releaseMediaPlayer(abandonFocus = true)
+        releaseExoPlayer()
         mutableSnapshot.value = MusicSourcePlaybackSnapshot()
     }
 
@@ -544,7 +536,7 @@ object MusicSourcePlaybackController {
         prepared = false
         completionHandledGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        releaseMediaPlayer(abandonFocus = true)
+        releaseExoPlayer()
         mutableSnapshot.value = MusicSourcePlaybackSnapshot()
     }
 
@@ -590,7 +582,7 @@ object MusicSourcePlaybackController {
         backendReachedPlayingGeneration = Long.MIN_VALUE
         fallbackAttemptedGeneration = Long.MIN_VALUE
         activeResolvedSource = null
-        releaseMediaPlayer(abandonFocus = false)
+        releaseExoPlayer()
         backend?.stop()
 
         val origPlatform = resolvePlatformDisplayName(item.sourceId)
@@ -889,34 +881,10 @@ object MusicSourcePlaybackController {
 
                 AppLogger.i(TAG, "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_RESOLVED nextTitle=${nextItem.title} url=${OnlinePlaybackDiagnostics.safeUrl(resolved.url)}")
 
-                // 🌟 核心对齐 OrBitPlayer 机制：
-                // 1. 直链解析成功瞬间立即写入预加载映射，切歌时可直接以 PRELOAD_HIT 秒开起播，杜绝退回 Resolving 寻源状态！
+                // 直链解析成功即写入预加载映射，切歌时 0ms 跳过寻源，直接交给 Media3 边播边缓存秒开（不再后台整曲全量下载）
                 val platformName = resolved.platform ?: resolvePlatformDisplayName(nextItem.sourceId)
                 val resolvedWithPlatform = resolved.copy(platform = platformName)
                 preloadedResolvedMap[nextItem.stableIdentity] = resolvedWithPlatform
-
-                // 2. 在后台静默物化全量音频文件至本地磁盘缓存，完成后平滑升级为本地离线文件
-                if (resolved.url.startsWith("http://", ignoreCase = true) || resolved.url.startsWith("https://", ignoreCase = true)) {
-                    val materializedResult = OnlineAudioFileCache.materialize(
-                        context = context,
-                        item = nextItem,
-                        source = resolvedWithPlatform,
-                    ) { _, _, _ -> }
-                    val localSource = resolvedWithPlatform.copy(
-                        url = materializedResult.file.absolutePath,
-                        headers = emptyMap(),
-                        userAgent = null,
-                        expiresAtMs = null,
-                        platform = platformName,
-                        sourceName = "本地缓存",
-                    )
-                    preloadedResolvedMap[nextItem.stableIdentity] = localSource
-                    AppLogger.i(
-                        TAG,
-                        "${OnlinePlaybackDiagnostics.PREFIX} PRELOAD_MATERIALIZED nextTitle=${nextItem.title} " +
-                            "bytes=${materializedResult.bytes} file=${materializedResult.file.name}"
-                    )
-                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Throwable) {
@@ -950,30 +918,24 @@ object MusicSourcePlaybackController {
             bufferedPercent = 0,
         )
 
-        val activeBackend = backend
-        if (activeBackend == null) {
-            prepareMediaPlayer(
-                generation = generation,
-                source = source,
-                startPositionMs = startPositionMs,
-                autoPlay = autoPlay,
-                reason = "backend_unavailable",
-            )
-            return
-        }
+        val isHttpSource = source.url.startsWith("http://", ignoreCase = true) ||
+            source.url.startsWith("https://", ignoreCase = true)
 
-        if (!source.url.startsWith("http://", ignoreCase = true) &&
-            !source.url.startsWith("https://", ignoreCase = true)
-        ) {
-            playBackend(
-                backend = activeBackend,
-                generation = generation,
-                item = item,
-                source = source,
-                startPositionMs = startPositionMs,
-                autoPlay = autoPlay,
-            )
-            return
+        // 本地文件路径继续走宿主 FFmpeg 管线（保留 USB DAC 独占、Native DSP/EQ、DSD）；
+        // 在线 HTTP(S) 直链统一走 Media3 ExoPlayer + SimpleCache 实现首包秒开与真正边播边缓存。
+        if (!isHttpSource) {
+            val activeBackend = backend
+            if (activeBackend != null) {
+                playBackend(
+                    backend = activeBackend,
+                    generation = generation,
+                    item = item,
+                    source = source,
+                    startPositionMs = startPositionMs,
+                    autoPlay = autoPlay,
+                )
+                return
+            }
         }
 
         val context = applicationContext ?: run {
@@ -981,93 +943,21 @@ object MusicSourcePlaybackController {
             return
         }
 
-        // 优先检查本地是否已存在完整缓存文件（0ms 秒开）
-        val cachedHit = OnlineAudioFileCache.findValidCachedFile(context, item, source.quality)
-        if (cachedHit != null) {
-            val (cachedFile, _) = cachedHit
-            if (isKuwoCarSource(source)) {
-                val actualDurMs = probeLocalAudioDurationMs(cachedFile)
-                if (isDurationMismatched(actualDurMs, item.durationMs)) {
-                    AppLogger.w(
-                        TAG,
-                        "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_CACHE actual=${actualDurMs}ms " +
-                            "expected=${item.durationMs}ms title=${item.title}, deleting cache & falling back to origin"
-                    )
-                    runCatching { cachedFile.delete() }
-                    fallbackFromKuwoMismatch(
-                        context = context,
-                        generation = generation,
-                        item = item,
-                        requestedQuality = source.quality,
-                        startPositionMs = startPositionMs,
-                        autoPlay = autoPlay,
-                    )
-                    return
-                }
-            }
-            AppLogger.i(
-                TAG,
-                "${OnlinePlaybackDiagnostics.PREFIX} CACHE_DIRECT_HIT bytes=${cachedFile.length()} " +
-                    "file=${cachedFile.name} title=${item.title}"
-            )
-            val localSource = source.copy(
-                url = cachedFile.absolutePath,
-                headers = emptyMap(),
-                userAgent = null,
-                expiresAtMs = null,
-            )
-            playBackend(
-                backend = activeBackend,
-                generation = generation,
-                item = item,
-                source = localSource,
-                startPositionMs = startPositionMs,
-                autoPlay = autoPlay,
-            )
-            return
-        }
-
-        cacheJob?.cancel()
-        cacheJob = scope.launch {
-            try {
-                AppLogger.i(
-                    TAG,
-                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_START generation=$generation " +
-                        "quality=${source.quality} url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}"
-                )
-                val cached = withTimeout(MATERIALIZE_TIMEOUT_MS) {
-                    OnlineAudioFileCache.materialize(
-                        context = context,
-                        item = item,
-                        source = source,
-                    ) { percent, downloadedBytes, totalBytes ->
-                        mainHandler.post {
-                            if (generation != generations.get()) return@post
-                            val current = mutableSnapshot.value
-                            if (current.status == MusicSourcePlaybackStatus.Preparing) {
-                                mutableSnapshot.value = current.copy(bufferedPercent = percent.coerceIn(0, 100))
-                            }
-                        }
-                        if (percent == 0 || percent == 25 || percent == 50 || percent == 75 || percent == 100) {
-                            AppLogger.i(
-                                TAG,
-                                "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PROGRESS generation=$generation " +
-                                    "percent=$percent downloadedBytes=$downloadedBytes totalBytes=$totalBytes"
-                            )
-                        }
-                    }
-                }
-                if (generation != generations.get()) return@launch
-                // 本地落盘后用 100% 准确的本地文件时长做终极核验：若酷我返回了短试听或错版音频，立即删缓存并回退原平台寻源
+        // 若本地磁盘已有历史完整离线缓存（如旧版缓存），依然可以直接秒开（并保留酷我时长核验）
+        if (isHttpSource) {
+            val cachedHit = OnlineAudioFileCache.findValidCachedFile(context, item, source.quality)
+            val activeBackend = backend
+            if (cachedHit != null && activeBackend != null) {
+                val (cachedFile, _) = cachedHit
                 if (isKuwoCarSource(source)) {
-                    val actualDurMs = probeLocalAudioDurationMs(cached.file)
+                    val actualDurMs = probeLocalAudioDurationMs(cachedFile)
                     if (isDurationMismatched(actualDurMs, item.durationMs)) {
                         AppLogger.w(
                             TAG,
-                            "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_MATERIALIZED actual=${actualDurMs}ms " +
+                            "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_CACHE actual=${actualDurMs}ms " +
                                 "expected=${item.durationMs}ms title=${item.title}, deleting cache & falling back to origin"
                         )
-                        runCatching { cached.file.delete() }
+                        runCatching { cachedFile.delete() }
                         fallbackFromKuwoMismatch(
                             context = context,
                             generation = generation,
@@ -1076,20 +966,19 @@ object MusicSourcePlaybackController {
                             startPositionMs = startPositionMs,
                             autoPlay = autoPlay,
                         )
-                        return@launch
+                        return
                     }
                 }
+                AppLogger.i(
+                    TAG,
+                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_DIRECT_HIT bytes=${cachedFile.length()} " +
+                        "file=${cachedFile.name} title=${item.title}"
+                )
                 val localSource = source.copy(
-                    url = cached.file.absolutePath,
+                    url = cachedFile.absolutePath,
                     headers = emptyMap(),
                     userAgent = null,
                     expiresAtMs = null,
-                )
-                AppLogger.i(
-                    TAG,
-                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_END generation=$generation " +
-                        "fromCache=${cached.fromCache} bytes=${cached.bytes} " +
-                        "file=${cached.file.name}"
                 )
                 playBackend(
                     backend = activeBackend,
@@ -1099,39 +988,20 @@ object MusicSourcePlaybackController {
                     startPositionMs = startPositionMs,
                     autoPlay = autoPlay,
                 )
-            } catch (timeout: TimeoutCancellationException) {
-                if (generation != generations.get()) return@launch
-                AppLogger.w(
-                    TAG,
-                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_TIMEOUT generation=$generation " +
-                        "timeoutMs=$MATERIALIZE_TIMEOUT_MS url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}"
-                )
-                prepareMediaPlayer(
-                    generation = generation,
-                    source = source,
-                    startPositionMs = startPositionMs,
-                    autoPlay = autoPlay,
-                    reason = "cache_download_timeout",
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                if (generation != generations.get()) return@launch
-                AppLogger.e(
-                    TAG,
-                    "${OnlinePlaybackDiagnostics.PREFIX} CACHE_PREPARE_FAIL generation=$generation " +
-                        "message=${error.message.orEmpty()} url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}",
-                    error,
-                )
-                prepareMediaPlayer(
-                    generation = generation,
-                    source = source,
-                    startPositionMs = startPositionMs,
-                    autoPlay = autoPlay,
-                    reason = "cache_download_failed",
-                )
+                return
             }
         }
+
+        cacheJob?.cancel()
+        cacheJob = null
+        prepareExoPlayer(
+            generation = generation,
+            item = item,
+            source = source,
+            startPositionMs = startPositionMs,
+            autoPlay = autoPlay,
+            reason = if (isHttpSource) "media3_stream_cache" else "media3_local_fallback",
+        )
     }
 
     private fun playBackend(
@@ -1143,8 +1013,8 @@ object MusicSourcePlaybackController {
         autoPlay: Boolean,
     ) {
         if (generation != generations.get()) return
-        // 确保交由宿主底层播放前，内部 MediaPlayer 已彻底释放，杜绝双路同时出声
-        releaseMediaPlayer(abandonFocus = false)
+        // 确保交由宿主底层播放前，内部 ExoPlayer 已彻底释放，杜绝双路同时出声
+        releaseExoPlayer()
         val state = mutableSnapshot.value
         backend.play(
             MusicSourcePlaybackRequest(
@@ -1162,19 +1032,25 @@ object MusicSourcePlaybackController {
     }
 
     private fun pauseInternal() {
-        if (!prepared) return
-        if (isMediaPlayerPrepared()) pauseMediaPlayer() else backend?.pause()
+        if (isMedia3Active()) {
+            pauseExoPlayer()
+        } else if (prepared) {
+            backend?.pause()
+        }
     }
 
     private fun resumeInternal() {
-        if (!prepared) return
-        if (isMediaPlayerPrepared()) resumeMediaPlayer() else backend?.resume()
+        if (isMedia3Active()) {
+            resumeExoPlayer()
+        } else if (prepared) {
+            backend?.resume()
+        }
     }
 
     private fun onBackendSnapshot(backendSnapshot: MusicSourceBackendSnapshot) {
         val generation = generations.get()
         if (backendSnapshot.generation != generation) return
-        if (mediaPlayerGeneration == generation) return
+        if (exoPlayerGeneration == generation) return
         val state = mutableSnapshot.value
         if (state.currentItem == null) return
 
@@ -1273,8 +1149,10 @@ object MusicSourcePlaybackController {
                         // before the independent MediaPlayer requests the same route.
                         delay(160L)
                         if (generation != generations.get()) return@launch
-                        prepareMediaPlayer(
+                        val currentItem = state.currentItem ?: return@launch
+                        prepareExoPlayer(
                             generation = generation,
+                            item = currentItem,
                             source = source,
                             startPositionMs = activeStartPositionMs,
                             autoPlay = activeAutoPlay,
@@ -1295,10 +1173,13 @@ object MusicSourcePlaybackController {
     }
 
     private fun currentPosition(): Long {
-        if (isMediaPlayerPrepared()) {
-            return runCatching { mediaPlayer?.currentPosition?.toLong() ?: 0L }
-                .getOrDefault(0L)
-                .coerceAtLeast(0L)
+        if (isMedia3Active()) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                return runCatching { exoPlayer?.currentPosition ?: 0L }
+                    .getOrDefault(0L)
+                    .coerceAtLeast(0L)
+            }
+            return mutableSnapshot.value.positionMs.coerceAtLeast(0L)
         }
         return backend?.snapshot?.value?.positionMs
             ?.coerceAtLeast(0L)
@@ -1307,15 +1188,17 @@ object MusicSourcePlaybackController {
 
     private fun fail(message: String) {
         prepared = false
-        releaseMediaPlayer(abandonFocus = true)
+        releaseExoPlayer()
         mutableSnapshot.value = mutableSnapshot.value.copy(
             status = MusicSourcePlaybackStatus.Error,
             error = message.take(1_024),
         )
     }
 
-    private fun prepareMediaPlayer(
+    @OptIn(UnstableApi::class)
+    private fun prepareExoPlayer(
         generation: Long,
+        item: RawSourceMediaItem,
         source: RawResolvedAudioSource,
         startPositionMs: Long,
         autoPlay: Boolean,
@@ -1325,15 +1208,29 @@ object MusicSourcePlaybackController {
             fail("在线播放上下文不可用")
             return
         }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post {
+                prepareExoPlayer(generation, item, source, startPositionMs, autoPlay, reason)
+            }
+            return
+        }
         if (generation != generations.get()) return
-        // 切入内部 MediaPlayer 前，强制停止底层 backend，杜绝与上一首 Native 音频引擎同时播放
-        backend?.stop()
-        releaseMediaPlayer(abandonFocus = false)
+        releaseExoPlayer()
 
-        val player = MediaPlayer()
-        mediaPlayer = player
-        mediaPlayerGeneration = generation
-        prepared = false
+        // 通知宿主 PlayerController 同步当前曲目/队列/前台保活，并停止底层 FFmpeg 引擎，杜绝双路发声
+        val currentState = mutableSnapshot.value
+        backend?.syncExternalPlayback(
+            MusicSourcePlaybackRequest(
+                generation = generation,
+                item = item,
+                source = source,
+                queue = currentState.queue,
+                queueIndex = currentState.currentIndex,
+                startPositionMs = startPositionMs,
+                autoPlay = autoPlay,
+            )
+        )
+
         val requestHeaders = LinkedHashMap(source.headers)
         source.userAgent
             ?.takeIf { it.isNotBlank() }
@@ -1343,172 +1240,200 @@ object MusicSourcePlaybackController {
                 }
             }
 
+        val cacheKey = OnlineMedia3Cache.cacheKey(item, source.quality)
         AppLogger.i(
             TAG,
-            "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_OPEN_START generation=$generation reason=$reason " +
-                "headers=${OnlinePlaybackDiagnostics.headerNames(requestHeaders)} " +
+            "${OnlinePlaybackDiagnostics.PREFIX} EXO_OPEN_START generation=$generation reason=$reason " +
+                "cacheKey=${cacheKey.take(12)} headers=${OnlinePlaybackDiagnostics.headerNames(requestHeaders)} " +
                 "url=${OnlinePlaybackDiagnostics.safeUrl(source.url)}"
         )
+
         try {
-            player.setAudioAttributes(audioAttributes)
-            player.setOnPreparedListener { preparedPlayer ->
-                if (generation != generations.get() || mediaPlayer !== preparedPlayer) {
-                    runCatching { preparedPlayer.stop() }
-                    runCatching { preparedPlayer.release() }
-                    return@setOnPreparedListener
-                }
-                mediaFallbackJob?.cancel()
-                mediaFallbackJob = null
-                prepared = true
-                val reportedDuration = runCatching { preparedPlayer.duration.toLong() }
-                    .getOrDefault(0L)
-                    .coerceAtLeast(0L)
-                val currentItem = mutableSnapshot.value.currentItem
-                if (currentItem != null && isKuwoCarSource(source) && isDurationMismatched(reportedDuration, currentItem.durationMs)) {
-                    AppLogger.w(
-                        TAG,
-                        "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_MEDIAPLAYER actual=${reportedDuration}ms " +
-                            "expected=${currentItem.durationMs}ms title=${currentItem.title}, falling back to origin"
-                    )
-                    prepared = false
-                    releaseMediaPlayer(abandonFocus = false)
-                    fallbackFromKuwoMismatch(
-                        context = context,
-                        generation = generation,
-                        item = currentItem,
-                        requestedQuality = source.quality,
-                        startPositionMs = startPositionMs,
-                        autoPlay = autoPlay,
-                    )
-                    return@setOnPreparedListener
-                }
-                val duration = reportedDuration.takeIf { it > 0L }
-                    ?: mutableSnapshot.value.currentItem?.durationMs
-                    ?: 0L
-                val targetPosition = if (duration > 0L) {
-                    startPositionMs.coerceIn(0L, duration)
-                } else {
-                    startPositionMs.coerceAtLeast(0L)
-                }
-                mutableSnapshot.value = mutableSnapshot.value.copy(
-                    status = MusicSourcePlaybackStatus.Preparing,
-                    durationMs = duration,
-                    positionMs = targetPosition,
-                    error = "",
-                )
-                if (targetPosition > 0L) {
-                    runCatching {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            preparedPlayer.seekTo(targetPosition, MediaPlayer.SEEK_CLOSEST)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            preparedPlayer.seekTo(targetPosition.toInt())
+            val dataSourceFactory = OnlineMedia3Cache.createDataSourceFactory(
+                context = context,
+                headers = requestHeaders,
+                userAgent = source.userAgent,
+            )
+            val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
+            // 音频焦点由宿主 PlayerService/PlayerController 的 AndroidAudioInterrupt 统一持有与调度；
+            // 若 ExoPlayer 再开启 handleAudioFocus=true，会在同进程内与 PlayerService 互抢焦点导致 ExoPlayer 收到 AUDIOFOCUS_LOSS(-1) 秒停。
+            val player = ExoPlayer.Builder(context)
+                .setLooper(Looper.getMainLooper())
+                .setMediaSourceFactory(mediaSourceFactory)
+                .setAudioAttributes(media3AudioAttributes, false)
+                .setHandleAudioBecomingNoisy(true)
+                .setWakeMode(C.WAKE_MODE_NETWORK)
+                .build()
+
+            exoPlayer = player
+            exoPlayerGeneration = generation
+            prepared = false
+            var preloadScheduledForGen = false
+            var kuwoCheckedForGen = false
+
+            player.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (generation != generations.get() || exoPlayer !== player) return
+                    when (playbackState) {
+                        Player.STATE_BUFFERING -> {
+                            mutableSnapshot.value = mutableSnapshot.value.copy(
+                                bufferedPercent = player.bufferedPercentage.coerceIn(0, 100),
+                            )
                         }
-                    }
-                }
-                AppLogger.i(
-                    TAG,
-                    "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_PREPARED generation=$generation " +
-                        "durationMs=$duration startMs=$targetPosition autoPlay=$autoPlay"
-                )
-                if (!autoPlay) {
-                    mutableSnapshot.value = mutableSnapshot.value.copy(
-                        status = MusicSourcePlaybackStatus.Paused,
-                        bufferedPercent = 100,
-                    )
-                    return@setOnPreparedListener
-                }
-                if (!requestAudioFocus(context)) {
-                    fail("无法获取音频焦点")
-                    return@setOnPreparedListener
-                }
-                runCatching { preparedPlayer.start() }
-                    .onSuccess {
-                        mutableSnapshot.value = mutableSnapshot.value.copy(
-                            status = MusicSourcePlaybackStatus.Playing,
-                            bufferedPercent = 100,
-                            error = "",
-                        )
-                        AppLogger.i(
-                            TAG,
-                            "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_PLAYING generation=$generation"
-                        )
-                        startMediaPlayerProgressUpdates(generation)
-                        schedulePreloadNext()
-                    }
-                    .onFailure { error -> fail(error.message ?: "无法开始在线播放") }
-            }
-            player.setOnBufferingUpdateListener { current, percent ->
-                if (generation == generations.get() && mediaPlayer === current) {
-                    mutableSnapshot.value = mutableSnapshot.value.copy(
-                        bufferedPercent = percent.coerceIn(0, 100),
-                    )
-                }
-            }
-            player.setOnInfoListener { current, what, extra ->
-                if (generation == generations.get() && mediaPlayer === current) {
-                    when (what) {
-                        MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
-                            if (mutableSnapshot.value.status == MusicSourcePlaybackStatus.Playing && !current.isPlaying) {
-                                AppLogger.w(TAG, "MediaPlayer buffering end, resuming auto-start")
-                                runCatching { current.start() }
+                        Player.STATE_READY -> {
+                            mediaFallbackJob?.cancel()
+                            mediaFallbackJob = null
+                            val rawDur = player.duration
+                            val reportedDuration = if (rawDur != C.TIME_UNSET && rawDur > 0L) rawDur else 0L
+                            if (!kuwoCheckedForGen) {
+                                kuwoCheckedForGen = true
+                                val currentItem = mutableSnapshot.value.currentItem
+                                if (currentItem != null &&
+                                    isKuwoCarSource(source) &&
+                                    isDurationMismatched(reportedDuration, currentItem.durationMs)
+                                ) {
+                                    AppLogger.w(
+                                        TAG,
+                                        "${OnlinePlaybackDiagnostics.PREFIX} KUWO_DURATION_MISMATCH_EXO actual=${reportedDuration}ms " +
+                                            "expected=${currentItem.durationMs}ms title=${currentItem.title}, evicting cache & falling back to origin"
+                                    )
+                                    prepared = false
+                                    releaseExoPlayer()
+                                    OnlineMedia3Cache.evict(context, currentItem, source.quality)
+                                    fallbackFromKuwoMismatch(
+                                        context = context,
+                                        generation = generation,
+                                        item = currentItem,
+                                        requestedQuality = source.quality,
+                                        startPositionMs = startPositionMs,
+                                        autoPlay = autoPlay,
+                                    )
+                                    return
+                                }
+                            }
+                            prepared = true
+                            val duration = reportedDuration.takeIf { it > 0L }
+                                ?: mutableSnapshot.value.currentItem?.durationMs
+                                ?: 0L
+                            val nextStatus = if (player.playWhenReady) {
+                                MusicSourcePlaybackStatus.Playing
+                            } else {
+                                MusicSourcePlaybackStatus.Paused
+                            }
+                            mutableSnapshot.value = mutableSnapshot.value.copy(
+                                status = nextStatus,
+                                durationMs = duration,
+                                positionMs = player.currentPosition.coerceAtLeast(0L),
+                                bufferedPercent = player.bufferedPercentage.coerceIn(0, 100),
+                                error = "",
+                            )
+                            AppLogger.i(
+                                TAG,
+                                "${OnlinePlaybackDiagnostics.PREFIX} EXO_READY generation=$generation " +
+                                    "durationMs=$duration buffered=${player.bufferedPercentage}% playWhenReady=${player.playWhenReady}"
+                            )
+                            startExoProgressUpdates(generation)
+                            if (!preloadScheduledForGen && player.playWhenReady) {
+                                preloadScheduledForGen = true
+                                schedulePreloadNext()
                             }
                         }
+                        Player.STATE_ENDED -> {
+                            if (completionHandledGeneration == generation) return
+                            completionHandledGeneration = generation
+                            prepared = false
+                            exoProgressJob?.cancel()
+                            exoProgressJob = null
+                            val state = mutableSnapshot.value
+                            val completedPos = maxOf(state.positionMs, player.currentPosition.coerceAtLeast(0L))
+                            val completedDur = state.durationMs.coerceAtLeast(
+                                player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+                            )
+                            maybeAutoSaveOnTrackCompleted(
+                                item = state.currentItem,
+                                positionMs = completedPos,
+                                durationMs = completedDur,
+                            )
+                            if (backend != null) {
+                                mutableSnapshot.value = state.copy(
+                                    status = MusicSourcePlaybackStatus.Completed,
+                                    positionMs = completedDur,
+                                    durationMs = completedDur,
+                                    bufferedPercent = 100,
+                                )
+                                backend?.onExternalTrackCompleted()
+                            } else if (state.canGoNext) {
+                                next(automatic = true)
+                            } else {
+                                mutableSnapshot.value = state.copy(
+                                    status = MusicSourcePlaybackStatus.Completed,
+                                    positionMs = completedDur,
+                                    durationMs = completedDur,
+                                    bufferedPercent = 100,
+                                )
+                            }
+                        }
+                        Player.STATE_IDLE -> Unit
                     }
                 }
-                false
-            }
-            player.setOnCompletionListener { completedPlayer ->
-                if (generation != generations.get() || mediaPlayer !== completedPlayer) return@setOnCompletionListener
-                val state = mutableSnapshot.value
-                prepared = false
-                val completedPos = maxOf(
-                    state.positionMs,
-                    runCatching { completedPlayer.currentPosition.toLong() }.getOrDefault(0L),
-                )
-                maybeAutoSaveOnTrackCompleted(
-                    item = state.currentItem,
-                    positionMs = completedPos,
-                    durationMs = state.durationMs,
-                )
-                if (state.canGoNext) {
-                    next(automatic = true)
-                } else {
-                    mutableSnapshot.value = state.copy(
-                        status = MusicSourcePlaybackStatus.Completed,
-                        positionMs = state.durationMs,
-                        bufferedPercent = 100,
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (generation != generations.get() || exoPlayer !== player) return
+                    if (!prepared) return
+                    val current = mutableSnapshot.value
+                    if (current.status == MusicSourcePlaybackStatus.Completed ||
+                        current.status == MusicSourcePlaybackStatus.Error
+                    ) {
+                        return
+                    }
+                    val targetStatus = if (isPlaying) {
+                        MusicSourcePlaybackStatus.Playing
+                    } else if (player.playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                        MusicSourcePlaybackStatus.Playing
+                    } else {
+                        MusicSourcePlaybackStatus.Paused
+                    }
+                    mutableSnapshot.value = current.copy(
+                        status = targetStatus,
+                        positionMs = player.currentPosition.coerceAtLeast(0L),
+                        bufferedPercent = player.bufferedPercentage.coerceIn(0, 100),
                     )
-                    abandonAudioFocus()
                 }
-            }
-            player.setOnErrorListener { failedPlayer, what, extra ->
-                if (generation == generations.get() && mediaPlayer === failedPlayer) {
+
+                override fun onPlayerError(error: PlaybackException) {
+                    if (generation != generations.get() || exoPlayer !== player) return
                     mediaFallbackJob?.cancel()
                     mediaFallbackJob = null
                     AppLogger.e(
                         TAG,
-                        "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_ERROR generation=$generation what=$what extra=$extra"
+                        "${OnlinePlaybackDiagnostics.PREFIX} EXO_ERROR generation=$generation " +
+                            "code=${error.errorCodeName} msg=${error.message}",
+                        error,
                     )
-                    fail("在线播放器错误：$what/$extra")
+                    fail("在线播放器错误：${error.errorCodeName}")
                 }
-                true
-            }
-            player.setDataSource(context, Uri.parse(source.url), requestHeaders)
+            })
+
+            val mediaItem = MediaItem.Builder()
+                .setUri(source.url)
+                .setCustomCacheKey(cacheKey)
+                .build()
+            player.setMediaItem(mediaItem, startPositionMs.coerceAtLeast(0L))
+            player.playWhenReady = autoPlay
             mediaFallbackJob?.cancel()
             mediaFallbackJob = scope.launch {
-                delay(MEDIA_PLAYER_PREPARE_TIMEOUT_MS)
+                delay(EXO_PREPARE_TIMEOUT_MS)
                 if (generation != generations.get()) return@launch
                 if (!prepared && mutableSnapshot.value.status == MusicSourcePlaybackStatus.Preparing) {
-                    AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_PREPARE_TIMEOUT generation=$generation")
+                    AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} EXO_PREPARE_TIMEOUT generation=$generation")
                     fail("在线媒体准备超时")
                 }
             }
-            player.prepareAsync()
+            player.prepare()
         } catch (error: Throwable) {
             AppLogger.e(
                 TAG,
-                "${OnlinePlaybackDiagnostics.PREFIX} MEDIAPLAYER_OPEN_FAIL generation=$generation " +
+                "${OnlinePlaybackDiagnostics.PREFIX} EXO_OPEN_FAIL generation=$generation " +
                     "message=${error.message.orEmpty().replace('\n', ' ').replace('\r', ' ').take(512)}",
                 error,
             )
@@ -1516,119 +1441,70 @@ object MusicSourcePlaybackController {
         }
     }
 
-    private fun pauseMediaPlayer() {
-        val player = mediaPlayer ?: return
-        if (!isMediaPlayerPrepared()) return
-        runCatching {
-            if (player.isPlaying) player.pause()
-        }.onSuccess {
-            mutableSnapshot.value = mutableSnapshot.value.copy(
-                status = MusicSourcePlaybackStatus.Paused,
-                positionMs = currentPosition(),
-            )
+    private fun pauseExoPlayer() {
+        runOnMainThread {
+            val player = exoPlayer ?: return@runOnMainThread
+            if (exoPlayerGeneration != generations.get()) return@runOnMainThread
+            runCatching { player.pause() }.onSuccess {
+                mutableSnapshot.value = mutableSnapshot.value.copy(
+                    status = MusicSourcePlaybackStatus.Paused,
+                    positionMs = player.currentPosition.coerceAtLeast(0L),
+                )
+            }
         }
     }
 
-    private fun resumeMediaPlayer() {
-        val context = applicationContext ?: return
-        val player = mediaPlayer ?: return
-        if (!isMediaPlayerPrepared()) return
-        if (!requestAudioFocus(context)) {
-            fail("无法获取音频焦点")
-            return
-        }
-        runCatching { player.start() }
-            .onSuccess {
+    private fun resumeExoPlayer() {
+        runOnMainThread {
+            val player = exoPlayer ?: return@runOnMainThread
+            if (exoPlayerGeneration != generations.get()) return@runOnMainThread
+            runCatching { player.play() }.onSuccess {
                 mutableSnapshot.value = mutableSnapshot.value.copy(
                     status = MusicSourcePlaybackStatus.Playing,
                     error = "",
                 )
-                startMediaPlayerProgressUpdates(generations.get())
-            }
-            .onFailure { fail(it.message ?: "无法继续在线播放") }
+                startExoProgressUpdates(generations.get())
+            }.onFailure { fail(it.message ?: "无法继续在线播放") }
+        }
     }
 
-    private fun startMediaPlayerProgressUpdates(generation: Long) {
-        mediaPlayerProgressJob?.cancel()
-        mediaPlayerProgressJob = scope.launch {
-            while (isActive && generation == generations.get() && mediaPlayerGeneration == generation) {
+    private fun startExoProgressUpdates(generation: Long) {
+        exoProgressJob?.cancel()
+        exoProgressJob = scope.launch {
+            while (isActive && generation == generations.get() && exoPlayerGeneration == generation) {
+                val player = exoPlayer ?: break
                 val state = mutableSnapshot.value
                 if (state.currentItem == null) break
-                val duration = runCatching {
-                    if (isMediaPlayerPrepared()) mediaPlayer?.duration?.toLong() ?: 0L else 0L
-                }.getOrDefault(0L).takeIf { it > 0L } ?: state.durationMs
-                // 看门狗：若上层状态处于 Playing，但底层 MediaPlayer 意外停止，自动拉起
-                if (state.status == MusicSourcePlaybackStatus.Playing && isMediaPlayerPrepared()) {
-                    val p = mediaPlayer
-                    if (p != null && !p.isPlaying) {
-                        AppLogger.w(TAG, "MediaPlayer watchdog: status is Playing but player paused, auto-starting")
-                        runCatching { p.start() }
-                    }
-                }
+                val rawDur = player.duration
+                val duration = if (rawDur != C.TIME_UNSET && rawDur > 0L) rawDur else state.durationMs
+                val pos = player.currentPosition.coerceAtLeast(0L)
                 mutableSnapshot.value = state.copy(
-                    positionMs = currentPosition().coerceAtMost(duration.coerceAtLeast(0L)),
+                    positionMs = if (duration > 0L) pos.coerceAtMost(duration) else pos,
                     durationMs = duration.coerceAtLeast(0L),
+                    bufferedPercent = player.bufferedPercentage.coerceIn(0, 100),
                 )
-                delay(500L)
+                delay(250L)
             }
         }
     }
 
-    private fun isMediaPlayerPrepared(): Boolean =
-        prepared && mediaPlayer != null && mediaPlayerGeneration == generations.get()
-
-    private fun releaseMediaPlayer(abandonFocus: Boolean) {
-        mediaPlayerProgressJob?.cancel()
-        mediaPlayerProgressJob = null
+    private fun releaseExoPlayer() {
+        exoProgressJob?.cancel()
+        exoProgressJob = null
         mediaFallbackJob?.cancel()
         mediaFallbackJob = null
-        mediaPlayer?.let { player ->
-            runCatching { player.setOnPreparedListener(null) }
-            runCatching { player.setOnCompletionListener(null) }
-            runCatching { player.setOnErrorListener(null) }
-            runCatching { player.setOnBufferingUpdateListener(null) }
-            runCatching { player.setOnInfoListener(null) }
-            runCatching { player.reset() }
-            runCatching { player.release() }
-        }
-        mediaPlayer = null
-        mediaPlayerGeneration = Long.MIN_VALUE
+        val playerToRelease = exoPlayer
+        exoPlayer = null
+        exoPlayerGeneration = Long.MIN_VALUE
         prepared = false
-        if (abandonFocus) abandonAudioFocus()
-    }
-
-    private fun requestAudioFocus(context: Context): Boolean {
-        val manager = audioManager ?: (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).also {
-            audioManager = it
+        if (playerToRelease != null) {
+            runOnMainThread {
+                runCatching { playerToRelease.playWhenReady = false }
+                runCatching { playerToRelease.stop() }
+                runCatching { playerToRelease.release() }
+                    .onFailure { AppLogger.w(TAG, "releaseExoPlayer failed: ${it.message}") }
+            }
         }
-        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(audioAttributes)
-                .setAcceptsDelayedFocusGain(false)
-                .setOnAudioFocusChangeListener(focusListener, mainHandler)
-                .build()
-                .also { focusRequest = it }
-            manager.requestAudioFocus(request)
-        } else {
-            @Suppress("DEPRECATION")
-            manager.requestAudioFocus(
-                focusListener,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN,
-            )
-        }
-        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
-
-    private fun abandonAudioFocus() {
-        val manager = audioManager ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { runCatching { manager.abandonAudioFocusRequest(it) } }
-        } else {
-            @Suppress("DEPRECATION")
-            runCatching { manager.abandonAudioFocus(focusListener) }
-        }
-        resumeOnFocusGain = false
     }
 
     /**

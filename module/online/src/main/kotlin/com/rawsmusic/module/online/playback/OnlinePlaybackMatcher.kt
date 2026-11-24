@@ -186,7 +186,7 @@ object OnlinePlaybackMatcher {
 
     /**
      * 匹配优选度打分，用于在多个候选中排序。
-     * 满分 100：歌名 50 + 歌手 30 + 时长 20。
+     * 核心因子：歌名(50) + 歌手(30) + 时长(20)；次级加权因子：专辑(最高 +12，不做硬淘汰)。
      */
     fun calculateMatchScore(
         targetTitle: String,
@@ -195,6 +195,8 @@ object OnlinePlaybackMatcher {
         candidateArtist: String,
         targetDurationMs: Long,
         candidateDurationMs: Long,
+        targetAlbum: String = "",
+        candidateAlbum: String = "",
     ): Int {
         var score = 0
         val normTargetTitle = normalizeForCompare(targetTitle)
@@ -213,6 +215,22 @@ object OnlinePlaybackMatcher {
             else score -= 30
         } else {
             score += 10
+        }
+
+        // 次级因子：专辑匹配（仅加分，不淘汰；优先命中原专辑而非合辑/精选集）
+        val normTargetAlbum = normalizeForCompare(extractCoreTitle(targetAlbum))
+        val normCandidateAlbum = normalizeForCompare(extractCoreTitle(candidateAlbum))
+        val unknownAlbums = setOf("未知专辑", "unknownalbum", "unknown", "单曲", "single")
+        if (normTargetAlbum.isNotBlank() && normCandidateAlbum.isNotBlank() &&
+            normTargetAlbum !in unknownAlbums && normCandidateAlbum !in unknownAlbums
+        ) {
+            if (normTargetAlbum == normCandidateAlbum) {
+                score += 12
+            } else if (minOf(normTargetAlbum.length, normCandidateAlbum.length) >= 2 &&
+                (normTargetAlbum.contains(normCandidateAlbum) || normCandidateAlbum.contains(normTargetAlbum))
+            ) {
+                score += 6
+            }
         }
         return score
     }

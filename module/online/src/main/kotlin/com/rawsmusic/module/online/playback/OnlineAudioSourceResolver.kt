@@ -1160,6 +1160,7 @@ object OnlineAudioSourceResolver {
                         title = title,
                         artist = artist,
                         expectedDurationMs = expectedDurationMs,
+                        expectedAlbum = album,
                         requestedQuality = requestedQuality,
                         allowEncrypted = false,
                         maxRidCandidates = 3,

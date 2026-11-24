@@ -106,6 +106,49 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         controller.playResolvedOnlineSource(song, request.source.url, allSongs, targetIndex)
     }
 
+    override fun syncExternalPlayback(request: MusicSourcePlaybackRequest) {
+        activeRequest = request
+        val song = request.toAudioFile()
+        val targetKey = com.rawsmusic.core.common.model.onlineSongKey(request.item.sourceId, request.item.remoteId)
+        val hostQueue = controller.authoritativePlaybackQueue()
+        val hostMatchIndex = hostQueue.indexOfFirst { existing ->
+            existing.path == targetKey ||
+                existing.path == request.source.url ||
+                existing.id == song.id ||
+                (existing.title.equals(song.title, ignoreCase = true) &&
+                    existing.artist.equals(song.artist, ignoreCase = true))
+        }
+        val allSongs: List<AudioFile>
+        val targetIndex: Int
+        if (hostQueue.isNotEmpty() && hostMatchIndex >= 0) {
+            allSongs = hostQueue.mapIndexed { idx, existing ->
+                if (idx == hostMatchIndex) song else existing
+            }
+            targetIndex = hostMatchIndex
+        } else if (request.queue.isNotEmpty()) {
+            allSongs = request.queue.mapIndexed { idx, mediaItem ->
+                if (idx == request.queueIndex) song else mediaItem.toVirtualAudioFile()
+            }
+            targetIndex = request.queueIndex
+                .takeIf { it in allSongs.indices && allSongs[it].path == song.path }
+                ?: allSongs.indexOfFirst { it.path == song.path }.takeIf { it >= 0 }
+                ?: request.queueIndex.coerceIn(allSongs.indices)
+        } else {
+            allSongs = listOf(song)
+            targetIndex = 0
+        }
+        controller.prepareExternalOnlinePlayback(
+            song = song,
+            queue = allSongs,
+            index = targetIndex,
+            startPositionMs = request.startPositionMs,
+        )
+    }
+
+    override fun onExternalTrackCompleted() {
+        controller.onExternalOnlineTrackCompleted()
+    }
+
     override fun pause() {
         if (!ownsCurrentSong()) return
         controller.pause()
