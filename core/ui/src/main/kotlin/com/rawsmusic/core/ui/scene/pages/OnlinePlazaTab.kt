@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -59,12 +60,14 @@ import androidx.compose.ui.unit.sp
 import com.rawsmusic.core.common.ui.AppNoticeBus
 import com.rawsmusic.core.ui.R
 import com.rawsmusic.core.ui.scene.bottomChromeNestedScroll
+import com.rawsmusic.core.ui.widget.RawMiuixOverlayDialog
 import com.rawsmusic.core.ui.widget.bitmaps.BitmapImage
 import com.rawsmusic.module.online.model.OnlineLeaderboard
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
 import com.rawsmusic.module.online.model.OnlinePlaylistTag
 import com.rawsmusic.module.online.repository.OnlineMusicRepository
+import com.rawsmusic.module.online.source.qq.QQMusicSource
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
@@ -102,12 +105,30 @@ private object OnlinePlazaMemoryCache {
     val pages = HashMap<String, OnlinePlazaPageCache>()
     val leaderboards = HashMap<String, List<OnlineLeaderboard>>()
     val tags = HashMap<String, List<OnlinePlaylistTag>>()
+    /** QQ 音乐最近访问的分类 ID（对照 QTMusic `RECENT_ASSORTMENT`，最多保留 6 项）。 */
+    val recentQQTagIds = ArrayList<String>()
+
+    fun recordRecentQQTag(tagId: String) {
+        val id = tagId.trim()
+        if (id.isEmpty() || id == "全部" || id == "10000000" || id == "0") return
+        recentQQTagIds.remove(id)
+        recentQQTagIds.add(0, id)
+        while (recentQQTagIds.size > 6) {
+            recentQQTagIds.removeAt(recentQQTagIds.lastIndex)
+        }
+    }
 }
 
-/** 推荐段固定查「全部」，与 [OnlinePlazaTab] 的请求参数保持一致。 */
-private fun plazaQueryKey(platform: OnlinePlatform, section: OnlinePlazaSection, tagId: String): String {
+/** 推荐段固定查「全部」，QQ 音乐分类段同时区分排序维度（推荐=5 / 最新=2）。 */
+private fun plazaQueryKey(
+    platform: OnlinePlatform,
+    section: OnlinePlazaSection,
+    tagId: String,
+    sortId: String = "",
+): String {
     val effectiveTagId = if (section == OnlinePlazaSection.Recommend) "全部" else tagId
-    return "${platform.id}:${section.name}:$effectiveTagId"
+    val effectiveSort = if (platform == OnlinePlatform.QQ && section == OnlinePlazaSection.Categories) sortId else ""
+    return "${platform.id}:${section.name}:$effectiveTagId:$effectiveSort"
 }
 
 /**
@@ -133,6 +154,10 @@ internal fun OnlinePlazaTab(
     var section by remember { mutableStateOf(OnlinePlazaSection.Recommend) }
     var tags by remember(platform) { mutableStateOf(OnlinePlazaMemoryCache.tags[platform.id].orEmpty()) }
     var selectedTagId by remember(platform) { mutableStateOf("全部") }
+    // QQ 音乐歌单分类排序方式（对齐 QTMusic `3g_get_diss_by_tag`：5=推荐、2=最新）
+    var selectedSortId by remember(platform) { mutableStateOf(QQMusicSource.SORT_RECOMMEND) }
+    var showQQCategoryPicker by remember(platform) { mutableStateOf(false) }
+    var recentQQTagIds by remember { mutableStateOf(OnlinePlazaMemoryCache.recentQQTagIds.toList()) }
     // 首帧直接从进程级缓存取上次的结果：再次进入「在线音乐」时，隐藏预热帧里就已是完整网格，转场期间不再出现「加载圈 → 整屏网格」的突变重组。
     val initialPage = remember(platform) { OnlinePlazaMemoryCache.pages[plazaQueryKey(platform, OnlinePlazaSection.Recommend, "全部")] }
     var playlists by remember(platform) { mutableStateOf(initialPage?.playlists.orEmpty()) }
@@ -146,6 +171,14 @@ internal fun OnlinePlazaTab(
     // 重试令牌：自增即触发下面的 LaunchedEffect 重新拉取（不引入 ViewModel，AGENTS §4.4）。
     var reloadToken by remember { mutableIntStateOf(0) }
     // 已加载缓存见 OnlinePlazaMemoryCache
+
+    fun selectTag(tagId: String) {
+        selectedTagId = tagId
+        if (platform == OnlinePlatform.QQ) {
+            OnlinePlazaMemoryCache.recordRecentQQTag(tagId)
+            recentQQTagIds = OnlinePlazaMemoryCache.recentQQTagIds.toList()
+        }
+    }
 
     // 歌单搜索状态
     var isSearchMode by remember { mutableStateOf(false) }
@@ -214,9 +247,10 @@ internal fun OnlinePlazaTab(
         }
     }
 
-    // 平台、分类段或重试令牌变化都要重新拉第一页，避免把上一个平台的数据留在列表里。
-    LaunchedEffect(platform, selectedTagId, section, reloadToken) {
-        val queryKey = plazaQueryKey(platform, section, selectedTagId)
+    // 平台、分类、排序或重试令牌变化都要重新拉第一页，避免把上一个平台的数据留在列表里。
+    LaunchedEffect(platform, selectedTagId, selectedSortId, section, reloadToken) {
+        val effectiveSortId = if (platform == OnlinePlatform.QQ && section == OnlinePlazaSection.Categories) selectedSortId else ""
+        val queryKey = plazaQueryKey(platform, section, selectedTagId, effectiveSortId)
         // 命中进程级缓存直接复用：不发请求、不切加载态（重试只会在无缓存的错误态下触发）。
         if (section == OnlinePlazaSection.Leaderboards) {
             val cached = OnlinePlazaMemoryCache.leaderboards[platform.id]
@@ -234,6 +268,13 @@ internal fun OnlinePlazaTab(
                 endReached = cached.endReached
                 errorText = null
                 loading = false
+                // 即便命中歌单缓存，切到分类段时若 tags 尚未加载也补拉一次分类树
+                if (section == OnlinePlazaSection.Categories && tags.isEmpty()) {
+                    repository.getTags(platform).onSuccess {
+                        tags = it
+                        OnlinePlazaMemoryCache.tags[platform.id] = it
+                    }
+                }
                 return@LaunchedEffect
             }
         }
@@ -271,7 +312,13 @@ internal fun OnlinePlazaTab(
         }
 
         val queryTagId = if (section == OnlinePlazaSection.Recommend) "全部" else selectedTagId
-        val res = repository.getPlaylists(tagId = queryTagId, page = 1, pageSize = PAGE_SIZE, platform = platform)
+        val res = repository.getPlaylists(
+            tagId = queryTagId,
+            page = 1,
+            pageSize = PAGE_SIZE,
+            platform = platform,
+            sortId = effectiveSortId,
+        )
         if (latestSceneMotionFrozen) {
             snapshotFlow { latestSceneMotionFrozen }.first { !it }
         }
@@ -298,15 +345,22 @@ internal fun OnlinePlazaTab(
         val requestPlatform = platform
         val requestSection = section
         val requestTagId = selectedTagId
+        val requestSortId = if (requestPlatform == OnlinePlatform.QQ && requestSection == OnlinePlazaSection.Categories) selectedSortId else ""
         scope.launch {
             val next = page + 1
             val queryTagId = if (requestSection == OnlinePlazaSection.Recommend) "全部" else requestTagId
-            repository.getPlaylists(tagId = queryTagId, page = next, pageSize = PAGE_SIZE, platform = requestPlatform)
+            repository.getPlaylists(
+                tagId = queryTagId,
+                page = next,
+                pageSize = PAGE_SIZE,
+                platform = requestPlatform,
+                sortId = requestSortId,
+            )
                 .onSuccess {
                     playlists = playlists + it
                     page = next
                     endReached = it.size < PAGE_SIZE
-                    OnlinePlazaMemoryCache.pages[plazaQueryKey(requestPlatform, requestSection, requestTagId)] =
+                    OnlinePlazaMemoryCache.pages[plazaQueryKey(requestPlatform, requestSection, requestTagId, requestSortId)] =
                         OnlinePlazaPageCache(playlists = playlists, page = page, endReached = endReached)
                 }
                 .onFailure { AppNoticeBus.error(loadFailedMessage) }
@@ -330,11 +384,22 @@ internal fun OnlinePlazaTab(
             )
 
             if (section == OnlinePlazaSection.Categories && tags.isNotEmpty()) {
-                OnlineTagRow(
-                    tags = tags,
-                    selectedTagId = selectedTagId,
-                    onSelect = { selectedTagId = it },
-                )
+                if (platform == OnlinePlatform.QQ) {
+                    QQMusicCategoryBar(
+                        tags = tags,
+                        selectedTagId = selectedTagId,
+                        selectedSortId = selectedSortId,
+                        onSelectTag = ::selectTag,
+                        onSelectSort = { selectedSortId = it },
+                        onOpenAllCategories = { showQQCategoryPicker = true },
+                    )
+                } else {
+                    OnlineTagRow(
+                        tags = tags,
+                        selectedTagId = selectedTagId,
+                        onSelect = ::selectTag,
+                    )
+                }
             }
         }
 
@@ -444,6 +509,19 @@ internal fun OnlinePlazaTab(
                 }
             }
         }
+    }
+
+    if (showQQCategoryPicker && platform == OnlinePlatform.QQ && tags.isNotEmpty()) {
+        QQMusicCategoryPickerDialog(
+            tags = tags,
+            selectedTagId = selectedTagId,
+            recentTagIds = recentQQTagIds,
+            onSelect = { tagId ->
+                selectTag(tagId)
+                showQQCategoryPicker = false
+            },
+            onDismiss = { showQQCategoryPicker = false },
+        )
     }
 }
 
@@ -625,6 +703,395 @@ private fun OnlineTagRow(
         }
     }
     Spacer(Modifier.height(4.dp))
+}
+
+/**
+ * QQ 音乐官方分组顺序（对齐 QTMusic `3g_get_diss_tag_conf`）。
+ */
+private val QQ_CATEGORY_GROUP_ORDER = listOf("语种", "流派", "主题", "心情", "场景")
+
+/**
+ * QQ 音乐快捷分类精选 ID（从 65 个全量官方分类中提炼高频标签，其余收进「全部分类」分组弹窗）。
+ */
+private val QQ_QUICK_CATEGORY_IDS = listOf(
+    "165", // 国语
+    "166", // 粤语
+    "167", // 英语
+    "6",   // 流行
+    "11",  // 摇滚
+    "28",  // 民谣
+    "15",  // 轻音乐
+    "24",  // 电子
+    "116", // 治愈
+    "52",  // 伤感
+    "122", // 安静
+    "78",  // 睡前
+    "99",  // 运动
+    "39",  // ACG
+    "194", // 古风
+    "133", // 影视
+)
+
+private fun isAllPlaylistTag(tagId: String): Boolean {
+    val id = tagId.trim()
+    return id.isEmpty() || id == "全部" || id == "10000000" || id == "0"
+}
+
+/**
+ * QQ 音乐歌单分类栏（对齐 QTMusic 乐馆-歌单模块）：
+ * 1. 第一行：左侧快捷精选分类横向滚动 + 右侧「全部分类」分组弹窗入口；
+ * 2. 第二行：左侧当前分类上下文（如「语种 · 国语」）+ 右侧「推荐 / 最新」排序切换（sortId = 5 / 2）。
+ */
+@Composable
+private fun QQMusicCategoryBar(
+    tags: List<OnlinePlaylistTag>,
+    selectedTagId: String,
+    selectedSortId: String,
+    onSelectTag: (String) -> Unit,
+    onSelectSort: (String) -> Unit,
+    onOpenAllCategories: () -> Unit,
+) {
+    val colors = themeColors()
+    val allLabel = stringResource(R.string.online_plaza_tag_all)
+    val allPlaylistsLabel = stringResource(R.string.online_plaza_all_playlists)
+    val allCategoriesLabel = stringResource(R.string.online_plaza_all_categories)
+    val sortRecommendLabel = stringResource(R.string.online_plaza_sort_recommend)
+    val sortLatestLabel = stringResource(R.string.online_plaza_sort_latest)
+
+    val tagMap = remember(tags) { tags.associateBy { it.id } }
+    val selectedTag = remember(tags, selectedTagId) {
+        if (isAllPlaylistTag(selectedTagId)) {
+            null
+        } else {
+            tagMap[selectedTagId] ?: tags.firstOrNull { it.name == selectedTagId }
+        }
+    }
+
+    val quickTags = remember(tags, selectedTag) {
+        val result = ArrayList<OnlinePlaylistTag>()
+        // 若用户从全部分类弹窗选了一个非精选标签，自动置前展示并高亮，保证当前选中状态立即可见
+        if (selectedTag != null && !isAllPlaylistTag(selectedTag.id) && selectedTag.id !in QQ_QUICK_CATEGORY_IDS) {
+            result.add(selectedTag)
+        }
+        QQ_QUICK_CATEGORY_IDS.forEach { id ->
+            tagMap[id]?.let { result.add(it) }
+        }
+        // 兜底：若服务端返回了全新 ID 集合，补齐前 12 个有效标签
+        if (result.isEmpty()) {
+            tags.filterNot { isAllPlaylistTag(it.id) || it.name == "全部" }
+                .take(12)
+                .forEach { result.add(it) }
+        }
+        result
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // ── 第一行：快捷精选分类 + 「全部分类」按钮 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 14.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                item(key = "qq_tag_all") {
+                    OnlineChip(
+                        label = allLabel,
+                        selected = isAllPlaylistTag(selectedTagId),
+                        onClick = { onSelectTag("全部") },
+                    )
+                }
+                items(quickTags, key = { "qq_quick_${it.id}" }) { tag ->
+                    OnlineChip(
+                        label = tag.name,
+                        selected = selectedTagId == tag.id || selectedTagId == tag.name,
+                        onClick = { onSelectTag(tag.id) },
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(colors.primary.copy(alpha = 0.12f))
+                    .border(
+                        width = 0.5.dp,
+                        color = colors.primary.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(999.dp),
+                    )
+                    .clickable(onClick = onOpenAllCategories)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = allCategoriesLabel,
+                    color = colors.primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "▾",
+                    color = colors.primary,
+                    fontSize = 10.sp,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // ── 第二行：当前分类路径 + 推荐/最新排序切换（对应 QTMusic sortId = 5 / 2） ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val currentTitle = if (selectedTag == null) {
+                allPlaylistsLabel
+            } else if (selectedTag.category.isNotBlank() && selectedTag.category != "默认" && selectedTag.category != "热门") {
+                "${selectedTag.category} · ${selectedTag.name}"
+            } else {
+                selectedTag.name
+            }
+            Text(
+                text = currentTitle,
+                color = colors.secondaryText,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(colors.surface.copy(alpha = 0.8f))
+                    .border(
+                        width = 0.5.dp,
+                        color = colors.outline.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(999.dp),
+                    )
+                    .padding(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                val isRecommend = selectedSortId != QQMusicSource.SORT_LATEST
+                QQSortPill(
+                    label = sortRecommendLabel,
+                    selected = isRecommend,
+                    onClick = { onSelectSort(QQMusicSource.SORT_RECOMMEND) },
+                )
+                QQSortPill(
+                    label = sortLatestLabel,
+                    selected = !isRecommend,
+                    onClick = { onSelectSort(QQMusicSource.SORT_LATEST) },
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable
+private fun QQSortPill(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = themeColors()
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) colors.primary.copy(alpha = 0.16f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (selected) colors.primary else colors.secondaryText,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * QQ 音乐「全部分类」分组选择弹窗（对照 QTMusic 乐馆-歌单分类页与 `RECENT_ASSORTMENT`）。
+ * 采用 Miuix `RawMiuixOverlayDialog` + `LazyColumn` 内嵌 3 列等宽网格（遵循决策 D11）。
+ */
+@Composable
+private fun QQMusicCategoryPickerDialog(
+    tags: List<OnlinePlaylistTag>,
+    selectedTagId: String,
+    recentTagIds: List<String>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = themeColors()
+    val allPlaylistsLabel = stringResource(R.string.online_plaza_all_playlists)
+    val recentTitle = stringResource(R.string.online_plaza_recent_categories)
+    val tagMap = remember(tags) { tags.associateBy { it.id } }
+
+    val recentTags = remember(recentTagIds, tagMap) {
+        recentTagIds.mapNotNull { tagMap[it] }
+    }
+
+    val groupedTags = remember(tags) {
+        val buckets = LinkedHashMap<String, MutableList<OnlinePlaylistTag>>()
+        QQ_CATEGORY_GROUP_ORDER.forEach { buckets[it] = mutableListOf() }
+        tags.forEach { tag ->
+            if (isAllPlaylistTag(tag.id) || tag.name == "全部") return@forEach
+            val group = tag.category.trim().ifEmpty { "其他" }
+            if (group == "热门" || group == "默认") return@forEach
+            buckets.getOrPut(group) { mutableListOf() }.add(tag)
+        }
+        buckets.entries
+            .filter { it.value.isNotEmpty() }
+            .map { it.key to it.value.toList() }
+    }
+
+    RawMiuixOverlayDialog(
+        show = true,
+        title = stringResource(R.string.online_plaza_all_categories),
+        onDismissRequest = onDismiss,
+        renderInRootScaffold = true,
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 460.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 4.dp),
+        ) {
+            // ── 全部歌单通栏按钮 ──
+            item(key = "qq_picker_all") {
+                val isAllSelected = isAllPlaylistTag(selectedTagId)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isAllSelected) colors.primary.copy(alpha = 0.14f)
+                            else colors.background.copy(alpha = 0.6f),
+                        )
+                        .border(
+                            width = 0.75.dp,
+                            color = if (isAllSelected) colors.primary.copy(alpha = 0.5f) else colors.outline.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        .clickable { onSelect("全部") }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = allPlaylistsLabel,
+                        color = if (isAllSelected) colors.primary else colors.onSurface,
+                        fontSize = 13.5.sp,
+                        fontWeight = if (isAllSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                }
+            }
+
+            // ── 最近访问分组（对齐 QTMusic `RECENT_ASSORTMENT`） ──
+            if (recentTags.isNotEmpty()) {
+                item(key = "qq_picker_recent_header") {
+                    Text(
+                        text = recentTitle,
+                        color = colors.secondaryText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                items(
+                    items = recentTags.chunked(3),
+                    key = { row -> "qq_recent_" + row.joinToString("_") { it.id } },
+                ) { rowTags ->
+                    QQCategoryPickerGridRow(
+                        rowTags = rowTags,
+                        selectedTagId = selectedTagId,
+                        onSelect = onSelect,
+                    )
+                }
+            }
+
+            // ── 官方全量分组（语种 / 流派 / 主题 / 心情 / 场景） ──
+            groupedTags.forEach { (groupName, groupItems) ->
+                item(key = "qq_group_header_$groupName") {
+                    Text(
+                        text = groupName,
+                        color = colors.secondaryText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                items(
+                    items = groupItems.chunked(3),
+                    key = { row -> "qq_group_${groupName}_" + row.joinToString("_") { it.id } },
+                ) { rowTags ->
+                    QQCategoryPickerGridRow(
+                        rowTags = rowTags,
+                        selectedTagId = selectedTagId,
+                        onSelect = onSelect,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QQCategoryPickerGridRow(
+    rowTags: List<OnlinePlaylistTag>,
+    selectedTagId: String,
+    onSelect: (String) -> Unit,
+) {
+    val colors = themeColors()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        rowTags.forEach { tag ->
+            val selected = selectedTagId == tag.id || selectedTagId == tag.name
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (selected) colors.primary.copy(alpha = 0.14f)
+                        else colors.background.copy(alpha = 0.6f),
+                    )
+                    .border(
+                        width = 0.5.dp,
+                        color = if (selected) colors.primary.copy(alpha = 0.5f) else colors.outline.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(10.dp),
+                    )
+                    .clickable { onSelect(tag.id) }
+                    .padding(horizontal = 6.dp, vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = tag.name,
+                    color = if (selected) colors.primary else colors.onSurface,
+                    fontSize = 12.5.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        repeat((3 - rowTags.size).coerceAtLeast(0)) {
+            Spacer(Modifier.weight(1f))
+        }
+    }
 }
 
 @Composable

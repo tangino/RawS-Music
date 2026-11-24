@@ -346,11 +346,14 @@ private fun usesSharedCoverMotion(from: NavScene, to: NavScene): Boolean {
 
 private fun allowsContentBackDrag(from: NavScene, to: NavScene): Boolean {
     if (from in settingsScenes || to in settingsScenes) return false
-    // SEARCH owns a horizontally scrollable filter rail. SceneTransitionHost observes at Initial
-    // pass, so allowing content-wide back there races the LazyRow before it can establish scroll
-    // ownership. Keep SEARCH on the same policy as SOURCE_IMPORT and PODCAST: children own interior
-    // drags and scene navigation remains available from the system-style edge only.
-    if (from == NavScene.SOURCE_IMPORT || from == NavScene.SEARCH || from == NavScene.PODCAST) return false
+    // SEARCH / ONLINE_MUSIC 等页面内含横向滚动胶囊栏（LazyRow）。SceneTransitionHost 在 Initial
+    // pass 拦截手势，若允许内容区整屏拖拽返回会先于 LazyRow 消费水平滑动。
+    // 因此与 SOURCE_IMPORT / SEARCH / PODCAST 保持一致：内容区横向拖拽归子控件，返回仍可通过屏幕边缘侧滑触发。
+    if (from == NavScene.SOURCE_IMPORT ||
+        from == NavScene.SEARCH ||
+        from == NavScene.PODCAST ||
+        from == NavScene.ONLINE_MUSIC
+    ) return false
     return from != to
 }
 

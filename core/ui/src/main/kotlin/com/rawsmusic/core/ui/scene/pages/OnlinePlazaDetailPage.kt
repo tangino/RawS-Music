@@ -1,6 +1,8 @@
 package com.rawsmusic.core.ui.scene.pages
 
 import android.net.Uri
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,17 +15,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,9 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,7 +71,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -222,26 +228,69 @@ internal fun OnlinePlaylistDetailPage(
         }
     }
 
+    val listState = rememberLazyListState()
+    // 仅当头部主标题滚出视口后，才在顶部栏淡入标题，避免页面初始状态上下标题重复
+    val showCollapsedTitle by remember(playlist) {
+        derivedStateOf {
+            playlist != null && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 140)
+        }
+    }
+    val topBarTitleAlpha by animateFloatAsState(
+        targetValue = if (showCollapsedTitle) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "online_detail_topbar_title_alpha",
+    )
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .rawStableStatusBarsPadding()
             .bottomChromeNestedScroll(),
     ) {
-        SmallTopAppBar(
-            title = playlist?.title ?: stringResource(R.string.nav_scene_online_playlist_detail),
-            color = Color.Transparent,
-            titleColor = colors.onSurface,
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = MiuixIcons.Regular.Back,
-                        contentDescription = stringResource(R.string.nav_scene_online_playlist_detail),
-                        tint = colors.onSurface,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .padding(start = 6.dp, end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Back,
+                    contentDescription = stringResource(R.string.nav_scene_online_playlist_detail),
+                    tint = colors.onSurface,
+                )
+            }
+            Text(
+                text = playlist?.title.orEmpty(),
+                color = colors.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 6.dp)
+                    .alpha(topBarTitleAlpha),
+            )
+            platform?.let { currentPlatform ->
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.onSurface.copy(alpha = 0.08f))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = currentPlatform.displayName,
+                        color = colors.onSurface.copy(alpha = 0.78f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
                     )
                 }
-            },
-        )
+            }
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
@@ -255,6 +304,7 @@ internal fun OnlinePlaylistDetailPage(
                 }
                 errorText != null -> OnlineDetailError(errorText.orEmpty()) { reloadToken++ }
                 else -> LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = 12.dp,
@@ -264,10 +314,11 @@ internal fun OnlinePlaylistDetailPage(
                     ),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    item {
+                    item(key = "online_detail_header") {
                         playlist?.let { header ->
                             OnlineDetailHeader(
                                 playlist = header,
+                                trackCount = header.trackCount.coerceAtLeast(songs.size),
                                 isFavorite = isFavorite,
                                 onToggleFavorite = {
                                     scope.launch {
@@ -323,25 +374,40 @@ internal fun OnlinePlaylistDetailPage(
 @Composable
 private fun OnlineDetailHeader(
     playlist: OnlinePlaylist,
+    trackCount: Int,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit,
 ) {
     val colors = themeColors()
-    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+    var descExpanded by remember(playlist.id) { mutableStateOf(false) }
+    val cleanDescription = remember(playlist.description) {
+        playlist.description?.replace(Regex("<[^>]+>"), " ")?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .padding(top = 4.dp, bottom = 10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+        ) {
+            // ── 封面 + 右下角播放量角标（与广场卡片统一视觉语言，不再在右侧文字堆里重复） ──
             Box(
                 modifier = Modifier
-                    .size(112.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(colors.surface.copy(alpha = 0.5f)),
+                    .size(116.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(colors.surface.copy(alpha = 0.55f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = MiuixIcons.Regular.Folder,
                     contentDescription = null,
                     tint = colors.secondaryText.copy(alpha = 0.35f),
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(44.dp),
                 )
                 if (playlist.coverUrl.isNotBlank()) {
                     BitmapImage(
@@ -353,66 +419,192 @@ private fun OnlineDetailHeader(
                         showDefaultArtwork = false,
                     )
                 }
+                if (playlist.playCount > 0) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color.Black.copy(alpha = 0.56f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = "▶",
+                            fontSize = 7.5.sp,
+                            color = Color.White,
+                        )
+                        Text(
+                            text = formatDetailPlayCount(playlist.playCount),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = playlist.title,
-                    color = colors.onSurface,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (playlist.trackCount > 0) {
+
+            Spacer(Modifier.width(14.dp))
+
+            // ── 右侧唯一主标题 + 创作者 + 简介 + 曲目数 ──
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 116.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = playlist.title,
+                        color = colors.onSurface,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 22.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    val creator = playlist.creatorName?.trim().orEmpty()
+                    if (creator.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            val avatar = playlist.creatorAvatarUrl?.trim().orEmpty()
+                            if (avatar.isNotEmpty()) {
+                                BitmapImage(
+                                    key = avatar,
+                                    contentDescription = creator,
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape),
+                                    targetWidth = 64,
+                                    targetHeight = 64,
+                                    showDefaultArtwork = false,
+                                )
+                            }
+                            Text(
+                                text = creator,
+                                color = colors.onSurface.copy(alpha = 0.78f),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+
+                    if (cleanDescription.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = cleanDescription,
+                            color = colors.onSurface.copy(alpha = 0.62f),
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp,
+                            maxLines = if (descExpanded) 8 else 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { descExpanded = !descExpanded },
+                        )
+                    }
+                }
+
+                if (trackCount > 0) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = stringResource(R.string.online_detail_track_count, playlist.trackCount),
-                        color = colors.secondaryText,
-                        fontSize = 11.sp,
-                    )
-                }
-                if (playlist.playCount > 0) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = stringResource(
-                            R.string.online_detail_play_count,
-                            formatDetailPlayCount(playlist.playCount),
-                        ),
-                        color = colors.secondaryText,
-                        fontSize = 11.sp,
-                    )
-                }
-                playlist.creatorName?.takeIf { it.isNotBlank() }?.let { creator ->
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = stringResource(R.string.online_detail_creator, creator),
-                        color = colors.secondaryText,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        text = stringResource(R.string.online_detail_track_count, trackCount),
+                        color = colors.onSurface.copy(alpha = 0.65f),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(14.dp))
+
+        // ── 通栏主次操作按钮 ──
         Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                text = stringResource(R.string.online_detail_play_all),
-                onClick = onPlayAll,
-            )
-            TextButton(
-                text = stringResource(
-                    if (isFavorite) R.string.online_detail_unfavorite else R.string.online_detail_favorite,
-                ),
-                onClick = onToggleFavorite,
-            )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.primary)
+                    .clickable(onClick = onPlayAll)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_play),
+                    contentDescription = null,
+                    tint = colors.onPrimary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.online_detail_play_all),
+                    color = colors.onPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (isFavorite) colors.primary.copy(alpha = 0.14f)
+                        else colors.surface.copy(alpha = 0.78f),
+                    )
+                    .border(
+                        width = 0.6.dp,
+                        color = if (isFavorite) colors.primary.copy(alpha = 0.45f)
+                        else colors.outline.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(14.dp),
+                    )
+                    .clickable(onClick = onToggleFavorite)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (isFavorite) R.drawable.ic_playlist_favorite_filled
+                        else R.drawable.ic_playlist_favorite_outline,
+                    ),
+                    contentDescription = null,
+                    tint = if (isFavorite) colors.primary else colors.onSurface,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = stringResource(
+                        if (isFavorite) R.string.online_detail_unfavorite else R.string.online_detail_favorite,
+                    ),
+                    color = if (isFavorite) colors.primary else colors.onSurface,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
+
+        Spacer(Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(colors.outline.copy(alpha = 0.14f)),
+        )
     }
 }
 

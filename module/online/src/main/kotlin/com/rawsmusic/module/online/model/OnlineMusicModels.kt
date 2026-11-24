@@ -20,11 +20,18 @@ enum class OnlinePlatform(val id: String, val displayName: String) {
     }
 }
 
+/** 歌单分类排序选项（例如 QQ 音乐的 推荐=5 / 最新=2）。 */
+data class OnlinePlaylistSort(
+    val id: String,
+    val name: String,
+)
+
 /** 歌单分类标签。 */
 data class OnlinePlaylistTag(
     val id: String,
     val name: String,
     val category: String = "默认",
+    val sorts: List<OnlinePlaylistSort> = emptyList(),
 )
 
 /** 在线歌单概览信息。 */

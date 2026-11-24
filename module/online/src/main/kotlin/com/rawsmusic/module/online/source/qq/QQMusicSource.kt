@@ -3,6 +3,7 @@ package com.rawsmusic.module.online.source.qq
 import com.rawsmusic.module.online.model.OnlineLeaderboard
 import com.rawsmusic.module.online.model.OnlinePlatform
 import com.rawsmusic.module.online.model.OnlinePlaylist
+import com.rawsmusic.module.online.model.OnlinePlaylistSort
 import com.rawsmusic.module.online.model.OnlinePlaylistTag
 import com.rawsmusic.module.online.model.OnlineSongItem
 import com.rawsmusic.module.online.source.OnlinePlatformSource
@@ -127,59 +128,106 @@ class QQMusicSource(
     @Volatile
     private var dynamicTags: List<OnlinePlaylistTag>? = null
 
+    private fun decodeHtmlEntities(raw: String): String {
+        if (raw.isEmpty() || !raw.contains('&')) return raw
+        return raw
+            .replace("&#38;", "&")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+    }
+
     companion object {
+        const val SORT_RECOMMEND = "5"
+        const val SORT_LATEST = "2"
+
         /**
-         * QQ 音乐歌单真实分类标签预设（与官方 categoryId 严格对应）
+         * QQ 音乐乐馆-歌单排序选项（对应 QTMusic `MusicHallSongListCategoryTagJsonResponse` 与
+         * `3g_get_diss_by_tag` 的 sortId 语义：5=推荐、2=最新）。
+         */
+        val DEFAULT_SORTS = listOf(
+            OnlinePlaylistSort(SORT_RECOMMEND, "推荐"),
+            OnlinePlaylistSort(SORT_LATEST, "最新"),
+        )
+
+        /**
+         * QQ 音乐歌单全量官方分类标签预设（与 QTMusic `3g_get_diss_tag_conf` / `fcg_get_diss_tag_conf.fcg`
+         * 返回的 6 大分组、65 项真实 categoryId 严格一致，网络异常时兜底使用）。
          */
         private val PRESET_TAGS = listOf(
-            OnlinePlaylistTag("10000000", "全部", "默认"),
-            // 流派 (流派分类真实 categoryId)
-            OnlinePlaylistTag("6", "流行", "流派"),
-            OnlinePlaylistTag("11", "摇滚", "流派"),
-            OnlinePlaylistTag("28", "民谣", "流派"),
-            OnlinePlaylistTag("24", "电子", "流派"),
-            OnlinePlaylistTag("153", "说唱", "流派"),
-            OnlinePlaylistTag("15", "轻音乐", "流派"),
-            OnlinePlaylistTag("8", "R&B", "流派"),
-            OnlinePlaylistTag("21", "爵士", "流派"),
-            OnlinePlaylistTag("27", "古典", "流派"),
-            OnlinePlaylistTag("18", "乡村", "流派"),
-            OnlinePlaylistTag("22", "蓝调", "流派"),
-            OnlinePlaylistTag("164", "新世纪", "流派"),
-            OnlinePlaylistTag("218", "后摇", "流派"),
-            OnlinePlaylistTag("219", "中国传统", "流派"),
-            // 语种 (语种分类真实 categoryId)
-            OnlinePlaylistTag("165", "国语", "语种"),
-            OnlinePlaylistTag("166", "粤语", "语种"),
-            OnlinePlaylistTag("167", "英语", "语种"),
-            OnlinePlaylistTag("168", "韩语", "语种"),
-            OnlinePlaylistTag("169", "日语", "语种"),
-            OnlinePlaylistTag("203", "闽南语", "语种"),
-            // 主题 (主题分类真实 categoryId)
-            OnlinePlaylistTag("39", "ACG", "主题"),
-            OnlinePlaylistTag("194", "古风", "主题"),
-            OnlinePlaylistTag("145", "中国风", "主题"),
-            OnlinePlaylistTag("133", "影视", "主题"),
-            OnlinePlaylistTag("136", "经典", "主题"),
-            OnlinePlaylistTag("146", "网络歌曲", "主题"),
-            OnlinePlaylistTag("141", "KTV热歌", "主题"),
-            OnlinePlaylistTag("148", "情歌", "主题"),
-            OnlinePlaylistTag("14", "DJ", "主题"),
-            // 心情 (心情分类真实 categoryId)
-            OnlinePlaylistTag("116", "治愈", "心情"),
-            OnlinePlaylistTag("52", "伤感", "心情"),
-            OnlinePlaylistTag("122", "安静", "心情"),
-            OnlinePlaylistTag("117", "快乐", "心情"),
-            OnlinePlaylistTag("125", "励志", "心情"),
-            OnlinePlaylistTag("59", "甜蜜", "心情"),
-            // 场景 (场景分类真实 categoryId)
-            OnlinePlaylistTag("99", "运动", "场景"),
-            OnlinePlaylistTag("78", "睡前", "场景"),
-            OnlinePlaylistTag("85", "开车", "场景"),
-            OnlinePlaylistTag("101", "学习", "场景"),
-            OnlinePlaylistTag("94", "工作", "场景"),
-            OnlinePlaylistTag("81", "旅行", "场景"),
-            OnlinePlaylistTag("16", "校园", "场景")
+            OnlinePlaylistTag("10000000", "全部", "热门", DEFAULT_SORTS),
+            // 语种 (9 项)
+            OnlinePlaylistTag("165", "国语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("167", "英语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("168", "韩语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("166", "粤语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("169", "日语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("170", "小语种", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("203", "闽南语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("204", "法语", "语种", DEFAULT_SORTS),
+            OnlinePlaylistTag("205", "拉丁语", "语种", DEFAULT_SORTS),
+            // 流派 (16 项)
+            OnlinePlaylistTag("6", "流行", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("15", "轻音乐", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("11", "摇滚", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("28", "民谣", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("8", "R&B", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("153", "嘻哈", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("24", "电子", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("27", "古典", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("18", "乡村", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("22", "蓝调", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("21", "爵士", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("164", "新世纪", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("25", "拉丁", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("218", "后摇", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("219", "中国传统", "流派", DEFAULT_SORTS),
+            OnlinePlaylistTag("220", "世界音乐", "流派", DEFAULT_SORTS),
+            // 主题 (17 项)
+            OnlinePlaylistTag("39", "ACG", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("136", "经典", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("146", "网络歌曲", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("133", "影视", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("141", "KTV热歌", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("131", "儿歌", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("145", "中国风", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("194", "古风", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("148", "情歌", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("196", "城市", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("197", "现场音乐", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("199", "背景音乐", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("200", "佛教音乐", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("201", "UP主", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("202", "乐器", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("226", "MC喊麦", "主题", DEFAULT_SORTS),
+            OnlinePlaylistTag("14", "DJ", "主题", DEFAULT_SORTS),
+            // 心情 (9 项)
+            OnlinePlaylistTag("52", "伤感", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("122", "安静", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("117", "快乐", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("116", "治愈", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("125", "励志", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("59", "甜蜜", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("55", "寂寞", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("126", "宣泄", "心情", DEFAULT_SORTS),
+            OnlinePlaylistTag("68", "思念", "心情", DEFAULT_SORTS),
+            // 场景 (13 项)
+            OnlinePlaylistTag("78", "睡前", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("102", "夜店", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("101", "学习", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("99", "运动", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("85", "开车", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("76", "约会", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("94", "工作", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("81", "旅行", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("103", "派对", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("222", "婚礼", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("223", "咖啡馆", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("224", "跳舞", "场景", DEFAULT_SORTS),
+            OnlinePlaylistTag("16", "校园", "场景", DEFAULT_SORTS),
         )
     }
 
@@ -194,27 +242,28 @@ class QQMusicSource(
                 .header("Host", "c.y.qq.com")
                 .get()
                 .build()
-            val response = client.newCall(request).execute()
-            val bodyStr = response.body?.string()
+            val bodyStr = client.newCall(request).execute().use { it.body?.string() }
             if (!bodyStr.isNullOrBlank()) {
                 val root = JSONObject(bodyStr)
                 val categories = root.optJSONObject("data")?.optJSONArray("categories")
                 if (categories != null && categories.length() > 0) {
                     val list = mutableListOf<OnlinePlaylistTag>()
-                    list.add(OnlinePlaylistTag("10000000", "全部", "默认"))
+                    list.add(OnlinePlaylistTag("10000000", "全部", "热门", DEFAULT_SORTS))
                     for (i in 0 until categories.length()) {
                         val groupObj = categories.optJSONObject(i) ?: continue
-                        val groupName = groupObj.optString("categoryGroupName").trim()
+                        val groupName = decodeHtmlEntities(groupObj.optString("categoryGroupName").trim())
+                        if (groupName.isEmpty()) continue
                         val items = groupObj.optJSONArray("items") ?: continue
                         for (j in 0 until items.length()) {
                             val item = items.optJSONObject(j) ?: continue
-                            val cid = item.optInt("categoryId").toString()
-                            var cname = item.optString("categoryName").trim()
-                            if (cname.isEmpty() || cid == "10000000" || cid == "0") continue
-                            // 处理 HTML 字符实体例如 R&#38;B
-                            cname = cname.replace("&#38;", "&").replace("&amp;", "&")
+                            val cidInt = item.optInt("categoryId", -1)
+                            val cid = cidInt.toString()
+                            val usable = item.optInt("usable", 1)
+                            val cname = decodeHtmlEntities(item.optString("categoryName").trim())
+                            // 对齐 QTMusic `MusicHallSongListCategoryTagJsonResponse`：跳过不可用项（10000000 已置顶）
+                            if (cname.isEmpty() || cidInt <= 0 || cid == "10000000" || usable == 0) continue
                             if (list.none { it.id == cid }) {
-                                list.add(OnlinePlaylistTag(cid, cname, groupName))
+                                list.add(OnlinePlaylistTag(cid, cname, groupName, DEFAULT_SORTS))
                             }
                         }
                     }
@@ -225,12 +274,20 @@ class QQMusicSource(
                 }
             }
         } catch (_: Exception) {
-            // 忽略网络异常，降级到预设兜底
+            // 忽略网络异常，降级到完整官方预设兜底
         }
         PRESET_TAGS
     }
 
-    override suspend fun getPlaylists(tagId: String, page: Int, pageSize: Int): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
+    override suspend fun getPlaylists(tagId: String, page: Int, pageSize: Int): List<OnlinePlaylist> =
+        getPlaylists(tagId, page, pageSize, SORT_RECOMMEND)
+
+    override suspend fun getPlaylists(
+        tagId: String,
+        page: Int,
+        pageSize: Int,
+        sortId: String,
+    ): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
         val normalizedTag = tagId.trim()
         val categoryId = when {
             normalizedTag.isEmpty() || normalizedTag == "全部" || normalizedTag == "10000000" || normalizedTag == "0" -> 10000000
@@ -254,11 +311,14 @@ class QQMusicSource(
                     ?: 10000000
             }
         }
+        val effectiveSortId = sortId.trim().toIntOrNull()?.takeIf { it > 0 } ?: SORT_RECOMMEND.toInt()
         val sin = (page - 1) * pageSize
         val ein = sin + pageSize - 1
 
         val url = "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg" +
-                "?sin=$sin&ein=$ein&categoryId=$categoryId&sortId=5&format=json&inCharset=utf8&outCharset=utf-8"
+                "?picmid=1&g_tk=5381&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8" +
+                "&notice=0&platform=yqq.json&needNewCode=0" +
+                "&categoryId=$categoryId&sortId=$effectiveSortId&sin=$sin&ein=$ein"
 
         val request = Request.Builder()
             .url(url)
@@ -268,8 +328,7 @@ class QQMusicSource(
             .get()
             .build()
 
-        val response = client.newCall(request).execute()
-        val bodyStr = response.body?.string() ?: return@withContext emptyList()
+        val bodyStr = client.newCall(request).execute().use { it.body?.string() } ?: return@withContext emptyList()
         val root = JSONObject(bodyStr)
         val dataObj = root.optJSONObject("data") ?: return@withContext emptyList()
         val listArr = dataObj.optJSONArray("list") ?: JSONArray()
@@ -278,13 +337,15 @@ class QQMusicSource(
         for (i in 0 until listArr.length()) {
             val item = listArr.optJSONObject(i) ?: continue
             val dissid = item.optString("dissid")
-            val dissname = item.optString("dissname")
+            if (dissid.isBlank()) continue
+            val dissname = decodeHtmlEntities(item.optString("dissname"))
             val imgurl = formatQQImg(item.optString("imgurl").ifEmpty { item.optString("cover").ifEmpty { item.optString("pic") } })
             val listennum = item.optLong("listennum")
             val creatorObj = item.optJSONObject("creator")
-            val creatorName = creatorObj?.optString("name")
-            val creatorAvatar = creatorObj?.optString("avatarUrl")
+            val creatorName = creatorObj?.optString("name")?.let(::decodeHtmlEntities)
+            val creatorAvatar = creatorObj?.optString("avatarUrl")?.let(::formatQQImg)
             val songNum = item.optInt("song_count")
+            val intro = decodeHtmlEntities(item.optString("introduction"))
 
             result.add(
                 OnlinePlaylist(
@@ -296,7 +357,7 @@ class QQMusicSource(
                     trackCount = songNum,
                     creatorName = creatorName,
                     creatorAvatarUrl = creatorAvatar,
-                    description = item.optString("introduction")
+                    description = intro
                 )
             )
         }

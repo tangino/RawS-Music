@@ -74,6 +74,11 @@
     <string name="online_plaza_play_count">%1$s plays</string>
     <string name="online_plaza_track_count">%1$d tracks</string>
     <string name="online_plaza_tag_all">All</string>
+    <string name="online_plaza_all_categories">Categories</string>
+    <string name="online_plaza_all_playlists">All Playlists</string>
+    <string name="online_plaza_recent_categories">Recent</string>
+    <string name="online_plaza_sort_recommend">Recommended</string>
+    <string name="online_plaza_sort_latest">Latest</string>
     <string name="online_plaza_loading">Loading…</string>
     <string name="online_plaza_search_action">Search Playlists</string>
     <string name="online_plaza_search_hint">Search online playlists…</string>

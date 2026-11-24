@@ -72,6 +72,11 @@
     <string name="online_plaza_play_count">%1$s 次播放</string>
     <string name="online_plaza_track_count">%1$d 首</string>
     <string name="online_plaza_tag_all">全部</string>
+    <string name="online_plaza_all_categories">全部分类</string>
+    <string name="online_plaza_all_playlists">全部歌单</string>
+    <string name="online_plaza_recent_categories">最近访问</string>
+    <string name="online_plaza_sort_recommend">推荐</string>
+    <string name="online_plaza_sort_latest">最新</string>
     <string name="online_plaza_loading">正在加载…</string>
     <string name="online_plaza_search_action">搜歌单</string>
     <string name="online_plaza_search_hint">搜索在线歌单…</string>

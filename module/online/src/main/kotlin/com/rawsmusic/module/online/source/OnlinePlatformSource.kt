@@ -31,6 +31,17 @@ interface OnlinePlatformSource {
      */
     suspend fun getPlaylists(tagId: String = "全部", page: Int = 1, pageSize: Int = 30): List<OnlinePlaylist>
 
+    /**
+     * 按分类标签与排序方式分页获取热门歌单（可选能力，默认回退到平台默认排序）。
+     * @param sortId 排序方式 ID（空串表示使用平台默认排序；QQ 音乐支持 "5"=推荐、"2"=最新）
+     */
+    suspend fun getPlaylists(
+        tagId: String,
+        page: Int,
+        pageSize: Int,
+        sortId: String,
+    ): List<OnlinePlaylist> = getPlaylists(tagId, page, pageSize)
+
     /** 获取官方排行榜列表。 */
     suspend fun getLeaderboards(): List<OnlineLeaderboard>
 

@@ -121,10 +121,11 @@ class OnlineMusicRepository private constructor() {
         tagId: String = "全部",
         page: Int = 1,
         pageSize: Int = 30,
-        platform: OnlinePlatform = _currentPlatform.value
+        platform: OnlinePlatform = _currentPlatform.value,
+        sortId: String = "",
     ): Result<List<OnlinePlaylist>> {
         return resultOf {
-            getSource(platform).getPlaylists(tagId, page, pageSize)
+            getSource(platform).getPlaylists(tagId, page, pageSize, sortId)
         }
     }
 
