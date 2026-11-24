@@ -1329,6 +1329,20 @@ class PlayerController private constructor(context: Context) {
 
     private fun installMusicSourcePlaybackBackend() {
         MusicSourcePlaybackController.installBackend(musicSourcePlaybackBackend)
+        MusicSourcePlaybackController.externalPcmDspHook = object : com.rawsmusic.module.data.source.playback.ExternalPcmDspHook {
+            override fun onConfigure(sampleRate: Int, channels: Int) {
+                ffmpegPlayer.configureExternalDsp(sampleRate, channels)
+            }
+
+            override fun processFloat(
+                samples: FloatArray,
+                sampleCount: Int,
+                channels: Int,
+                sampleRate: Int,
+            ) {
+                ffmpegPlayer.processExternalPcmFloat(samples, sampleCount, channels, sampleRate)
+            }
+        }
     }
 
     private val interruptionControlCoordinator = PlayerInterruptionControlCoordinator(
@@ -8113,6 +8127,7 @@ class PlayerController private constructor(context: Context) {
         deviceControlRouteCoordinator.close()
         deviceControlRuntime.manager.close()
         androidBluetoothOutputController.release()
+        MusicSourcePlaybackController.externalPcmDspHook = null
         MusicSourcePlaybackController.uninstallBackend(musicSourcePlaybackBackend)
         musicSourcePlaybackBackend.close()
         scope.cancel()

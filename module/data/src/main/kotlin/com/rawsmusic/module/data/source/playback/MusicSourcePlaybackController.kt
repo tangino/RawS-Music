@@ -10,7 +10,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.rawsmusic.core.common.prefs.PlaylistAutoDownloadStore
 import com.rawsmusic.core.common.source.RawResolvedAudioSource
@@ -124,6 +127,8 @@ object MusicSourcePlaybackController {
     private var exoPlayer: ExoPlayer? = null
     @Volatile
     private var exoPlayerGeneration = Long.MIN_VALUE
+    @Volatile
+    var externalPcmDspHook: ExternalPcmDspHook? = null
     private var exoProgressJob: Job? = null
     private var mediaFallbackJob: Job? = null
     private var preloadJob: Job? = null
@@ -1255,9 +1260,23 @@ object MusicSourcePlaybackController {
                 userAgent = source.userAgent,
             )
             val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
+            // 挂载高精度 32-bit Float AudioProcessor，单次直连 RawS 原生 NativeDSPEngine（避免 16-bit 截断与叠跑失真）
+            val renderersFactory = object : DefaultRenderersFactory(context) {
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean,
+                ): AudioSink {
+                    return DefaultAudioSink.Builder(context)
+                        .setAudioProcessors(arrayOf(OnlineMedia3DspAudioProcessor { externalPcmDspHook }))
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .build()
+                }
+            }
             // 音频焦点由宿主 PlayerService/PlayerController 的 AndroidAudioInterrupt 统一持有与调度；
             // 若 ExoPlayer 再开启 handleAudioFocus=true，会在同进程内与 PlayerService 互抢焦点导致 ExoPlayer 收到 AUDIOFOCUS_LOSS(-1) 秒停。
-            val player = ExoPlayer.Builder(context)
+            val player = ExoPlayer.Builder(context, renderersFactory)
                 .setLooper(Looper.getMainLooper())
                 .setMediaSourceFactory(mediaSourceFactory)
                 .setAudioAttributes(media3AudioAttributes, false)

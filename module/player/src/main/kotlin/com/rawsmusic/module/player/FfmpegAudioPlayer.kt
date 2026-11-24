@@ -1415,6 +1415,72 @@ class FfmpegAudioPlayer(private val context: Context) {
     /** 暴露 DSP 引擎给 PEQ 控制器使用 */
     val dspEngine: com.rawsmusic.module.player.dsp.NativeDSPEngine? get() = playbackDspProcessor.engine
 
+    @Volatile
+    private var externalDspSampleRate: Int = 0
+    @Volatile
+    private var externalDspChannels: Int = 0
+    private val externalDspLock = Any()
+    private var externalDspDoubleScratch = DoubleArray(0)
+
+    /**
+     * 供外部解码器（Media3 ExoPlayer）在采样率/声道数就绪时初始化或重配原生 DSP 引擎。
+     */
+    fun configureExternalDsp(sampleRate: Int, channels: Int) {
+        if (sampleRate <= 0 || channels <= 0) return
+        synchronized(externalDspLock) {
+            if (playbackDspProcessor.engine != null &&
+                externalDspSampleRate == sampleRate &&
+                externalDspChannels == channels
+            ) {
+                return
+            }
+            dspRuntimeCoordinator.init(sampleRate, channels)
+            externalDspSampleRate = sampleRate
+            externalDspChannels = channels
+            AppLogger.i(TAG, "External Media3 DSP configured: sampleRate=$sampleRate, channels=$channels")
+        }
+    }
+
+    /**
+     * 对外部 32-bit Float PCM 帧执行**单次**原地原生 DSP 处理：
+     * - 直接调用 `NativeDSPEngine.processFloat` / `processDouble`，绕开 `PlaybackDspProcessor` 的
+     *   双阶段调用与 FFmpeg 专用 24-bit 标志，杜绝声音发闷与帧边界破音；
+     * - 未开启任何音效/均衡器时零开销直通。
+     */
+    fun processExternalPcmFloat(
+        samples: FloatArray,
+        sampleCount: Int,
+        channels: Int,
+        sampleRate: Int,
+    ) {
+        if (sampleCount <= 0 || channels <= 0 || sampleRate <= 0) return
+        if (playbackDspProcessor.engine == null ||
+            externalDspSampleRate != sampleRate ||
+            externalDspChannels != channels
+        ) {
+            configureExternalDsp(sampleRate, channels)
+        }
+        val engine = playbackDspProcessor.engine ?: return
+        if (!engine.hasActiveEffects()) return
+
+        if (playbackDspProcessor.internalDoublePrecisionProcessing) {
+            if (externalDspDoubleScratch.size < sampleCount) {
+                externalDspDoubleScratch = DoubleArray(sampleCount)
+            }
+            for (i in 0 until sampleCount) {
+                externalDspDoubleScratch[i] = samples[i].toDouble()
+            }
+            val rc = engine.processDouble(externalDspDoubleScratch, sampleCount, channels)
+            if (rc == 0) {
+                for (i in 0 until sampleCount) {
+                    samples[i] = externalDspDoubleScratch[i].toFloat()
+                }
+            }
+        } else {
+            engine.processFloat(samples, sampleCount, channels)
+        }
+    }
+
     /** 当前是否使用浮点输出（非 USB 且位深 > 16） */
     private val useFloatOutput: Boolean
         get() = pcmOutputPolicy.useFloatOutput
