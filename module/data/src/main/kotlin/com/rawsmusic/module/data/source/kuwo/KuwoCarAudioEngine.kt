@@ -648,6 +648,11 @@ object KuwoCarAudioEngine {
     }
 
     private val bracketContentRegex = Regex("""[\(\[（【［\{]([^)\]）】］\}]*)[\)\]）】］\}]""")
+    // 紧跟在书名号后的语种说明（如 `你系我嘅-《重爱轻友》粤语版`）属于“同曲不同词原曲出处注释”，
+    // 并非当前歌名存在同名国/粤多语种版本，提取语种门控标签前应先剥离以免误杀
+    private val bookOriginLangNoteRegex = Regex(
+        """(?i)《[^》]+》\s*(粤语版?|广东话版?|国语版?|普通话版?|英语版|英文版|日语版|日文版|韩语版|韩文版|闽南语版?|台语版?|cantonese|mandarin|english\s*ver(?:sion|\.)?|japanese\s*ver(?:sion|\.)?|korean\s*ver(?:sion|\.)?)"""
+    )
     private val explicitLangPatterns: List<Pair<LanguageTag, Regex>> = listOf(
         LanguageTag.CANTONESE to Regex("""(?i)(粤语版?|广东话版?|(?<![a-zA-Z])cantonese(?![a-zA-Z]))"""),
         LanguageTag.MANDARIN to Regex("""(?i)(国语版?|普通话版?|(?<![a-zA-Z])mandarin(?![a-zA-Z]))"""),
@@ -820,13 +825,15 @@ object KuwoCarAudioEngine {
      */
     private fun extractLanguageTags(rawTitle: String): Set<LanguageTag> {
         if (rawTitle.isBlank()) return emptySet()
+        val sanitized = rawTitle.replace(bookOriginLangNoteRegex, "")
+        if (sanitized.isBlank()) return emptySet()
         val tags = HashSet<LanguageTag>(2)
         for ((lang, regex) in explicitLangPatterns) {
-            if (regex.containsMatchIn(rawTitle)) {
+            if (regex.containsMatchIn(sanitized)) {
                 tags.add(lang)
             }
         }
-        bracketContentRegex.findAll(rawTitle).forEach { match ->
+        bracketContentRegex.findAll(sanitized).forEach { match ->
             val inner = match.groupValues.getOrNull(1)?.trim().orEmpty()
             if (inner.isNotEmpty()) {
                 for ((lang, regex) in bracketShortLangPatterns) {

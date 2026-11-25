@@ -19,6 +19,8 @@ class SongMatcherTest {
         assertTrue(SongMatcher.isTitleMatched("离开我的依赖", "离开我的依赖-王艳薇", "王艳薇", "王艳薇"))
         assertTrue(SongMatcher.isTitleMatched("离开我的依赖-王艳薇", "离开我的依赖", "王艳薇", "王艳薇"))
         assertTrue(SongMatcher.isTitleMatched("王艳薇-离开我的依赖", "离开我的依赖", "王艳薇", "王艳薇"))
+        // 书名号出处语种注释（如 `你系我嘅-《重爱轻友》粤语版`）应正常匹配纯歌名 `你系我嘅`
+        assertTrue(SongMatcher.isTitleMatched("你系我嘅", "你系我嘅-《重爱轻友》粤语版", "黎明", "黎明"))
         // 特殊版本标签不一致不应匹配
         assertFalse(SongMatcher.isTitleMatched("晴天", "晴天 (Live)"))
         assertFalse(SongMatcher.isTitleMatched("晴天", "晴天(live版)"))

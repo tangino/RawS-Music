@@ -38,6 +38,11 @@ object OnlinePlaybackMatcher {
     )
 
     private val BRACKET_CONTENT_REGEX = Regex("""[\(\[（【［\{]([^)\]）】］\}]*)[\)\]）】］\}]""")
+    private val DASH_BOOK_SUBTITLE_REGEX = Regex("""\s*[-–—~|]\s*《.*$""")
+    // 紧跟在书名号后的语种说明（如 `你系我嘅-《重爱轻友》粤语版`）属于原曲出处注释，不作为当前歌名的语种冲突标签
+    private val BOOK_ORIGIN_LANG_NOTE_REGEX = Regex(
+        """(?i)《[^》]+》\s*(粤语版?|广东话版?|国语版?|普通话版?|英语版|英文版|日语版|日文版|韩语版|韩文版|闽南语版?|台语版?|cantonese|mandarin|english\s*ver(?:sion|\.)?|japanese\s*ver(?:sion|\.)?|korean\s*ver(?:sion|\.)?)"""
+    )
 
     private val EXPLICIT_LANG_PATTERNS: List<Pair<String, Regex>> = listOf(
         "cantonese" to Regex("""(?i)(粤语版?|广东话版?|(?<![a-zA-Z])cantonese(?![a-zA-Z]))"""),
@@ -109,7 +114,12 @@ object OnlinePlaybackMatcher {
             .replace("]", ")")
         val withoutBracket = cleaned.replace(Regex("\\([^)]*\\)"), "").trim()
         val base = if (withoutBracket.isNotBlank()) withoutBracket else cleaned
-        return base.substringBefore(" - ").substringBefore(" — ").trim()
+        return base
+            .replace(DASH_BOOK_SUBTITLE_REGEX, "")
+            .substringBefore(" - ")
+            .substringBefore(" — ")
+            .substringBefore(" – ")
+            .trim()
     }
 
     /** 提取文本中命中的特殊版本标签（归一化分组）。 */
@@ -130,7 +140,7 @@ object OnlinePlaybackMatcher {
      * 仅识别括号内标记或显式带「语/版」后缀，避免误伤《中国话》《日不落》《广东爱情故事》等常规歌名。
      */
     fun extractLanguageTags(text: String): Set<String> {
-        val cleaned = cleanText(text)
+        val cleaned = cleanText(text).replace(BOOK_ORIGIN_LANG_NOTE_REGEX, "")
         if (cleaned.isEmpty()) return emptySet()
         val result = HashSet<String>(2)
         for ((lang, regex) in EXPLICIT_LANG_PATTERNS) {

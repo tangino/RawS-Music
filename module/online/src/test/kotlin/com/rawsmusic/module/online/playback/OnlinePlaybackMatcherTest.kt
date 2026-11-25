@@ -90,6 +90,9 @@ class OnlinePlaybackMatcherTest {
         // 副标题与影视剧后缀剥离比对
         assertTrue(OnlinePlaybackMatcher.isTitleMatched("借过一下 - 电视剧《鸣龙少年》插曲", "借过一下"))
         assertTrue(OnlinePlaybackMatcher.isTitleMatched("借过一下 — 电视剧《鸣龙少年》插曲", "借过一下"))
+        // 无空格连字符书名号出处注释（如《重爱轻友》粤语版）不应被误判为当前歌名的多语种版本冲突
+        assertTrue(OnlinePlaybackMatcher.isTitleMatched("你系我嘅", "你系我嘅-《重爱轻友》粤语版"))
+        assertTrue(OnlinePlaybackMatcher.isTitleMatched("你系我嘅", "你系我嘅 (《重爱轻友》粤语版)"))
     }
 
     @Test

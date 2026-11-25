@@ -33,6 +33,10 @@ object SongMatcher {
     )
 
     private val BRACKET_CONTENT_REGEX = Regex("""[\(\[（【［\{]([^)\]）】］\}]*)[\)\]）】］\}]""")
+    private val DASH_BOOK_SUBTITLE_REGEX = Regex("""\s*[-–—~|]\s*《.*$""")
+    private val BOOK_ORIGIN_LANG_NOTE_REGEX = Regex(
+        """(?i)《[^》]+》\s*(粤语版?|广东话版?|国语版?|普通话版?|英语版|英文版|日语版|日文版|韩语版|韩文版|闽南语版?|台语版?|cantonese|mandarin|english\s*ver(?:sion|\.)?|japanese\s*ver(?:sion|\.)?|korean\s*ver(?:sion|\.)?)"""
+    )
 
     private val EXPLICIT_LANG_PATTERNS: List<Pair<String, Regex>> = listOf(
         "cantonese" to Regex("""(?i)(粤语版?|广东话版?|(?<![a-zA-Z])cantonese(?![a-zA-Z]))"""),
@@ -104,7 +108,12 @@ object SongMatcher {
             .replace("]", ")")
         val withoutBracket = cleaned.replace(Regex("\\([^)]*\\)"), "").trim()
         val base = if (withoutBracket.isNotBlank()) withoutBracket else cleaned
-        var result = base.substringBefore(" - ").substringBefore(" — ").substringBefore(" – ").trim()
+        var result = base
+            .replace(DASH_BOOK_SUBTITLE_REGEX, "")
+            .substringBefore(" - ")
+            .substringBefore(" — ")
+            .substringBefore(" – ")
+            .trim()
 
         // 针对带连接符（如“离开我的依赖-王艳薇”或“王艳薇-离开我的依赖”）进行智能歌手剥离
         val normArtist = artist?.let { normalizeForCompare(it) }?.takeIf { it.isNotBlank() }
@@ -142,7 +151,7 @@ object SongMatcher {
     }
 
     private fun extractLanguageTags(text: String): Set<String> {
-        val cleaned = cleanText(text)
+        val cleaned = cleanText(text).replace(BOOK_ORIGIN_LANG_NOTE_REGEX, "")
         if (cleaned.isEmpty()) return emptySet()
         val result = HashSet<String>(2)
         for ((lang, regex) in EXPLICIT_LANG_PATTERNS) {
