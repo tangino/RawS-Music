@@ -9,6 +9,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -96,6 +98,7 @@ import kotlin.math.absoluteValue
 internal fun HomeOrbitCoverFlow(
     songs: List<AudioFile>,
     currentSong: AudioFile?,
+    reportedCenterIndex: Int = -1,
     isPlaying: Boolean,
     reflectionAlpha: Float = 0.85f,
     onSelectSong: (AudioFile, Int) -> Unit,
@@ -130,14 +133,38 @@ internal fun HomeOrbitCoverFlow(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE ||
         configuration.screenWidthDp > configuration.screenHeightDp
 
-    // 计算当前正在播放歌曲在封面列表中的位置
-    val currentPlayingSongIndex = remember(currentSong, displaySongs) {
-        if (currentSong != null && displaySongs.isNotEmpty()) {
-            displaySongs.indexOfFirst {
-                it.path == currentSong.path || (it.id != 0L && it.id == currentSong.id) ||
-                    (it.title.isNotBlank() && it.title == currentSong.title && it.artist == currentSong.artist)
+    // 按严格优先级计算当前正在播放歌曲在封面列表中的精确位置：
+    // 1. 优先校验播放器上报的权威队列下标（彻底避免队列存在同名/重复曲目时命中错误下标）；
+    // 2. 精确路径 + CUE 分轨匹配；
+    // 3. 非零 ID 精确匹配；
+    // 4. 在线语义 Key 匹配；
+    // 5. 歌名 + 歌手元数据匹配兜底。
+    val currentPlayingSongIndex = remember(currentSong, displaySongs, reportedCenterIndex) {
+        if (currentSong == null || displaySongs.isEmpty()) {
+            -1
+        } else {
+            val fromReported = reportedCenterIndex.takeIf { idx ->
+                idx in displaySongs.indices && isSameAudioSong(displaySongs[idx], currentSong)
             }
-        } else -1
+            fromReported
+                ?: displaySongs.indexOfFirst {
+                    it.path.isNotBlank() && it.path == currentSong.path &&
+                        it.cueOffsetMs == currentSong.cueOffsetMs &&
+                        it.cueTrackIndex == currentSong.cueTrackIndex
+                }.takeIf { it >= 0 }
+                ?: displaySongs.indexOfFirst {
+                    it.id != 0L && it.id == currentSong.id
+                }.takeIf { it >= 0 }
+                ?: displaySongs.indexOfFirst {
+                    com.rawsmusic.core.common.model.isOnlineSongKey(it.path) &&
+                        it.path.equals(currentSong.path, ignoreCase = true)
+                }.takeIf { it >= 0 }
+                ?: displaySongs.indexOfFirst {
+                    it.title.isNotBlank() &&
+                        it.title.equals(currentSong.title, ignoreCase = true) &&
+                        it.artist.trim().equals(currentSong.artist.trim(), ignoreCase = true)
+                }
+        }
     }
 
     val initialIndex = remember(displaySongs) {
@@ -169,36 +196,84 @@ internal fun HomeOrbitCoverFlow(
         snapAnimationSpec = smoothSnap
     )
 
-    // 1. 响应外部切歌时自动驱动 Cover Flow 居中
-    LaunchedEffect(currentPlayingSongIndex) {
-        if (currentPlayingSongIndex in displaySongs.indices && pagerState.currentPage != currentPlayingSongIndex) {
+    val latestCurrentPlayingIndex by rememberUpdatedState(currentPlayingSongIndex)
+    val latestDisplayCount by rememberUpdatedState(displaySongs.size)
+    var autoReturnJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
+
+    suspend fun scrollCoverFlowToTarget(targetIndex: Int) {
+        val count = latestDisplayCount
+        if (targetIndex !in 0 until count) return
+        isProgrammaticScroll = true
+        try {
+            val distance = (targetIndex - pagerState.currentPage).absoluteValue
+            // 跨度过大（> 12 页）时先无感瞬移至目标附近 6 页再平滑滑入，避免长距离 350ms 动画掉帧或落点偏差
+            if (distance > 12) {
+                val preJump = if (targetIndex > pagerState.currentPage) {
+                    (targetIndex - 6).coerceAtLeast(0)
+                } else {
+                    (targetIndex + 6).coerceAtMost(count - 1)
+                }
+                pagerState.scrollToPage(preJump)
+            }
             pagerState.animateScrollToPage(
-                page = currentPlayingSongIndex,
+                page = targetIndex,
                 animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
             )
+            if (pagerState.currentPage != targetIndex) {
+                pagerState.scrollToPage(targetIndex)
+            }
+        } finally {
+            isProgrammaticScroll = false
         }
     }
 
-    // 2. 居中的封面不是当前播放歌曲时，5 秒无操作自动调用与切歌完全一致的滚回逻辑
-    LaunchedEffect(
-        pagerState.currentPage,
-        pagerState.isScrollInProgress,
-        currentPlayingSongIndex
-    ) {
-        if (currentPlayingSongIndex !in displaySongs.indices) return@LaunchedEffect
-        // 如果正在滑动中，或者当前页就是正在播放的歌曲，无需倒计时
-        if (pagerState.isScrollInProgress || pagerState.currentPage == currentPlayingSongIndex) return@LaunchedEffect
-
-        // 静止停留 5 秒无操作
-        delay(5000L)
-
-        // 5 秒后直接执行与切歌完全一致的居中逻辑
-        if (!pagerState.isScrollInProgress && pagerState.currentPage != currentPlayingSongIndex) {
-            pagerState.animateScrollToPage(
-                page = currentPlayingSongIndex,
-                animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
-            )
+    // 监听用户手动拖拽：一旦用户重新触摸拖动，立刻取消正在进行的 5 秒倒计时或自动回弹动画
+    LaunchedEffect(pagerState) {
+        pagerState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) {
+                autoReturnJob?.cancel()
+                autoReturnJob = null
+            }
         }
+    }
+
+    // 1. 响应外部切歌时自动驱动 Cover Flow 精准居中
+    LaunchedEffect(currentPlayingSongIndex) {
+        autoReturnJob?.cancel()
+        autoReturnJob = null
+        if (currentPlayingSongIndex in displaySongs.indices && pagerState.currentPage != currentPlayingSongIndex) {
+            scrollCoverFlowToTarget(currentPlayingSongIndex)
+        }
+    }
+
+    // 2. 居中的封面不是当前播放歌曲时，静止 5 秒无操作后自动平滑滚回当前播放歌曲
+    // 注意：绝不能把 `pagerState.isScrollInProgress` / `pagerState.currentPage` 作为 LaunchedEffect 的 key 来直接执行
+    // `animateScrollToPage`，否则动画首帧将 `isScrollInProgress` 置为 true 时会立即取消自身协程，导致 CoverFlow 半路停在错误歌曲！
+    LaunchedEffect(pagerState) {
+        snapshotFlow {
+            Triple(pagerState.currentPage, pagerState.isScrollInProgress, latestCurrentPlayingIndex)
+        }
+            .distinctUntilChanged()
+            .collect { (settledPage, scrolling, playingIndex) ->
+                if (isProgrammaticScroll) return@collect
+                autoReturnJob?.cancel()
+                autoReturnJob = null
+                if (scrolling) return@collect
+                if (playingIndex !in 0 until latestDisplayCount) return@collect
+                if (settledPage == playingIndex) return@collect
+
+                autoReturnJob = coroutineScope.launch {
+                    delay(5000L)
+                    val target = latestCurrentPlayingIndex
+                    if (target in 0 until latestDisplayCount &&
+                        !pagerState.isScrollInProgress &&
+                        pagerState.currentPage != target
+                    ) {
+                        scrollCoverFlowToTarget(target)
+                    }
+                }
+            }
     }
 
     val cardSize: Dp = if (isLandscape) 210.dp else 220.dp

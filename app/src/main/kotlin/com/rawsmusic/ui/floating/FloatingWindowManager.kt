@@ -32,6 +32,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
@@ -61,6 +62,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
@@ -198,6 +200,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private var coverLoadJob: Job? = null
 
     private var currentSongIdentity: String? = null
+    private var lastDisplayedPlayingState: Boolean? = null
     private var currentLyricLines: List<LyricLine> = emptyList()
     private var lastLyricStateKey: String = ""
     private var currentLineSplitPart2StartMs: Long = Long.MAX_VALUE
@@ -245,6 +248,18 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private var suppressExitOnNextUp = false
     private var longPressTriggered = false
     private var infoLongPressRunnable: Runnable? = null
+
+    // GPU 浮点实时缩放会话状态（左上角原地锚定，进退调整模式 params.x/y 纹丝不动、translation 恒为 0）
+    private var isResizeCanvasExpanded = false
+    private var isInteractiveScaling = false
+    private var interactiveBaseScale = 1f
+    private var interactiveTargetScale = 1f
+    private var interactiveCanvasX = 0
+    private var interactiveCanvasY = 0
+    private var interactiveCanvasW = 0
+    private var interactiveCanvasH = 0
+    private var interactiveBaseCapsuleW = 0f
+    private var interactiveBaseCapsuleH = 0f
 
     private fun tryExitOnTouchUp(): Boolean {
         if (suppressExitOnNextUp) {
@@ -583,6 +598,45 @@ class FloatingWindowManager private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * 获取扣除系统导航栏/车机底部 Dock/状态栏后的 WMS 真实可用显示区域。
+     * 扩容缩放画布时必须严格不超过此区域的 right/bottom，否则 WMS 会因窗口越过系统栏而把整个窗口自动往上顶，
+     * 退出缩窗时又掉回原位，造成“进模式上移、退模式下移”的错位。
+     */
+    private fun getUsableScreenBounds(anchorView: View? = floatingView): Rect {
+        val usable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = windowManager.currentWindowMetrics
+            val b = metrics.bounds
+            val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            Rect(
+                b.left + insets.left,
+                b.top + insets.top,
+                (b.right - insets.right).coerceAtLeast(b.left + 1),
+                (b.bottom - insets.bottom).coerceAtLeast(b.top + 1)
+            )
+        } else {
+            val dm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getMetrics(dm)
+            Rect(0, 0, dm.widthPixels, dm.heightPixels)
+        }
+
+        // 同时与 WMS 实际下发给当前悬浮窗的可见区域取交集，兼容各类自定义车机 Dock 栏
+        if (anchorView != null && anchorView.isAttachedToWindow) {
+            val visible = Rect()
+            anchorView.getWindowVisibleDisplayFrame(visible)
+            if (visible.width() > 0 && visible.height() > 0) {
+                usable.left = maxOf(usable.left, visible.left)
+                usable.top = maxOf(usable.top, visible.top)
+                usable.right = minOf(usable.right, visible.right)
+                usable.bottom = minOf(usable.bottom, visible.bottom)
+            }
+        }
+        return usable
+    }
+
     private fun clampCoordinates(
         params: WindowManager.LayoutParams,
         targetView: View? = floatingView,
@@ -601,10 +655,12 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val expectedHeight = if (expectedHeightPx > 0) expectedHeightPx
         else (baseH * curScale * density).roundToInt()
 
-        val vWidth = targetView?.width?.takeIf { it > 0 }
+        val vWidth = expectedWidthPx.takeIf { it > 0 }
+            ?: targetView?.width?.takeIf { it > 0 }
             ?: capsuleContainer?.width?.takeIf { it > 0 }
             ?: expectedWidth
-        val vHeight = targetView?.height?.takeIf { it > 0 }
+        val vHeight = expectedHeightPx.takeIf { it > 0 }
+            ?: targetView?.height?.takeIf { it > 0 }
             ?: capsuleContainer?.height?.takeIf { it > 0 }
             ?: expectedHeight
 
@@ -680,6 +736,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             isShowing = true
 
             currentSongIdentity = null
+            lastDisplayedPlayingState = null
             startObservingPlayback()
             AppLogger.i(TAG, "Floating window displayed successfully at (${params.x}, ${params.y}) tier=${getDeviceTier()} scale=$userScaleFactor")
         } catch (e: Exception) {
@@ -692,7 +749,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
     fun hide() {
         if (!isShowing && floatingView == null) return
 
+        if (isInteractiveScaling) {
+            isInteractiveScaling = false
+        }
         if (isResizeMode) exitResizeMode()
+        isResizeCanvasExpanded = false
         cancelInfoLongPress()
         cancelResizeIdleExit()
 
@@ -722,6 +783,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
             windowParams = null
             isShowing = false
             currentSongIdentity = null
+            lastDisplayedPlayingState = null
             currentLyricLines = emptyList()
             lastLyricStateKey = ""
             currentLineSplitPart2StartMs = Long.MAX_VALUE
@@ -774,7 +836,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
         var overlayStartX = 0f
         var overlayStartY = 0f
         var overlayMoved = false
-        var overlayStartDist = 0f
+        var overlayDirX = 1
+        var overlayDirY = 1
         var overlayStartScale = 1.0f
         var overlayIsResizing = false
         val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -795,40 +858,46 @@ class FloatingWindowManager private constructor(private val context: Context) {
                         val curH = baseH * density * collapsedScaleFactor
                         val centerX = (windowParams?.x ?: 0) + padPx / 2f + curH / 2f
                         val centerY = (windowParams?.y ?: 0) + padPx / 2f + curH / 2f
-                        resizeStartCenterX = centerX
-                        resizeStartCenterY = centerY
-                        overlayStartDist = Math.hypot((event.rawX - centerX).toDouble(), (event.rawY - centerY).toDouble()).toFloat()
+                        // 按按下位置相对圆心的象限锁定单调线性缩放方向，避免 Math.hypot 极坐标过圆心反向震荡与 2 倍过敏抖动
+                        overlayDirX = if (event.rawX >= centerX) 1 else -1
+                        overlayDirY = if (event.rawY >= centerY) 1 else -1
                         overlayStartScale = collapsedScaleFactor
                     }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = abs(event.rawX - overlayStartX)
-                    val dy = abs(event.rawY - overlayStartY)
-                    if (dx > touchSlop || dy > touchSlop) {
+                    val rawDx = event.rawX - overlayStartX
+                    val rawDy = event.rawY - overlayStartY
+                    if (abs(rawDx) > touchSlop || abs(rawDy) > touchSlop) {
                         overlayMoved = true
                     }
-                    if (isCollapsed && overlayStartDist > 0f) {
+                    if (isCollapsed) {
                         val (_, baseH) = baseCapsuleSizeDp()
                         val density = context.resources.displayMetrics.density
                         val baseHpx = (baseH * density).coerceAtLeast(1f)
-                        val centerX = resizeStartCenterX
-                        val centerY = resizeStartCenterY
-                        val curDist = Math.hypot((event.rawX - centerX).toDouble(), (event.rawY - centerY).toDouble()).toFloat()
-                        val distDelta = curDist - overlayStartDist
-                        if (!overlayIsResizing && abs(distDelta) > touchSlop) {
+                        if (!overlayIsResizing && (abs(rawDx) > touchSlop || abs(rawDy) > touchSlop)) {
                             overlayIsResizing = true
-                        }
-                        if (overlayIsResizing) {
-                            val scaleDelta = (distDelta * 2.0f) / baseHpx
-                            applyScaleAroundCenter(overlayStartScale + scaleDelta)
+                            // 以真正起拖点作为零点，避免跨越 touchSlop 时瞬间跳变
+                            overlayStartX = event.rawX
+                            overlayStartY = event.rawY
+                            beginInteractiveScale(forCollapsed = true)
+                        } else if (overlayIsResizing) {
+                            val delta = FloatingResizeMath.scaleDelta(
+                                dxPx = event.rawX - overlayStartX,
+                                dyPx = event.rawY - overlayStartY,
+                                dirX = overlayDirX,
+                                dirY = overlayDirY,
+                                baseWidthPx = baseHpx,
+                                baseHeightPx = baseHpx
+                            ) * 0.5f
+                            updateInteractiveScalePreview(overlayStartScale + delta)
                         }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (overlayIsResizing && isCollapsed) {
-                        AppPreferences.FloatingWindow.collapsedScale = collapsedScaleFactor
+                        commitInteractiveScale()
                         AppLogger.i(TAG, "折叠悬浮球拖动缩放完成: scale=$collapsedScaleFactor")
                     }
                     if (!overlayMoved && !overlayIsResizing) {
@@ -840,6 +909,9 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    if (overlayIsResizing) {
+                        commitInteractiveScale()
+                    }
                     overlayIsResizing = false
                     scheduleResizeIdleExit()
                     true
@@ -925,8 +997,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
             DeviceTier.PHONE -> 80f
         }
 
-        val capsuleH = (baseCapsuleHeightDp * scale * density).toInt()
-        val capsuleW = if (isCollapsed) capsuleH else (baseCapsuleWidthDp * scale * density).toInt()
+        val capsuleH = (baseCapsuleHeightDp * scale * density).roundToInt()
+        val capsuleW = if (isCollapsed) capsuleH else (baseCapsuleWidthDp * scale * density).roundToInt()
 
         // 折叠状态下边界厚度减半：外圈留白边距由原先减半，黑胶唱片相应饱满
         val borderPad = if (isCollapsed) {
@@ -1048,14 +1120,16 @@ class FloatingWindowManager private constructor(private val context: Context) {
 
         rootCard?.clipToOutline = false
         val padPx = (2 * density).toInt() * 2
-        windowParams?.let { wp ->
-            wp.width = capsuleW + padPx
-            wp.height = capsuleH + padPx
-            clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
-            if (updateLayout && root.isAttachedToWindow) {
-                try {
-                    windowManager.updateViewLayout(root, wp)
-                } catch (_: Exception) {}
+        if (!isResizeCanvasExpanded) {
+            windowParams?.let { wp ->
+                wp.width = capsuleW + padPx
+                wp.height = capsuleH + padPx
+                clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
+                if (updateLayout && root.isAttachedToWindow) {
+                    try {
+                        windowManager.updateViewLayout(root, wp)
+                    } catch (_: Exception) {}
+                }
             }
         }
         updateResizeOverlayGeometry(root)
@@ -1090,7 +1164,20 @@ class FloatingWindowManager private constructor(private val context: Context) {
             resizeHint?.visibility = View.GONE
         } else {
             resizeHint?.visibility = View.VISIBLE
+            // 进入调整模式时一次性锁定提示气泡固定宽度，后续按下/松手拖动圆点时 0 次 requestLayout
+            resizeHint?.let { hint ->
+                val lp = hint.layoutParams
+                val fixedW = (130f * density).roundToInt()
+                if (lp != null && lp.width != fixedW) {
+                    lp.width = fixedW
+                    hint.layoutParams = lp
+                }
+                hint.gravity = Gravity.CENTER
+            }
         }
+
+        // 进入调整模式即一次性扩容并锁定大画布：后续任意次数按下/拖动/松手圆点全程 0 次 updateViewLayout
+        expandResizeCanvasIfNeeded(view, forCollapsed = isCollapsed)
 
         val fadeViews = listOfNotNull(resizeFrame) + resizeHandles.map { it.view }
         fadeViews.forEach { target ->
@@ -1107,6 +1194,9 @@ class FloatingWindowManager private constructor(private val context: Context) {
     }
 
     private fun exitResizeMode() {
+        if (isInteractiveScaling) {
+            commitInteractiveScale()
+        }
         if (!isResizeMode) return
         isResizeMode = false
         suppressExitOnNextUp = false
@@ -1114,6 +1204,19 @@ class FloatingWindowManager private constructor(private val context: Context) {
         cancelResizeIdleExit()
         infoContainer?.animate()?.translationX(0f)?.setDuration(100)?.start()
         resizeOverlay?.visibility = View.GONE
+        resizeHint?.let { h ->
+            h.scaleX = 1f
+            h.scaleY = 1f
+            val lp = h.layoutParams
+            if (lp != null && lp.width != ViewGroup.LayoutParams.WRAP_CONTENT) {
+                lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
+                h.layoutParams = lp
+            }
+        }
+
+        floatingView?.let { view ->
+            collapseResizeCanvasToCompact(view)
+        }
 
         capsuleContainer?.invalidateOutline()
 
@@ -1171,7 +1274,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val overlayLp = overlay.layoutParams as? FrameLayout.LayoutParams ?: FrameLayout.LayoutParams(capsuleW, capsuleH)
         overlayLp.width = capsuleW
         overlayLp.height = capsuleH
-        overlayLp.gravity = Gravity.CENTER
+        overlayLp.gravity = Gravity.TOP or Gravity.START
         overlay.layoutParams = overlayLp
 
         resizeFrame?.let { frame ->
@@ -1201,69 +1304,324 @@ class FloatingWindowManager private constructor(private val context: Context) {
         }
     }
 
-    private fun updateResizeHintText(dragging: Boolean) {
+    private fun updateResizeHintText(dragging: Boolean, previewScale: Float? = null) {
         val hint = resizeHint ?: return
         val (baseW, baseH) = baseCapsuleSizeDp()
-        val scale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
+        val scale = previewScale ?: if (isCollapsed) collapsedScaleFactor else userScaleFactor
         hint.text = if (dragging) {
-            val percent = (scale * 100f).toInt()
-            val hDp = (baseH * scale).toInt()
-            val wDp = if (isCollapsed) hDp else (baseW * scale).toInt()
+            val percent = (scale * 100f).roundToInt()
+            val hDp = (baseH * scale).roundToInt()
+            val wDp = if (isCollapsed) hDp else (baseW * scale).roundToInt()
             "$percent% · ${wDp}×${hDp}dp"
         } else {
             context.getString(R.string.floating_window_resize_hint_with_theme, currentThemeLabel())
         }
-        hint.setTextSize(
-            TypedValue.COMPLEX_UNIT_SP,
-            (10.5f * scale).coerceIn(9f, 14f)
-        )
+        if (!isInteractiveScaling) {
+            hint.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                (10.5f * scale).coerceIn(9f, 14f)
+            )
+        }
     }
 
-    private fun applyScaleAroundCenter(targetScale: Float) {
-        val view = floatingView ?: return
+    /**
+     * 原地向右下方扩容缩放画布（生命周期绑定到 enterResizeMode / 双指捏合开始）：
+     * - 绝不修改 params.x / params.y，也绝不使用 translationX/Y 反向补偿；
+     * - 因为内容采用 top|start 左上角对齐，窗口左上角屏幕坐标纹丝不动，
+     *   彻底根除 WMS 窗口位置事务与 App RenderThread 帧提交不同步导致的进/退调整模式跳动。
+     */
+    private fun expandResizeCanvasIfNeeded(view: View, forCollapsed: Boolean) {
         val params = windowParams ?: return
-        val newScale = clampScale(targetScale, forCollapsed = isCollapsed)
-        val current = if (isCollapsed) collapsedScaleFactor else userScaleFactor
-
-        if (abs(newScale - current) < 0.002f) {
-            updateResizeHintText(dragging = true)
-            return
-        }
+        if (isResizeCanvasExpanded) return
 
         val density = context.resources.displayMetrics.density
         val (baseW, baseH) = baseCapsuleSizeDp()
-
         val padPx = (2 * density).toInt() * 2
-        if (isCollapsed) {
-            collapsedScaleFactor = newScale
-            val newH = (baseH * density * newScale).roundToInt()
-            val newW = newH
-            applyAdaptiveDimensions(view, updateLayout = false)
-            params.x = (resizeStartCenterX - padPx / 2f - newW / 2f).roundToInt()
-            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).roundToInt()
-            params.width = newW + padPx
-            params.height = newH + padPx
-            clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
+        val safeBounds = getUsableScreenBounds(view)
+        val maxScale = effectiveMaxScale(forCollapsed)
+        val maxCapsuleW = ((if (forCollapsed) baseH else baseW) * density * maxScale).roundToInt()
+        val maxCapsuleH = (baseH * density * maxScale).roundToInt()
+
+        val origX = params.x
+        val origY = params.y
+        // 取窗口在屏幕上的真实位置，确保扩容后底边/右边绝不越过底部导航栏或车机 Dock，避免 WMS 自动上推窗口
+        val loc = IntArray(2)
+        val actualRightStart = if (view.isAttachedToWindow) {
+            view.getLocationOnScreen(loc)
+            maxOf(origX, loc[0])
         } else {
-            userScaleFactor = newScale
-            val newW = (baseW * density * newScale).roundToInt()
-            val newH = (baseH * density * newScale).roundToInt()
-            applyAdaptiveDimensions(view, updateLayout = false)
-            params.x = (resizeStartCenterX - padPx / 2f - newW / 2f).roundToInt()
-            params.y = (resizeStartCenterY - padPx / 2f - newH / 2f).roundToInt()
-            params.width = newW + padPx
-            params.height = newH + padPx
-            clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
+            origX
+        }
+        val actualBottomStart = if (view.isAttachedToWindow) {
+            maxOf(origY, loc[1])
+        } else {
+            origY
         }
 
-        try {
-            if (view.isAttachedToWindow) {
-                windowManager.updateViewLayout(view, params)
-            }
-        } catch (e: Exception) {
-            AppLogger.w(TAG, "Update layout while resizing failed: ${e.message}")
+        // 仅在当前原点向右下方安全显示区域内扩容，params.x / params.y 100% 保持不变
+        val availW = (safeBounds.right - actualRightStart).coerceAtLeast(params.width)
+        val availH = (safeBounds.bottom - actualBottomStart).coerceAtLeast(params.height)
+        val canvasW = (maxCapsuleW + padPx).coerceIn(params.width, availW)
+        val canvasH = (maxCapsuleH + padPx).coerceIn(params.height, availH)
+
+        isResizeCanvasExpanded = true
+        interactiveCanvasX = origX
+        interactiveCanvasY = origY
+        interactiveCanvasW = canvasW
+        interactiveCanvasH = canvasH
+
+        capsuleContainer?.let { c ->
+            c.translationX = 0f
+            c.translationY = 0f
         }
-        updateResizeHintText(dragging = true)
+        resizeOverlay?.let { o ->
+            o.translationX = 0f
+            o.translationY = 0f
+        }
+
+        if (params.width != canvasW || params.height != canvasH) {
+            params.width = canvasW
+            params.height = canvasH
+            try {
+                if (view.isAttachedToWindow) {
+                    windowManager.updateViewLayout(view, params)
+                }
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "Expand canvas for resize mode failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 退出调整模式或双指捏合结束时，原地裁掉右下方透明空白收紧为紧凑窗口：
+     * params.x / params.y 与 translationX/Y 全程保持不变（0 位移），退出 0 抖动。
+     */
+    private fun collapseResizeCanvasToCompact(view: View) {
+        val params = windowParams ?: return
+        if (!isResizeCanvasExpanded) return
+
+        val density = context.resources.displayMetrics.density
+        val (baseW, baseH) = baseCapsuleSizeDp()
+        val padPx = (2 * density).toInt() * 2
+        val activeScale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
+        val newH = (baseH * density * activeScale).roundToInt()
+        val newW = if (isCollapsed) newH else (baseW * density * activeScale).roundToInt()
+        val compactW = newW + padPx
+        val compactH = newH + padPx
+
+        isResizeCanvasExpanded = false
+
+        capsuleContainer?.let { c ->
+            c.translationX = 0f
+            c.translationY = 0f
+        }
+        resizeOverlay?.let { o ->
+            o.translationX = 0f
+            o.translationY = 0f
+        }
+
+        val targetX = interactiveCanvasX
+        val targetY = interactiveCanvasY
+        if (params.width != compactW || params.height != compactH || params.x != targetX || params.y != targetY) {
+            params.width = compactW
+            params.height = compactH
+            params.x = targetX
+            params.y = targetY
+            clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
+            try {
+                if (view.isAttachedToWindow) {
+                    windowManager.updateViewLayout(view, params)
+                }
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "Collapse resize canvas failed: ${e.message}")
+            }
+        }
+        AppPreferences.FloatingWindow.posX = params.x
+        AppPreferences.FloatingWindow.posY = params.y
+    }
+
+    /**
+     * 启动车机友好的左上角锚定 GPU 浮点实时缩放会话：
+     * 1. 若处于调整模式，大画布已在 enterResizeMode 原地锁定，按下拖动点 0 次 updateViewLayout、0 次重排；
+     * 2. 拖动/捏合常规区域全程 0 次 updateViewLayout、0 次 setTextSize、0 次 requestLayout；
+     * 3. 缩放期间暂停黑胶自转与跑马灯，避免旋转矩阵叠加缩放产生闪烁。
+     */
+    private fun beginInteractiveScale(forCollapsed: Boolean = isCollapsed) {
+        val view = floatingView ?: return
+        if (isInteractiveScaling) return
+
+        // 调整模式下已原地扩容完毕，这里直接复用；非调整模式（双指捏合）才按需扩容一次
+        expandResizeCanvasIfNeeded(view, forCollapsed = forCollapsed)
+
+        val density = context.resources.displayMetrics.density
+        val (baseW, baseH) = baseCapsuleSizeDp()
+        val baseScale = if (forCollapsed) collapsedScaleFactor else userScaleFactor
+        val curW = (if (forCollapsed) baseH else baseW) * density * baseScale
+        val curH = baseH * density * baseScale
+
+        isInteractiveScaling = true
+        interactiveBaseScale = baseScale.coerceAtLeast(0.1f)
+        interactiveTargetScale = baseScale
+        interactiveBaseCapsuleW = curW
+        interactiveBaseCapsuleH = curH
+
+        // 缩放期间暂时关闭黑胶自转与跑马灯，彻底消除旋转裁剪边界与缩放矩阵叠加引起的剧烈抖动
+        coverRotateAnimator?.let { anim ->
+            if (anim.isRunning) anim.pause()
+        }
+        tvTitle?.isSelected = false
+        tvLyric?.isSelected = false
+        tvLyricNext?.isSelected = false
+
+        capsuleContainer?.let { c ->
+            c.pivotX = 0f
+            c.pivotY = 0f
+            c.scaleX = 1f
+            c.scaleY = 1f
+            c.translationX = 0f
+            c.translationY = 0f
+        }
+        resizeOverlay?.let { o ->
+            o.pivotX = 0f
+            o.pivotY = 0f
+            o.scaleX = 1f
+            o.scaleY = 1f
+            o.translationX = 0f
+            o.translationY = 0f
+        }
+    }
+
+    /**
+     * 拖动/捏合中的纯 GPU 浮点预览帧：
+     * - 常规区域 0 次 IPC、0 次重排；
+     * - 仅当悬浮窗贴近屏幕右/下边缘且继续拉大超过可用画布时，紧贴屏幕边界平滑向左/上让出空间（translation 恒为 0）。
+     */
+    private fun updateInteractiveScalePreview(targetScale: Float) {
+        if (!isInteractiveScaling) {
+            beginInteractiveScale(forCollapsed = isCollapsed)
+        }
+        val clampedTarget = clampScale(targetScale, forCollapsed = isCollapsed)
+        // 轻微死区 + 指数低通滤波：滤除手指按压电容屏时 1~2px 的高频采样抖动，同时保持跟手零延迟
+        if (abs(clampedTarget - interactiveTargetScale) < 0.004f) return
+        val newScale = interactiveTargetScale + (clampedTarget - interactiveTargetScale) * 0.65f
+        interactiveTargetScale = newScale
+        val ratio = (newScale / interactiveBaseScale).coerceAtLeast(0.1f)
+
+        val density = context.resources.displayMetrics.density
+        val padPx = (2 * density).toInt() * 2
+        val visualW = interactiveBaseCapsuleW * ratio
+        val visualH = interactiveBaseCapsuleH * ratio
+
+        val view = floatingView
+        val params = windowParams
+        if (view != null && params != null && isResizeCanvasExpanded) {
+            val safeBounds = getUsableScreenBounds(view)
+            val maxUsableW = safeBounds.width().coerceAtLeast(interactiveCanvasW)
+            val maxUsableH = safeBounds.height().coerceAtLeast(interactiveCanvasH)
+            val neededW = ceil(visualW + padPx).toInt().coerceAtMost(maxUsableW)
+            val neededH = ceil(visualH + padPx).toInt().coerceAtMost(maxUsableH)
+            if (neededW > interactiveCanvasW || neededH > interactiveCanvasH) {
+                val newW = maxOf(interactiveCanvasW, neededW)
+                val newH = maxOf(interactiveCanvasH, neededH)
+                val newX = (safeBounds.right - newW).coerceIn(0, interactiveCanvasX)
+                val newY = (safeBounds.bottom - newH).coerceIn(0, interactiveCanvasY)
+                interactiveCanvasW = newW
+                interactiveCanvasH = newH
+                interactiveCanvasX = newX
+                interactiveCanvasY = newY
+                params.width = newW
+                params.height = newH
+                params.x = newX
+                params.y = newY
+                try {
+                    if (view.isAttachedToWindow) {
+                        windowManager.updateViewLayout(view, params)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        capsuleContainer?.let { c ->
+            c.scaleX = ratio
+            c.scaleY = ratio
+        }
+        resizeOverlay?.let { o ->
+            o.scaleX = ratio
+            o.scaleY = ratio
+        }
+        resizeHint?.let { h ->
+            val inv = (1f / ratio).coerceIn(0.45f, 1.8f)
+            h.scaleX = inv
+            h.scaleY = inv
+        }
+        updateResizeHintText(dragging = true, previewScale = newScale)
+    }
+
+    /**
+     * 松手瞬间原地高清落盘：
+     * - 调整模式内：窗口尺寸与位置 100% 锁定不动（0 次 updateViewLayout），原地复位 scaleX/Y = 1f 并高清重排；
+     * - 非调整模式（双指捏合结束）：重排后原地裁掉透明空白收紧窗口。
+     */
+    private fun commitInteractiveScale() {
+        if (!isInteractiveScaling) return
+        val view = floatingView
+
+        val finalScale = clampScale(interactiveTargetScale, forCollapsed = isCollapsed)
+        isInteractiveScaling = false
+
+        if (isCollapsed) {
+            collapsedScaleFactor = finalScale
+            AppPreferences.FloatingWindow.collapsedScale = finalScale
+        } else {
+            userScaleFactor = finalScale
+            AppPreferences.FloatingWindow.userScale = finalScale
+        }
+
+        capsuleContainer?.let { c ->
+            c.scaleX = 1f
+            c.scaleY = 1f
+            c.translationX = 0f
+            c.translationY = 0f
+        }
+        resizeOverlay?.let { o ->
+            o.scaleX = 1f
+            o.scaleY = 1f
+            o.translationX = 0f
+            o.translationY = 0f
+        }
+        resizeHint?.let { h ->
+            h.scaleX = 1f
+            h.scaleY = 1f
+        }
+
+        if (view != null) {
+            applyAdaptiveDimensions(view, updateLayout = false)
+            if (isResizeMode) {
+                // 调整模式内保持大画布锁定，仅持久化当前胶囊实际屏幕坐标，0 次 updateViewLayout
+                val bounds = getScreenBounds()
+                val density = context.resources.displayMetrics.density
+                val (baseW, baseH) = baseCapsuleSizeDp()
+                val padPx = (2 * density).toInt() * 2
+                val newH = (baseH * density * finalScale).roundToInt()
+                val newW = if (isCollapsed) newH else (baseW * density * finalScale).roundToInt()
+                val maxX = (bounds.width() - (newW + padPx)).coerceAtLeast(0)
+                val maxY = (bounds.height() - (newH + padPx)).coerceAtLeast(0)
+                AppPreferences.FloatingWindow.posX = interactiveCanvasX.coerceIn(0, maxX)
+                AppPreferences.FloatingWindow.posY = interactiveCanvasY.coerceIn(0, maxY)
+            } else {
+                // 非调整模式（双指捏合）结束，原地收紧回紧凑窗口
+                collapseResizeCanvasToCompact(view)
+            }
+        }
+
+        tvTitle?.isSelected = true
+        tvLyric?.isSelected = true
+        tvLyricNext?.isSelected = true
+        updateResizeHintText(dragging = false)
+        // 恢复黑胶封面自转（若当前处于播放状态）
+        if (lastDisplayedPlayingState == true) {
+            updateCoverRotation(true)
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -1283,20 +1641,14 @@ class FloatingWindowManager private constructor(private val context: Context) {
                         resizeStartScale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
                         resizeStartRawX = event.rawX
                         resizeStartRawY = event.rawY
-                        val curScale = if (isCollapsed) collapsedScaleFactor else userScaleFactor
-                        val curW = (if (isCollapsed) baseH else baseW) * density * curScale
-                        val curH = baseH * density * curScale
-                        val padPx = (2 * density).toInt() * 2
-                        windowParams?.let { p ->
-                            resizeStartCenterX = p.x + padPx / 2f + curW / 2f
-                            resizeStartCenterY = p.y + padPx / 2f + curH / 2f
-                        }
+                        beginInteractiveScale(forCollapsed = isCollapsed)
                         handle.view.animate().scaleX(1.35f).scaleY(1.35f).setDuration(90).start()
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         val dx = event.rawX - resizeStartRawX
                         val dy = event.rawY - resizeStartRawY
+                        // 左上角锚定缩放时，单边移动 dx 对应 1:1 尺寸增量（FloatingResizeMath 原按中心双边乘了 2.0，这里取 0.5 精确贴手）
                         val delta = FloatingResizeMath.scaleDelta(
                             dxPx = dx,
                             dyPx = dy,
@@ -1304,17 +1656,13 @@ class FloatingWindowManager private constructor(private val context: Context) {
                             dirY = handle.dirY,
                             baseWidthPx = if (isCollapsed) baseHpx else baseWpx,
                             baseHeightPx = baseHpx
-                        )
-                        applyScaleAroundCenter(resizeStartScale + delta)
+                        ) * 0.5f
+                        updateInteractiveScalePreview(resizeStartScale + delta)
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         handle.view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
-                        if (isCollapsed) {
-                            AppPreferences.FloatingWindow.collapsedScale = collapsedScaleFactor
-                        } else {
-                            AppPreferences.FloatingWindow.userScale = userScaleFactor
-                        }
+                        commitInteractiveScale()
                         AppLogger.i(TAG, "拖动圆点结束: isCollapsed=$isCollapsed scale=${if (isCollapsed) collapsedScaleFactor else userScaleFactor}")
                         scheduleResizeIdleExit()
                         true
@@ -1326,23 +1674,13 @@ class FloatingWindowManager private constructor(private val context: Context) {
     }
 
     private fun setupClickListeners() {
-        val onCoverLongClickListener = View.OnLongClickListener {
-            if (!isResizeMode) {
-                enterResizeMode()
-                true
-            } else {
-                false
-            }
-        }
-        coverContainer?.setOnLongClickListener(onCoverLongClickListener)
-        ivCover?.setOnLongClickListener(onCoverLongClickListener)
+        // 封面不单独注册 OnClick/OnLongClick，避免拦截触摸事件导致折叠态（圆球封面）无法直接按住封面拖动。
+        // 封面的「按住拖动位置 / 单击折叠或展开 / 长按调大小 / 双指缩放」全部由根视图 setupTouchAndDrag 统一手势状态机无缝协同处理。
+        coverContainer?.isClickable = false
+        coverContainer?.isLongClickable = false
+        ivCover?.isClickable = false
+        ivCover?.isLongClickable = false
 
-        coverContainer?.setOnClickListener {
-            toggleCollapsed()
-        }
-        ivCover?.setOnClickListener {
-            toggleCollapsed()
-        }
         btnPlayPause?.setOnClickListener {
             sendPlayerAction(PlayerService.ACTION_TOGGLE_PLAYBACK)
         }
@@ -1353,6 +1691,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
 
     fun setCollapsed(collapsed: Boolean, animate: Boolean = true) {
         if (isCollapsed == collapsed) return
+        if (isResizeMode) exitResizeMode()
         isCollapsed = collapsed
         AppPreferences.FloatingWindow.isCollapsed = collapsed
         val view = floatingView ?: return
@@ -1457,15 +1796,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
      * 反推 windowX 即可保证过渡全程封面圆心钉在 anchorX/anchorY 上。
      */
     private fun applyCapsuleTransitionFrame(
-        root: View,
-        anchorX: Float,
-        anchorY: Float,
-        bounds: Rect,
         frame: CapsuleTransitionFrame,
         coverLayoutSize: Int,
-        coverLayoutCenterX: Float,
         coverTranslationX: Float,
     ) {
+        // 动画全程窗口尺寸已锁定为最大包络，0 次 windowManager.updateViewLayout()，彻底消除整窗 1px 跳格抖动
         capsuleContainer?.let { capsule ->
             val lp = capsule.layoutParams
             if (lp.width != frame.capsuleW || lp.height != frame.capsuleH) {
@@ -1487,29 +1822,6 @@ class FloatingWindowManager private constructor(private val context: Context) {
             }
             if (cover.translationX != coverTranslationX) {
                 cover.translationX = coverTranslationX
-            }
-        }
-
-        val params = windowParams ?: return
-        val width = frame.capsuleW + root.paddingLeft + root.paddingRight
-        val height = frame.capsuleH + root.paddingTop + root.paddingBottom
-        val x = (anchorX - root.paddingLeft - coverLayoutCenterX - coverTranslationX).roundToInt()
-        val y = (anchorY - root.paddingTop - frame.capsuleH / 2f).roundToInt()
-        val targetX = x.coerceIn(0, (bounds.width() - width).coerceAtLeast(0))
-        val targetY = y.coerceIn(0, (bounds.height() - height).coerceAtLeast(0))
-        if (params.width == width && params.height == height &&
-            params.x == targetX && params.y == targetY
-        ) {
-            return
-        }
-        params.width = width
-        params.height = height
-        params.x = targetX
-        params.y = targetY
-        if (root.isAttachedToWindow) {
-            try {
-                windowManager.updateViewLayout(root, params)
-            } catch (_: Exception) {
             }
         }
     }
@@ -1582,9 +1894,29 @@ class FloatingWindowManager private constructor(private val context: Context) {
             coverSize = startCoverVisualPx,
         )
 
-        val rootPadL = root.paddingLeft
-        val rootPadT = root.paddingTop
         val wp = windowParams ?: return
+        val bounds = getScreenBounds()
+        val padPx = root.paddingLeft + root.paddingRight
+        val padVPx = root.paddingTop + root.paddingBottom
+
+        // 左上角锚定 + 动画前一次性锁定最大包络窗口，动画全程 0 次 updateViewLayout，彻底杜绝收起/展开歌词抖动
+        val envW = (maxOf(expanded.capsuleW, collapsedFrame.capsuleW, startFrame.capsuleW) + padPx)
+            .coerceAtMost(bounds.width().coerceAtLeast(1))
+        val envH = (maxOf(expanded.capsuleH, collapsedFrame.capsuleH, startFrame.capsuleH) + padVPx)
+            .coerceAtMost(bounds.height().coerceAtLeast(1))
+        val lockedX = wp.x.coerceIn(0, (bounds.width() - envW).coerceAtLeast(0))
+        val lockedY = wp.y.coerceIn(0, (bounds.height() - envH).coerceAtLeast(0))
+        if (wp.width != envW || wp.height != envH || wp.x != lockedX || wp.y != lockedY) {
+            wp.width = envW
+            wp.height = envH
+            wp.x = lockedX
+            wp.y = lockedY
+            if (root.isAttachedToWindow) {
+                try {
+                    windowManager.updateViewLayout(root, wp)
+                } catch (_: Exception) {}
+            }
+        }
 
         // 统一使用展开态横向内边距，垂直内边距过渡期间设为 0 以确保封面完全垂直居中于胶囊
         capsule.setPadding(expandedPadL, 0, expandedPadR, 0)
@@ -1597,28 +1929,6 @@ class FloatingWindowManager private constructor(private val context: Context) {
         }
         cover.pivotX = coverLayoutSize / 2f
         cover.pivotY = coverLayoutSize / 2f
-
-        // 严格基于当前真实窗口坐标反推屏幕圆心锚点，避开 View 未完成 layout 或旋转变换的干扰
-        val anchorCenterX: Float
-        val anchorCenterY: Float
-        if (capsule.width > 0 && capsule.height > 0) {
-            if (collapsed) {
-                // 当前是展开态，即将折叠：封面位于胶囊左侧
-                val oldPadL = capsule.paddingLeft
-                val oldCoverLayout = cover.width.takeIf { it > 0 } ?: expanded.coverSize
-                anchorCenterX = wp.x + rootPadL + oldPadL + oldCoverLayout / 2f + cover.translationX
-                anchorCenterY = wp.y + rootPadT + capsule.height / 2f
-            } else {
-                // 当前是折叠态，即将展开：正圆悬浮球中心即是封面圆心
-                anchorCenterX = wp.x + rootPadL + capsule.width / 2f
-                anchorCenterY = wp.y + rootPadT + capsule.height / 2f
-            }
-        } else {
-            val anchorLocation = IntArray(2)
-            cover.getLocationOnScreen(anchorLocation)
-            anchorCenterX = anchorLocation[0] + cover.width * startScale / 2f
-            anchorCenterY = anchorLocation[1] + cover.height * startScale / 2f
-        }
 
         val startTranslationX = oldCoverCenterX - coverLayoutCenterX
         cover.scaleX = startCoverVisualPx.toFloat() / coverLayoutSize
@@ -1634,7 +1944,6 @@ class FloatingWindowManager private constructor(private val context: Context) {
         val endFrame = if (collapsed) collapsedFrame else expanded
         val endTranslation = if (collapsed) collapsedTranslation else 0f
 
-        val bounds = getScreenBounds()
         val rightViews = listOfNotNull(infoContainer, btnPlayPause, btnClose)
         val startAlpha = if (infoContainer?.visibility == View.VISIBLE) (infoContainer?.alpha ?: 1f) else 0f
         val endAlpha = if (collapsed) 0f else 1f
@@ -1698,13 +2007,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     lastFrame = frame
                     lastTranslation = translation
                     applyCapsuleTransitionFrame(
-                        root = root,
-                        anchorX = anchorCenterX,
-                        anchorY = anchorCenterY,
-                        bounds = bounds,
                         frame = frame,
                         coverLayoutSize = coverLayoutSize,
-                        coverLayoutCenterX = coverLayoutCenterX,
                         coverTranslationX = translation,
                     )
                 }
@@ -1735,32 +2039,24 @@ class FloatingWindowManager private constructor(private val context: Context) {
                         view.visibility = if (collapsed) View.GONE else View.VISIBLE
                         view.alpha = 1f
                     }
-                    windowParams?.let { wp ->
-                        val finalPadL = root.paddingLeft
-                        val finalPadT = root.paddingTop
+                    windowParams?.let { params ->
                         val (finalBaseW, finalBaseH) = baseCapsuleSizeDp(tier)
                         val finalScale = if (collapsed) collapsedScaleFactor else userScaleFactor
                         val finalH = (finalBaseH * finalScale * density).roundToInt()
                         val finalW = if (collapsed) finalH else (finalBaseW * finalScale * density).roundToInt()
-                        wp.width = finalW + root.paddingLeft + root.paddingRight
-                        wp.height = finalH + root.paddingTop + root.paddingBottom
-                        if (collapsed) {
-                            wp.x = (anchorCenterX - finalPadL - finalH / 2f).roundToInt()
-                            wp.y = (anchorCenterY - finalPadT - finalH / 2f).roundToInt()
-                        } else {
-                            val finalPadStart = (padStartDp * finalScale * density).roundToInt()
-                            val finalCoverSize = (coverDp * finalScale * density).roundToInt()
-                            wp.x = (anchorCenterX - finalPadL - finalPadStart - finalCoverSize / 2f).roundToInt()
-                            wp.y = (anchorCenterY - finalPadT - finalH / 2f).roundToInt()
-                        }
-                        clampCoordinates(wp, root, expectedWidthPx = wp.width, expectedHeightPx = wp.height)
+                        params.width = finalW + root.paddingLeft + root.paddingRight
+                        params.height = finalH + root.paddingTop + root.paddingBottom
+                        // 保持左上角锚定坐标 lockedX / lockedY 不动，收紧窗口尺寸 0px 跳动
+                        params.x = lockedX
+                        params.y = lockedY
+                        clampCoordinates(params, root, expectedWidthPx = params.width, expectedHeightPx = params.height)
                         if (root.isAttachedToWindow) {
                             try {
-                                windowManager.updateViewLayout(root, wp)
+                                windowManager.updateViewLayout(root, params)
                             } catch (_: Exception) {}
                         }
-                        AppPreferences.FloatingWindow.posX = wp.x
-                        AppPreferences.FloatingWindow.posY = wp.y
+                        AppPreferences.FloatingWindow.posX = params.x
+                        AppPreferences.FloatingWindow.posY = params.y
                     }
                 }
             })
@@ -1768,13 +2064,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
         collapseTransitionAnimator = animator
         // 结构切换后立刻落一帧，避免「新 layout + 旧变换」被绘制一帧
         applyCapsuleTransitionFrame(
-            root = root,
-            anchorX = anchorCenterX,
-            anchorY = anchorCenterY,
-            bounds = bounds,
             frame = startFrame,
             coverLayoutSize = coverLayoutSize,
-            coverLayoutCenterX = coverLayoutCenterX,
             coverTranslationX = startTranslationX,
         )
         animator.start()
@@ -1819,53 +2110,32 @@ class FloatingWindowManager private constructor(private val context: Context) {
         var initialTouchXInView = 0f
         var isDragging = false
         var isScaling = false
+        var rootLongPressTriggered = false
 
         val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                isScaling = true
+                isDragging = false
+                beginInteractiveScale(forCollapsed = isCollapsed)
+                return true
+            }
+
             override fun onScale(detector: ScaleGestureDetector): Boolean {
                 isScaling = true
-                val factor = detector.scaleFactor
-                if (isCollapsed) {
-                    collapsedScaleFactor = clampScale(collapsedScaleFactor * factor, forCollapsed = true)
-                } else {
-                    userScaleFactor = clampScale(userScaleFactor * factor, forCollapsed = false)
-                }
-                applyAdaptiveDimensions(view)
-                applyTheme(view)
-                clampCoordinates(params, view)
-                try {
-                    if (view.isAttachedToWindow) {
-                        windowManager.updateViewLayout(view, params)
-                    }
-                } catch (e: Exception) {
-                    AppLogger.w(TAG, "Update layout on scale failed: ${e.message}")
-                }
+                val nextScale = interactiveTargetScale * detector.scaleFactor
+                updateInteractiveScalePreview(nextScale)
                 return true
             }
 
             override fun onScaleEnd(detector: ScaleGestureDetector) {
-                if (isCollapsed) {
-                    AppPreferences.FloatingWindow.collapsedScale = collapsedScaleFactor
-                } else {
-                    AppPreferences.FloatingWindow.userScale = userScaleFactor
-                }
+                commitInteractiveScale()
             }
         })
 
         val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (isResizeMode) return true
-                if (isCollapsed) {
-                    val targetScale = if (collapsedScaleFactor < 1.2f) 1.35f else 1.0f
-                    setCollapsedScale(targetScale)
-                } else {
-                    val targetScale = if (userScaleFactor < 1.2f) 1.35f else 1.0f
-                    setUserScale(targetScale)
-                }
-                return true
-            }
-
             override fun onLongPress(e: MotionEvent) {
-                if (!isResizeMode) {
+                if (!isResizeMode && !isDragging && !isScaling) {
+                    rootLongPressTriggered = true
                     enterResizeMode()
                 }
             }
@@ -1889,13 +2159,17 @@ class FloatingWindowManager private constructor(private val context: Context) {
 
             if (event.pointerCount > 1 || isScaling) {
                 if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    if (isInteractiveScaling) {
+                        commitInteractiveScale()
+                    }
                     isScaling = false
                     isDragging = false
+                    rootLongPressTriggered = false
                 }
                 return@setOnTouchListener true
             }
 
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
                     initialY = params.y
@@ -1904,9 +2178,11 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     initialTouchXInView = event.x
                     isDragging = false
                     isScaling = false
+                    rootLongPressTriggered = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (rootLongPressTriggered) return@setOnTouchListener true
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
 
@@ -1916,8 +2192,8 @@ class FloatingWindowManager private constructor(private val context: Context) {
 
                     if (isDragging && !isScaling) {
                         val bounds = getScreenBounds()
-                        val vWidth = view.width.takeIf { it > 0 } ?: 0
-                        val vHeight = view.height.takeIf { it > 0 } ?: 0
+                        val vWidth = view.width.takeIf { it > 0 } ?: params.width
+                        val vHeight = view.height.takeIf { it > 0 } ?: params.height
                         val maxX = (bounds.width() - vWidth).coerceAtLeast(0)
                         val maxY = (bounds.height() - vHeight).coerceAtLeast(0)
 
@@ -1936,11 +2212,14 @@ class FloatingWindowManager private constructor(private val context: Context) {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (isDragging) {
-                        clampCoordinates(params, view)
+                        clampCoordinates(params, view, expectedWidthPx = params.width, expectedHeightPx = params.height)
                         AppPreferences.FloatingWindow.posX = params.x
                         AppPreferences.FloatingWindow.posY = params.y
-                    } else if (!isScaling && !isResizeMode) {
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP &&
+                        !isScaling && !isResizeMode && !rootLongPressTriggered
+                    ) {
                         if (isCollapsed) {
+                            // 折叠态轻点任意封面位置即刻展开歌词；按住移动则丝滑拖动窗口，互不冲突
                             toggleCollapsed()
                         } else {
                             val density = context.resources.displayMetrics.density
@@ -1954,6 +2233,7 @@ class FloatingWindowManager private constructor(private val context: Context) {
                     }
                     isDragging = false
                     isScaling = false
+                    rootLongPressTriggered = false
                     true
                 }
                 else -> false
@@ -2092,9 +2372,15 @@ class FloatingWindowManager private constructor(private val context: Context) {
     private fun updatePlaybackInfo(song: AudioFile?, isPlaying: Boolean, currentPositionMs: Long) {
         if (!isShowing || floatingView == null) return
 
-        btnPlayPause?.setImageResource(
-            if (isPlaying) R.drawable.ic_float_pause else R.drawable.ic_float_play
-        )
+        // 仅在播放状态真实变化时更新图标，避免每 100ms 轮询调用 setImageResource 触发全树 requestLayout 引起缩放抖动
+        if (lastDisplayedPlayingState != isPlaying) {
+            lastDisplayedPlayingState = isPlaying
+            btnPlayPause?.setImageResource(
+                if (isPlaying) R.drawable.ic_float_pause else R.drawable.ic_float_play
+            )
+        }
+        // 正在交互缩放或收起/展开过渡动画时，暂缓黑胶旋转变更与歌词文本重排，避免与缩放竞争渲染管线
+        if (isInteractiveScaling || collapseTransitionAnimator?.isRunning == true) return
         updateCoverRotation(isPlaying)
 
         if (song != null) {

@@ -3,13 +3,16 @@
     android:id="@+id/floating_root_card"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:padding="2dp">
 
-    <!-- 极简灵动音乐胶囊 (自适应设备尺寸与横竖屏) -->
+    <!-- 极简灵动音乐胶囊 (自适应设备尺寸与横竖屏，top|start 与 WindowManager 原生左上角原点一致，缩放/收起展开 0px 跳动) -->
     <LinearLayout
         android:id="@+id/floating_capsule_container"
         android:layout_width="@dimen/floating_window_width"
         android:layout_height="@dimen/floating_window_height"
+        android:layout_gravity="top|start"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:background="@drawable/bg_floating_window"
@@ -157,7 +160,7 @@
         android:id="@+id/floating_resize_overlay"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
+        android:layout_gravity="top|start"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:visibility="gone">
