@@ -122,6 +122,19 @@ object MusicSourceArtworkRepository {
             connection.requestMethod = "GET"
             connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) RawSMusic/0.9.61 beta")
+            val lowerUrl = currentUrl.lowercase()
+            when {
+                lowerUrl.contains("qq.com") || lowerUrl.contains("gtimg.cn") ->
+                    connection.setRequestProperty("Referer", "https://y.qq.com/")
+                lowerUrl.contains("163.com") || lowerUrl.contains("126.net") ->
+                    connection.setRequestProperty("Referer", "https://music.163.com/")
+                lowerUrl.contains("kuwo.cn") ->
+                    connection.setRequestProperty("Referer", "http://www.kuwo.cn/")
+                lowerUrl.contains("kugou.com") ->
+                    connection.setRequestProperty("Referer", "https://www.kugou.com/")
+                lowerUrl.contains("migu.cn") ->
+                    connection.setRequestProperty("Referer", "https://m.music.migu.cn/")
+            }
             try {
                 val status = connection.responseCode
                 if (status in 300..399) {

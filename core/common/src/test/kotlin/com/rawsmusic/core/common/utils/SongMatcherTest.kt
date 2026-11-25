@@ -21,7 +21,23 @@ class SongMatcherTest {
         assertTrue(SongMatcher.isTitleMatched("王艳薇-离开我的依赖", "离开我的依赖", "王艳薇", "王艳薇"))
         // 特殊版本标签不一致不应匹配
         assertFalse(SongMatcher.isTitleMatched("晴天", "晴天 (Live)"))
+        assertFalse(SongMatcher.isTitleMatched("晴天", "晴天(live版)"))
+        assertFalse(SongMatcher.isTitleMatched("Alive", "Alive (Live)"))
+        assertFalse(SongMatcher.isTitleMatched("明年今日(粤)", "明年今日"))
         assertFalse(SongMatcher.isTitleMatched("晴天 (伴奏)", "晴天"))
+        // 歌名无括号但本地候选属于演唱会专辑时，非 Live 源曲绝不匹配
+        assertFalse(
+            SongMatcher.isMatched(
+                targetTitle = "富士山下",
+                targetArtist = "陈奕迅",
+                candidateTitle = "富士山下",
+                candidateArtist = "陈奕迅",
+                targetDurationMs = 259000L,
+                candidateDurationMs = 260000L,
+                targetAlbum = "What's Going On...?",
+                candidateAlbum = "DUO 陈奕迅2010演唱会",
+            )
+        )
     }
 
     @Test

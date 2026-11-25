@@ -48,6 +48,8 @@ object OnlinePlaybackBridge {
                 candidateArtist = candidate.artists.joinToString("/"),
                 targetDurationMs = target.durationMs,
                 candidateDurationMs = candidate.durationMs,
+                targetAlbum = target.album,
+                candidateAlbum = candidate.album,
             )
         }
         if (matched.isEmpty()) {
@@ -102,7 +104,19 @@ object OnlinePlaybackBridge {
         preferredQuality: RawSourceQuality,
         resolveCandidate: suspend (RawSourceMediaItem, RawSourceQuality) -> RawResolvedAudioSource?,
     ): RawResolvedAudioSource? {
-        val ordered = orderCandidatesByScore(target, candidates)
+        val matched = candidates.filter { candidate ->
+            OnlinePlaybackMatcher.isMatched(
+                targetTitle = target.title,
+                targetArtist = target.artist,
+                candidateTitle = candidate.title,
+                candidateArtist = candidate.artists.joinToString("/"),
+                targetDurationMs = target.durationMs,
+                candidateDurationMs = candidate.durationMs,
+                targetAlbum = target.album,
+                candidateAlbum = candidate.album,
+            )
+        }
+        val ordered = orderCandidatesByScore(target, matched)
         if (ordered.isEmpty()) return null
 
         for (candidate in ordered) {

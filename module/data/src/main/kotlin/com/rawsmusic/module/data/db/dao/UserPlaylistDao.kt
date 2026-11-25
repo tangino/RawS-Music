@@ -65,7 +65,27 @@ interface UserPlaylistDao {
     )
     suspend fun updatePlaylistGroup(playlistId: String, groupName: String, updatedAt: Long)
 
-    /** 批量或单曲按标题和歌手更新缺失或为默认占位图的网络封面路径（混合歌单自愈用）。 */
+    /** 清理存量跨平台错位封面（如 `online://qq/...` 却残留网易云 `126.net`/`163.com` 封面，或反之）。 */
+    @Query(
+        "UPDATE user_playlist_songs SET album_art_path = '' " +
+            "WHERE (" +
+            "  ((LOWER(song_key) LIKE 'online://qq/%' OR LOWER(path) LIKE 'online://qq/%') " +
+            "    AND (LOWER(album_art_path) LIKE '%126.net%' OR LOWER(album_art_path) LIKE '%163.com%')) " +
+            "  OR " +
+            "  ((LOWER(song_key) LIKE 'online://netease/%' OR LOWER(path) LIKE 'online://netease/%') " +
+            "    AND (LOWER(album_art_path) LIKE '%gtimg.cn%' OR LOWER(album_art_path) LIKE '%y.qq.com%'))" +
+            ")"
+    )
+    suspend fun clearCrossPlatformDirtyArtworks(): Int
+
+    /** 按歌单与歌曲 key 列表清空脏封面路径（供虚拟 QQ 曲目清理残留网易云封面用）。 */
+    @Query(
+        "UPDATE user_playlist_songs SET album_art_path = '' " +
+            "WHERE playlist_id = :playlistId AND song_key IN (:songKeys)"
+    )
+    suspend fun clearArtworksForSongs(playlistId: String, songKeys: List<String>)
+
+    /** 批量或单曲按标题和歌手更新缺失、默认占位图或跨平台错位的网络封面路径（混合歌单自愈用）。 */
     @Query(
         "UPDATE user_playlist_songs SET album_art_path = :artworkPath " +
             "WHERE LOWER(title) = LOWER(:title) AND (:artist = '' OR LOWER(artist) = LOWER(:artist)) " +
@@ -76,11 +96,15 @@ interface UserPlaylistDao {
             "OR LOWER(album_art_path) LIKE '%5639395138885805%' " +
             "OR LOWER(album_art_path) LIKE '%109951163250233892%' " +
             "OR LOWER(album_art_path) LIKE '%6y-uleoritedbvrolvq8a==%' " +
-            "OR LOWER(album_art_path) LIKE '%m00000000000000%')"
+            "OR LOWER(album_art_path) LIKE '%m00000000000000%' " +
+            "OR ((LOWER(:artworkPath) LIKE '%gtimg.cn%' OR LOWER(:artworkPath) LIKE '%y.qq.com%') " +
+            "    AND (LOWER(album_art_path) LIKE '%126.net%' OR LOWER(album_art_path) LIKE '%163.com%')) " +
+            "OR ((LOWER(:artworkPath) LIKE '%126.net%' OR LOWER(:artworkPath) LIKE '%163.com%') " +
+            "    AND (LOWER(album_art_path) LIKE '%gtimg.cn%' OR LOWER(album_art_path) LIKE '%y.qq.com%')))"
     )
     suspend fun updateArtworkPathByTitleAndArtist(title: String, artist: String, artworkPath: String)
 
-    /** 批量或单曲按标题和歌手补齐缺失或为默认占位图的在线元数据（专辑、时长与网络封面），不覆盖已有有效字段。 */
+    /** 批量或单曲按标题和歌手补齐缺失、默认占位图或跨平台错位的在线元数据（专辑、时长与同源封面）。 */
     @Query(
         "UPDATE user_playlist_songs SET " +
             "artist = CASE WHEN (artist = '' OR artist IS NULL) AND :resolvedArtist != '' THEN :resolvedArtist ELSE artist END, " +
@@ -94,7 +118,11 @@ interface UserPlaylistDao {
             "OR LOWER(album_art_path) LIKE '%5639395138885805%' " +
             "OR LOWER(album_art_path) LIKE '%109951163250233892%' " +
             "OR LOWER(album_art_path) LIKE '%6y-uleoritedbvrolvq8a==%' " +
-            "OR LOWER(album_art_path) LIKE '%m00000000000000%'" +
+            "OR LOWER(album_art_path) LIKE '%m00000000000000%' " +
+            "OR ((LOWER(:resolvedArtwork) LIKE '%gtimg.cn%' OR LOWER(:resolvedArtwork) LIKE '%y.qq.com%') " +
+            "    AND (LOWER(album_art_path) LIKE '%126.net%' OR LOWER(album_art_path) LIKE '%163.com%')) " +
+            "OR ((LOWER(:resolvedArtwork) LIKE '%126.net%' OR LOWER(:resolvedArtwork) LIKE '%163.com%') " +
+            "    AND (LOWER(album_art_path) LIKE '%gtimg.cn%' OR LOWER(album_art_path) LIKE '%y.qq.com%'))" +
             ") AND :resolvedArtwork != '' THEN :resolvedArtwork ELSE album_art_path END " +
             "WHERE LOWER(title) = LOWER(:queryTitle) AND (:queryArtist = '' OR LOWER(artist) = LOWER(:queryArtist))"
     )

@@ -125,6 +125,131 @@ class QQMusicSource(
         return trimmed
     }
 
+    private fun isValidQQMid(mid: String?): Boolean {
+        val m = mid?.trim().orEmpty()
+        return m.isNotEmpty() && m != "0" && m != "空" && m != "00000000000000" && !m.all { it == '0' }
+    }
+
+    /**
+     * 统一构建 QQ 音乐单曲官方高清封面 URL：
+     * 1. 显式非占位 `cover` / `pic` / `image` 字段；
+     * 2. 专辑 `albumMid` / `pmid` -> `T002R500x500M000`；
+     * 3. 非专辑单曲 `vs` 封面标识 (`vs[0]` / `vs[1]`) -> `T062R500x500M000`；
+     * 4. 首位歌手 `mid` / `pmid` -> `T001R500x500M000`。
+     */
+    private fun buildQQSongCoverUrl(
+        songObj: JSONObject,
+        albumObj: JSONObject? = songObj.optJSONObject("album"),
+        singerArr: JSONArray? = songObj.optJSONArray("singer"),
+    ): String {
+        val direct = formatQQImg(
+            songObj.optString("cover")
+                .ifEmpty { songObj.optString("pic") }
+                .ifEmpty { songObj.optString("image") }
+        )
+        if (direct.isNotEmpty() &&
+            !direct.lowercase().contains("m00000000000000") &&
+            !direct.lowercase().endsWith("m000.jpg")
+        ) {
+            return direct
+        }
+
+        val albumMid = listOfNotNull(
+            albumObj?.optString("mid"),
+            albumObj?.optString("pmid"),
+            albumObj?.optString("albumMid"),
+            songObj.optString("albumMid"),
+            songObj.optString("albummid"),
+        ).firstOrNull(::isValidQQMid)
+        if (albumMid != null) {
+            return "https://y.gtimg.cn/music/photo_new/T002R500x500M000$albumMid.jpg"
+        }
+
+        val vsArr = songObj.optJSONArray("vs")
+        if (vsArr != null) {
+            for (idx in 0 until minOf(vsArr.length(), 3)) {
+                val vsMid = vsArr.optString(idx).trim()
+                if (isValidQQMid(vsMid)) {
+                    return "https://y.gtimg.cn/music/photo_new/T062R500x500M000$vsMid.jpg"
+                }
+            }
+        }
+
+        if (singerArr != null && singerArr.length() > 0) {
+            val firstSinger = singerArr.optJSONObject(0)
+            val singerMid = listOfNotNull(
+                firstSinger?.optString("mid"),
+                firstSinger?.optString("pmid"),
+                firstSinger?.optString("singer_mid"),
+            ).firstOrNull(::isValidQQMid)
+            if (singerMid != null) {
+                return "https://y.gtimg.cn/music/photo_new/T001R500x500M000$singerMid.jpg"
+            }
+        }
+        return ""
+    }
+
+    /**
+     * 按 QQ 音乐原始 `songMid` 精确查询单曲详情与官方封面（`music.pf_song_detail_svr.get_song_detail_yqq`），
+     * 确保已知为 QQ 平台的曲目 100% 获取 QQ 官方标签与 `y.gtimg.cn` 封面，绝不跨平台串图。
+     */
+    suspend fun getSongDetailByMid(songMid: String): OnlineSongItem? = withContext(Dispatchers.IO) {
+        val cleanMid = songMid.trim()
+        if (cleanMid.isEmpty()) return@withContext null
+        runCatching {
+            val isNumericId = cleanMid.all { it.isDigit() }
+            val payload = JSONObject().apply {
+                put("comm", JSONObject().apply {
+                    put("ct", 24)
+                    put("cv", 0)
+                })
+                put("req", JSONObject().apply {
+                    put("module", "music.pf_song_detail_svr")
+                    put("method", "get_song_detail_yqq")
+                    put("param", JSONObject().apply {
+                        put("song_type", 0)
+                        if (isNumericId) {
+                            put("song_id", cleanMid.toLong())
+                        } else {
+                            put("song_mid", cleanMid)
+                        }
+                    })
+                })
+            }
+            val root = postMusicU(payload)
+            val track = root.optJSONObject("req")
+                ?.optJSONObject("data")
+                ?.optJSONObject("track_info")
+                ?: return@withContext null
+            val resolvedMid = track.optString("mid").ifEmpty { cleanMid }
+            val title = decodeHtmlEntities(track.optString("name").ifEmpty { track.optString("title") })
+            if (title.isBlank()) return@withContext null
+            val singerArr = track.optJSONArray("singer")
+            val singers = mutableListOf<String>()
+            if (singerArr != null) {
+                for (i in 0 until singerArr.length()) {
+                    val sName = singerArr.optJSONObject(i)?.optString("name")?.trim().orEmpty()
+                    if (sName.isNotEmpty()) singers.add(decodeHtmlEntities(sName))
+                }
+            }
+            val albumObj = track.optJSONObject("album")
+            val albumName = decodeHtmlEntities(albumObj?.optString("name").orEmpty())
+            val albumMid = albumObj?.optString("mid")?.takeIf(::isValidQQMid)
+            val coverUrl = buildQQSongCoverUrl(track, albumObj, singerArr)
+            OnlineSongItem(
+                id = resolvedMid,
+                platform = OnlinePlatform.QQ,
+                title = title,
+                artist = if (singers.isNotEmpty()) singers.joinToString(", ") else "未知歌手",
+                album = albumName.ifEmpty { "单曲" },
+                albumId = albumMid,
+                durationMs = track.optLong("interval", 0L) * 1000L,
+                coverUrl = coverUrl.ifEmpty { null },
+                isVip = parseQQIsVip(track),
+            )
+        }.getOrNull()
+    }
+
     @Volatile
     private var dynamicTags: List<OnlinePlaylistTag>? = null
 
@@ -501,12 +626,8 @@ class QQMusicSource(
                 }
                 val singerStr = if (singers.isEmpty()) "未知歌手" else singers.joinToString(", ")
 
-                // 专辑封面 (QQ音乐标准专辑封面 URL 模版)
-                val coverUrl = if (albumMid.isNotEmpty()) {
-                    "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
-                } else {
-                    null
-                }
+                // 专辑/单曲/歌手多级官方封面
+                val coverUrl = buildQQSongCoverUrl(songObj, null, singerArr).ifEmpty { null }
 
                 songs.add(
                     OnlineSongItem(
@@ -632,14 +753,7 @@ class QQMusicSource(
             }
             val singerStr = if (singers.isEmpty()) "未知歌手" else singers.joinToString(", ")
 
-            val cover = songObj.optString("cover")
-            val coverUrl = if (cover.isNotEmpty()) {
-                cover
-            } else if (albumMid.isNotEmpty()) {
-                "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
-            } else {
-                null
-            }
+            val coverUrl = buildQQSongCoverUrl(songObj, albumObj, singerArr).ifEmpty { null }
 
             val isVip = parseQQIsVip(songObj)
 
@@ -747,14 +861,7 @@ class QQMusicSource(
             }
             val singerStr = if (singers.isEmpty()) "未知歌手" else singers.joinToString(", ")
 
-            val cover = songObj.optString("cover")
-            val coverUrl = if (cover.isNotEmpty()) {
-                cover
-            } else if (albumMid.isNotEmpty()) {
-                "https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg"
-            } else {
-                null
-            }
+            val coverUrl = buildQQSongCoverUrl(songObj, albumObj, singerArr).ifEmpty { null }
 
             val isVip = parseQQIsVip(songObj)
 
@@ -791,7 +898,7 @@ class QQMusicSource(
                     put("search_type", 3) // 3 代表歌单搜索 (0: 单曲, 1: 歌手, 2: 专辑, 3: 歌单)
                     put("num_per_page", pageSize)
                     put("page_num", page)
-                    put("highlight", 1)
+                    put("highlight", 0)
                     put("grp", 1)
                 })
             })
@@ -806,17 +913,21 @@ class QQMusicSource(
             val listArr = songlistObj.optJSONArray("list") ?: JSONArray()
             val list = mutableListOf<OnlinePlaylist>()
 
+            fun cleanHtmlText(raw: String): String =
+                decodeHtmlEntities(raw.replace(Regex("<[^>]+>"), "")).trim()
+
             for (i in 0 until listArr.length()) {
                 val item = listArr.optJSONObject(i) ?: continue
-                val dissid = item.optString("dissid").ifEmpty { item.optString("docid") }
-                val dissname = item.optString("dissname").ifEmpty { item.optString("dissname_hilight") }
+                val dissid = item.optString("dissid").ifEmpty { item.optString("docid") }.trim()
+                if (dissid.isEmpty()) continue
+                val dissname = cleanHtmlText(item.optString("dissname").ifEmpty { item.optString("dissname_hilight") })
                 val imgurl = item.optString("imgurl")
                 val listennum = item.optLong("listennum")
                 val creatorObj = item.optJSONObject("creator")
-                val creatorName = creatorObj?.optString("name")
+                val creatorName = creatorObj?.optString("name")?.let(::cleanHtmlText)
                 val creatorAvatar = creatorObj?.optString("avatarUrl")
                 val songCount = item.optInt("song_count")
-                val intro = item.optString("introduction")
+                val intro = cleanHtmlText(item.optString("introduction"))
 
                 list.add(
                     OnlinePlaylist(
@@ -891,24 +1002,7 @@ class QQMusicSource(
                 val albumName = albumObj?.optString("name") ?: sObj.optString("albumname")
                 val albumMid = albumObj?.optString("mid")?.ifEmpty { albumObj.optString("pmid") }
                     ?: sObj.optString("albummid")
-
-                var coverUrl = ""
-                if (albumMid.isNotEmpty() && albumMid != "00000000000000" && albumMid != "0") {
-                    coverUrl = "https://y.gtimg.cn/music/photo_new/T002R300x300M000$albumMid.jpg"
-                }
-                if (coverUrl.isEmpty() && singerArr != null && singerArr.length() > 0) {
-                    val firstSingerMid = singerArr.optJSONObject(0)?.optString("mid")
-                        ?: singerArr.optJSONObject(0)?.optString("pmid") ?: ""
-                    if (firstSingerMid.isNotEmpty() && firstSingerMid != "00000000000000" && firstSingerMid != "0") {
-                        coverUrl = "https://y.gtimg.cn/music/photo_new/T001R300x300M000$firstSingerMid.jpg"
-                    }
-                }
-                if (coverUrl.isEmpty()) {
-                    val vsPic = sObj.optString("pic").ifEmpty { sObj.optString("image") }
-                    if (vsPic.isNotEmpty()) {
-                        coverUrl = vsPic
-                    }
-                }
+                val coverUrl = buildQQSongCoverUrl(sObj, albumObj, singerArr)
 
                 val interval = sObj.optLong("interval", 0L) * 1000L
                 val isVip = parseQQIsVip(sObj)
@@ -921,7 +1015,7 @@ class QQMusicSource(
                             title = songName,
                             artist = if (singerNames.isNotEmpty()) singerNames.joinToString(", ") else "未知歌手",
                             album = albumName.ifEmpty { "单曲" },
-                            albumId = albumMid.takeIf { it.isNotBlank() && it != "00000000000000" && it != "0" },
+                            albumId = albumMid.takeIf(::isValidQQMid),
                             durationMs = interval,
                             coverUrl = coverUrl,
                             isVip = isVip
@@ -958,15 +1052,7 @@ class QQMusicSource(
                             }
                             val albumName = sObj.optString("albumname")
                             val albumMid = sObj.optString("albummid")
-                            var coverUrl = if (albumMid.isNotEmpty() && albumMid != "00000000000000" && albumMid != "0") {
-                                "https://y.gtimg.cn/music/photo_new/T002R300x300M000$albumMid.jpg"
-                            } else ""
-                            if (coverUrl.isEmpty() && singerArr != null && singerArr.length() > 0) {
-                                val firstMid = singerArr.optJSONObject(0)?.optString("mid") ?: ""
-                                if (firstMid.isNotEmpty() && firstMid != "00000000000000" && firstMid != "0") {
-                                    coverUrl = "https://y.gtimg.cn/music/photo_new/T001R300x300M000$firstMid.jpg"
-                                }
-                            }
+                            val coverUrl = buildQQSongCoverUrl(sObj, null, singerArr)
                             val interval = sObj.optLong("interval", 0L) * 1000L
                             val isVip = parseQQIsVip(sObj)
 
@@ -978,7 +1064,7 @@ class QQMusicSource(
                                         title = songName,
                                         artist = if (singerNames.isNotEmpty()) singerNames.joinToString(", ") else "未知歌手",
                                         album = albumName.ifEmpty { "单曲" },
-                                        albumId = albumMid.takeIf { it.isNotBlank() && it != "00000000000000" && it != "0" },
+                                        albumId = albumMid.takeIf(::isValidQQMid),
                                         durationMs = interval,
                                         coverUrl = coverUrl,
                                         isVip = isVip

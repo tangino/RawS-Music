@@ -1043,7 +1043,13 @@ class MainActivity : ComponentActivity() {
             lifecycleOwner = this,
             getCurrentSong = { playerController?.currentSong?.value },
             onMiniPlayerCoverNeedRefresh = { updateMiniPlayerBarSong() },
-            onMirrorCoverChanged = { uri -> syncMirrorCover(uri) }
+            onMirrorCoverChanged = { uri -> syncMirrorCover(uri) },
+            onCurrentSongArtworkHealed = { healed ->
+                playerController?.updateCurrentSongIfSamePath(healed)
+                if (::coverBackgroundManager.isInitialized) {
+                    coverBackgroundManager.loadCoverBackground(healed.albumArtPath)
+                }
+            },
         )
     }
 
@@ -2501,9 +2507,13 @@ class MainActivity : ComponentActivity() {
 
     internal fun playSongFromSearch(song: AudioFile) {
         val songs = MusicRepository.songs.value
-        val index = songs.indexOfFirst { it.id == song.id || it.path == song.path }.coerceAtLeast(0)
-        val queue = songs.ifEmpty { listOf(song) }
-        val targetIndex = if (index in queue.indices) index else 0
+        val matchedIndex = songs.indexOfFirst { it.id == song.id || it.path == song.path }
+        val (queue, targetIndex) = if (matchedIndex in songs.indices) {
+            songs to matchedIndex
+        } else {
+            // 命中歌单中的非本地/在线歌曲（不在本地曲库列表内）时直接单曲队列起播，避免错播本地第 0 首
+            listOf(song) to 0
+        }
         primePlayerUi(queue[targetIndex])
         playbackQueueHelper.playQueue(queue, targetIndex)
     }

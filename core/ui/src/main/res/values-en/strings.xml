@@ -85,6 +85,10 @@
     <string name="online_plaza_search_empty">No playlists found</string>
     <string name="online_plaza_search_cancel">Cancel</string>
     <string name="online_plaza_search_initial">Type keywords to search online playlists</string>
+    <string name="playlist_in_search_action">Search in playlist</string>
+    <string name="playlist_in_search_hint">Search songs, artists, or albums in playlist…</string>
+    <string name="playlist_in_search_empty">No matching songs in this playlist</string>
+    <string name="playlist_in_search_result_count">Matched %1$d of %2$d songs</string>
     <string name="side_rail_log_analysis">Log analysis</string>
     <string name="lyric_more_timing_editor_title">External timing tools</string>
     <string name="lyric_more_timing_editor_summary">Choose an installed lyric timing editor for this song</string>

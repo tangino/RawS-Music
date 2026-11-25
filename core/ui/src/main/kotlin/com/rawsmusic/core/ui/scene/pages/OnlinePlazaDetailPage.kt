@@ -1,8 +1,14 @@
 package com.rawsmusic.core.ui.scene.pages
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +30,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,11 +51,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,9 +90,11 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Music
 import top.yukonga.miuix.kmp.icon.extended.Playlist
+import top.yukonga.miuix.kmp.icon.extended.Search
 
 private const val ARGUMENT_SEPARATOR = "|"
 
@@ -229,10 +246,41 @@ internal fun OnlinePlaylistDetailPage(
     }
 
     val listState = rememberLazyListState()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
+    var isSearchMode by remember(effectiveArgument) { mutableStateOf(false) }
+    var searchQuery by remember(effectiveArgument) { mutableStateOf("") }
+    val normalizedSearchQuery = remember(searchQuery) { searchQuery.trim().lowercase() }
+    // 保留原歌单下标 Pair(realIndex, song)，搜索点击时仍能以完整歌单队列起播
+    val displayedSongsWithIndex = remember(songs, isSearchMode, normalizedSearchQuery) {
+        if (!isSearchMode || normalizedSearchQuery.isEmpty()) {
+            songs.mapIndexed { idx, song -> idx to song }
+        } else {
+            songs.mapIndexedNotNull { idx, song ->
+                val matched = song.title.contains(normalizedSearchQuery, ignoreCase = true) ||
+                    song.artist.contains(normalizedSearchQuery, ignoreCase = true) ||
+                    song.album.contains(normalizedSearchQuery, ignoreCase = true)
+                if (matched) idx to song else null
+            }
+        }
+    }
+
+    LaunchedEffect(isSearchMode) {
+        if (isSearchMode) {
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
+    BackHandler(enabled = isSearchMode && !latestSceneMotionFrozen) {
+        keyboard?.hide()
+        isSearchMode = false
+        searchQuery = ""
+    }
+
     // 仅当头部主标题滚出视口后，才在顶部栏淡入标题，避免页面初始状态上下标题重复
-    val showCollapsedTitle by remember(playlist) {
+    val showCollapsedTitle by remember(playlist, isSearchMode) {
         derivedStateOf {
-            playlist != null && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 140)
+            playlist != null && (isSearchMode || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 140)
         }
     }
     val topBarTitleAlpha by animateFloatAsState(
@@ -254,7 +302,17 @@ internal fun OnlinePlaylistDetailPage(
                 .padding(start = 6.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(
+                onClick = {
+                    if (isSearchMode) {
+                        keyboard?.hide()
+                        isSearchMode = false
+                        searchQuery = ""
+                    } else {
+                        onBack()
+                    }
+                },
+            ) {
                 Icon(
                     imageVector = MiuixIcons.Regular.Back,
                     contentDescription = stringResource(R.string.nav_scene_online_playlist_detail),
@@ -273,6 +331,26 @@ internal fun OnlinePlaylistDetailPage(
                     .padding(horizontal = 6.dp)
                     .alpha(topBarTitleAlpha),
             )
+            if (songs.isNotEmpty()) {
+                IconButton(
+                    onClick = {
+                        if (isSearchMode) {
+                            keyboard?.hide()
+                            isSearchMode = false
+                            searchQuery = ""
+                        } else {
+                            isSearchMode = true
+                        }
+                    },
+                ) {
+                    Icon(
+                        imageVector = if (isSearchMode) MiuixIcons.Regular.Close else MiuixIcons.Regular.Search,
+                        contentDescription = stringResource(R.string.playlist_in_search_action),
+                        tint = if (isSearchMode) colors.primary else colors.onSurface,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
             platform?.let { currentPlatform ->
                 Box(
                     modifier = Modifier
@@ -287,6 +365,91 @@ internal fun OnlinePlaylistDetailPage(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
+                    )
+                }
+            }
+        }
+
+        // 广场网络歌单内搜索栏
+        AnimatedVisibility(
+            visible = isSearchMode,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = colors.onSurface, fontSize = 14.sp),
+                        cursorBrush = SolidColor(colors.primary),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(colors.surface)
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                            .focusRequester(searchFocusRequester),
+                        decorationBox = { inner ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Regular.Search,
+                                    contentDescription = null,
+                                    tint = colors.secondaryText,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.playlist_in_search_hint),
+                                            color = colors.secondaryText,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    inner()
+                                }
+                                if (searchQuery.isNotEmpty()) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Regular.Close,
+                                        contentDescription = stringResource(R.string.online_plaza_search_cancel),
+                                        tint = colors.secondaryText,
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clickable { searchQuery = "" },
+                                    )
+                                }
+                            }
+                        },
+                    )
+                    TextButton(
+                        text = stringResource(R.string.online_plaza_search_cancel),
+                        onClick = {
+                            keyboard?.hide()
+                            isSearchMode = false
+                            searchQuery = ""
+                        },
+                    )
+                }
+                if (normalizedSearchQuery.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.playlist_in_search_result_count, displayedSongsWithIndex.size, songs.size),
+                        color = colors.secondaryText,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
                     )
                 }
             }
@@ -314,37 +477,49 @@ internal fun OnlinePlaylistDetailPage(
                     ),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    item(key = "online_detail_header") {
-                        playlist?.let { header ->
-                            OnlineDetailHeader(
-                                playlist = header,
-                                trackCount = header.trackCount.coerceAtLeast(songs.size),
-                                isFavorite = isFavorite,
-                                onToggleFavorite = {
-                                    scope.launch {
-                                        runCatching {
-                                            if (isFavorite) {
-                                                OnlinePlaylistFavoriteStore.remove(context, favoriteKey)
-                                                AppNoticeBus.post(removedMessage)
-                                            } else {
-                                                OnlinePlaylistFavoriteStore.add(context, header)
-                                                AppNoticeBus.post(addedMessage)
-                                            }
-                                        }.onFailure { AppNoticeBus.error(loadFailedMessage) }
-                                    }
-                                },
-                                onPlayAll = { if (songs.isNotEmpty()) playSong(songs.first(), 0) },
-                            )
+                    if (!isSearchMode) {
+                        item(key = "online_detail_header") {
+                            playlist?.let { header ->
+                                OnlineDetailHeader(
+                                    playlist = header,
+                                    trackCount = header.trackCount.coerceAtLeast(songs.size),
+                                    isFavorite = isFavorite,
+                                    onToggleFavorite = {
+                                        scope.launch {
+                                            runCatching {
+                                                if (isFavorite) {
+                                                    OnlinePlaylistFavoriteStore.remove(context, favoriteKey)
+                                                    AppNoticeBus.post(removedMessage)
+                                                } else {
+                                                    OnlinePlaylistFavoriteStore.add(context, header)
+                                                    AppNoticeBus.post(addedMessage)
+                                                }
+                                            }.onFailure { AppNoticeBus.error(loadFailedMessage) }
+                                        }
+                                    },
+                                    onPlayAll = { if (songs.isNotEmpty()) playSong(songs.first(), 0) },
+                                )
+                            }
                         }
                     }
 
-                    if (songs.isEmpty()) {
-                        item { OnlineDetailMessage(stringResource(R.string.online_detail_empty)) }
+                    if (displayedSongsWithIndex.isEmpty()) {
+                        item {
+                            OnlineDetailMessage(
+                                stringResource(
+                                    if (isSearchMode && normalizedSearchQuery.isNotEmpty()) {
+                                        R.string.playlist_in_search_empty
+                                    } else {
+                                        R.string.online_detail_empty
+                                    }
+                                )
+                            )
+                        }
                     } else {
                         itemsIndexed(
-                            items = songs,
-                            key = { _, song -> "${song.platform.id}_${song.id}" },
-                        ) { index, song ->
+                            items = displayedSongsWithIndex,
+                            key = { _, (realIdx, song) -> "${song.platform.id}_${song.id}_$realIdx" },
+                        ) { _, (realIndex, song) ->
                             val isSongResolving = resolvingSongKey == "${song.platform.id}_${song.id}" ||
                                 ((playbackSnapshot.status == MusicSourcePlaybackStatus.Resolving ||
                                     playbackSnapshot.status == MusicSourcePlaybackStatus.Preparing) &&
@@ -352,11 +527,14 @@ internal fun OnlinePlaylistDetailPage(
                                         (playbackSnapshot.currentItem?.title.equals(song.title, ignoreCase = true) &&
                                             playbackSnapshot.currentItem?.artists?.contains(song.artist) == true)))
                             OnlineDetailSongRow(
-                                index = index + 1,
+                                index = realIndex + 1,
                                 song = song,
                                 isLoading = isSongResolving,
                                 onAddToPlaylist = { addToPlaylistSong = song },
-                                onClick = { playSong(song, index) },
+                                onClick = {
+                                    keyboard?.hide()
+                                    playSong(song, realIndex)
+                                },
                             )
                         }
                     }

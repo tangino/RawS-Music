@@ -83,6 +83,10 @@
     <string name="online_plaza_search_empty">未找到相关歌单</string>
     <string name="online_plaza_search_cancel">取消</string>
     <string name="online_plaza_search_initial">输入关键词搜索在线歌单</string>
+    <string name="playlist_in_search_action">歌单内搜索</string>
+    <string name="playlist_in_search_hint">搜索歌单内的歌曲、歌手或专辑…</string>
+    <string name="playlist_in_search_empty">未在当前歌单中找到匹配歌曲</string>
+    <string name="playlist_in_search_result_count">匹配 %1$d / %2$d 首歌曲</string>
     <string name="side_rail_log_analysis">日志分析</string>
     <string name="lyric_more_lyrico_title">使用 Lyrico 编辑</string>
     <string name="lyric_more_lyrico_summary">搜索、补全并写回当前歌曲的歌词与标签</string>

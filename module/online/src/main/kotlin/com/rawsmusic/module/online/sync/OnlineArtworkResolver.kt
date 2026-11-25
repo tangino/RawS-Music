@@ -20,6 +20,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -162,13 +165,69 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
     @Volatile
     private var scheduledFlushJob: Job? = null
 
+    private val _resolvedArtworkEvents = MutableSharedFlow<ResolvedMetadataUpdate>(extraBufferCapacity = 64)
+    val resolvedArtworkEvents: SharedFlow<ResolvedMetadataUpdate> = _resolvedArtworkEvents.asSharedFlow()
+
     @Volatile
     private var appContext: Context? = null
 
     fun install(context: Context) {
-        appContext = context.applicationContext
-        PlaylistStore.getInstance(context).artworkFallbackDelegate = this
+        val appCtx = context.applicationContext
+        appContext = appCtx
+        // 同步清理上次播放曲目与持久化队列快照中残留的跨平台错位封面（早于 PlayerService 启动）
+        AppPreferences.sanitizeCrossPlatformPlayerPersistence()
+        PlaylistStore.getInstance(appCtx).artworkFallbackDelegate = this
+        scope.launch {
+            repairCrossPlatformPersistence(appCtx)
+        }
         AppLogger.i(TAG, "OnlineArtworkResolver successfully installed into PlaylistStore")
+    }
+
+    /**
+     * 全自动存量自愈：
+     * 1. 扫描 MMKV `online_track_metadata_v1` 中所有 `p == "qq"` 却残留网易云 `126.net`/`163.com` 封面的脏记录，
+     *    擦除错位封面写回磁盘，并携带精确 `online://qq/<songId>` 重新从 QQ 音乐拉取官方正版封面；
+     * 2. 联动 [PlaylistStore.repairCrossPlatformArtworksWithDelegate] 清洗所有歌单与 Room 数据库中的跨平台错位封面并排队补齐。
+     */
+    private suspend fun repairCrossPlatformPersistence(context: Context) {
+        val toReResolve = ArrayList<Triple<String, String, String>>()
+        runCatching {
+            val allKeys = AppPreferences.allOnlineTrackMetadataKeys()
+            for (key in allKeys) {
+                val rawMeta = readDiskMetadata(key) ?: continue
+                val expectedPlatform = OnlinePlatform.fromId(rawMeta.platformId)
+                if (rawMeta.coverUrl.isNotBlank() && isForeignCoverForPlatform(expectedPlatform, rawMeta.coverUrl)) {
+                    val cleaned = rawMeta.copy(coverUrl = "")
+                    metadataCache.put(key, cleaned)
+                    memoryCache.remove(key)
+                    writeDiskMetadata(key, cleaned)
+                    if (cleaned.title.isNotBlank()) {
+                        val syntheticKey = if (cleaned.platformId.isNotBlank() && cleaned.songId.isNotBlank()) {
+                            "online://${cleaned.platformId}/${cleaned.songId}"
+                        } else {
+                            ""
+                        }
+                        toReResolve.add(Triple(cleaned.title, cleaned.artist, syntheticKey))
+                    }
+                }
+            }
+        }.onFailure { e ->
+            AppLogger.w(TAG, "MMKV cross-platform cover repair scan error: ${e.message}")
+        }
+
+        // 触发 PlaylistStore 清洗 Room 数据库与内存歌单中的跨平台错位封面并请求同源重拉
+        runCatching {
+            PlaylistStore.getInstance(context).repairCrossPlatformArtworks()
+        }.onFailure { e ->
+            AppLogger.w(TAG, "PlaylistStore cross-platform cover repair error: ${e.message}")
+        }
+
+        if (toReResolve.isNotEmpty()) {
+            AppLogger.i(TAG, "Healing ${toReResolve.size} cached tracks with cross-platform mismatched covers")
+            for ((t, a, sk) in toReResolve) {
+                requestArtworkResolution(t, a, sk)
+            }
+        }
     }
 
     private fun cacheKey(title: String, artist: String): String =
@@ -205,47 +264,72 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         }
     }
 
-    override fun peekCachedArtworkUrlInMemory(title: String, artist: String): String? {
-        val key = cacheKey(title, artist)
-        memoryCache.get(key)?.takeIf { isValidRemoteCoverUrl(it) }?.let { return it }
-        return metadataCache.get(key)?.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }
-    }
-
-    override fun peekCachedMetadataInMemory(title: String, artist: String): ResolvedOnlineTrackMetadata? {
-        val key = cacheKey(title, artist)
-        return metadataCache.get(key)?.let { cached ->
-            if (cached.coverUrl.isNotBlank() && isPlaceholderUrl(cached.coverUrl)) {
-                cached.copy(coverUrl = "")
-            } else {
-                cached
-            }
+    /**
+     * 校验封面 URL 是否与歌曲所属平台发生跨平台错位（例如 QQ 平台歌曲却挂着网易云 `126.net`/`163.com` 封面）。
+     */
+    private fun isForeignCoverForPlatform(expectedPlatform: OnlinePlatform?, url: String?): Boolean {
+        if (expectedPlatform == null || url.isNullOrBlank()) return false
+        val lower = url.trim().lowercase()
+        return when (expectedPlatform) {
+            OnlinePlatform.QQ -> lower.contains("126.net") || lower.contains("163.com")
+            OnlinePlatform.NETEASE -> lower.contains("gtimg.cn") || lower.contains("y.qq.com")
+            else -> false
         }
     }
 
-    override fun getCachedArtworkUrl(title: String, artist: String): String? {
-        val key = cacheKey(title, artist)
-        memoryCache.get(key)?.takeIf { isValidRemoteCoverUrl(it) }?.let { return it }
-        return getCachedMetadata(title, artist)?.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }
+    private fun sanitizeMetadataCover(
+        meta: ResolvedOnlineTrackMetadata,
+        songKey: String = "",
+    ): ResolvedOnlineTrackMetadata {
+        val expectedPlatform = parseOriginFromSongKey(songKey)?.first
+            ?: OnlinePlatform.fromId(meta.platformId)
+        val invalidOrForeign = meta.coverUrl.isNotBlank() && (
+            isPlaceholderUrl(meta.coverUrl) ||
+                isForeignCoverForPlatform(expectedPlatform, meta.coverUrl)
+            )
+        return if (invalidOrForeign) meta.copy(coverUrl = "") else meta
     }
 
-    override fun getCachedMetadata(title: String, artist: String): ResolvedOnlineTrackMetadata? {
+    override fun peekCachedArtworkUrlInMemory(title: String, artist: String, songKey: String): String? {
+        val key = cacheKey(title, artist)
+        val expectedPlatform = parseOriginFromSongKey(songKey)?.first
+        memoryCache.get(key)
+            ?.takeIf { isValidRemoteCoverUrl(it) && !isForeignCoverForPlatform(expectedPlatform, it) }
+            ?.let { return it }
+        return peekCachedMetadataInMemory(title, artist, songKey)?.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }
+    }
+
+    override fun peekCachedMetadataInMemory(title: String, artist: String, songKey: String): ResolvedOnlineTrackMetadata? {
+        val key = cacheKey(title, artist)
+        return metadataCache.get(key)?.let { cached -> sanitizeMetadataCover(cached, songKey) }
+    }
+
+    override fun getCachedArtworkUrl(title: String, artist: String, songKey: String): String? {
+        val key = cacheKey(title, artist)
+        val expectedPlatform = parseOriginFromSongKey(songKey)?.first
+        memoryCache.get(key)
+            ?.takeIf { isValidRemoteCoverUrl(it) && !isForeignCoverForPlatform(expectedPlatform, it) }
+            ?.let { return it }
+        return getCachedMetadata(title, artist, songKey)?.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }
+    }
+
+    override fun getCachedMetadata(title: String, artist: String, songKey: String): ResolvedOnlineTrackMetadata? {
         val key = cacheKey(title, artist)
         metadataCache.get(key)?.let { cached ->
-            return if (cached.coverUrl.isNotBlank() && isPlaceholderUrl(cached.coverUrl)) {
-                cached.copy(coverUrl = "").also { metadataCache.put(key, it) }
-            } else {
-                cached
+            val sanitized = sanitizeMetadataCover(cached, songKey)
+            if (sanitized !== cached) {
+                metadataCache.put(key, sanitized)
+                memoryCache.remove(key)
             }
+            return sanitized
         }
         val rawDisk = readDiskMetadata(key) ?: return null
-        val disk = if (rawDisk.coverUrl.isNotBlank() && isPlaceholderUrl(rawDisk.coverUrl)) {
-            rawDisk.copy(coverUrl = "")
-        } else {
-            rawDisk
-        }
+        val disk = sanitizeMetadataCover(rawDisk, songKey)
         metadataCache.put(key, disk)
         if (isValidRemoteCoverUrl(disk.coverUrl)) {
             memoryCache.put(key, disk.coverUrl)
+        } else {
+            memoryCache.remove(key)
         }
         return disk
     }
@@ -256,8 +340,10 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         if (cleanTitle.isBlank()) return
 
         val key = cacheKey(cleanTitle, cleanArtist)
-        val cached = getCachedMetadata(cleanTitle, cleanArtist)
-        if (cached != null && isValidRemoteCoverUrl(cached.coverUrl)) return
+        val cached = getCachedMetadata(cleanTitle, cleanArtist, songKey)
+        val originPlatform = parseOriginFromSongKey(songKey)?.first
+        val platformMatches = originPlatform == null || cached?.platformId.equals(originPlatform.id, ignoreCase = true)
+        if (cached != null && platformMatches && isValidRemoteCoverUrl(cached.coverUrl)) return
         val lastFail = failedTimestamps[key]
         if (lastFail != null && System.currentTimeMillis() - lastFail < FAILED_COOLDOWN_MS) return
         if (!inFlight.add(key)) return
@@ -317,6 +403,18 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
             batch.add(item)
         }
         if (batch.isEmpty()) return
+        for (item in batch) {
+            val m = item.metadata
+            if (m.coverUrl.isNotBlank()) {
+                com.rawsmusic.core.common.prefs.PlayHistoryManager.refreshOnlineTrackArtwork(
+                    title = item.queryTitle,
+                    artist = item.queryArtist,
+                    platformId = m.platformId,
+                    coverUrl = m.coverUrl,
+                )
+                _resolvedArtworkEvents.tryEmit(item)
+            }
+        }
         appContext?.let { ctx ->
             PlaylistStore.getInstance(ctx).updateSongsMetadataBatch(batch)
         }
@@ -324,15 +422,17 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
 
     /**
      * 为歌单列表批量预热解析封面（云同步还原后调用）。
-     * 发现无有效封面或使用默认占位封面时，优先从 QQ 音乐平台获取正确封面。
+     * 发现无有效封面、使用默认占位封面或跨平台错位封面时，自动从对应原平台（或 QQ 音乐）获取正确封面。
      */
     fun prefetchArtworksForSongs(songs: List<UserPlaylistSong>) {
         songs.forEach { song ->
-            val hasValidHttpCover = isValidRemoteCoverUrl(song.albumArtPath)
+            val originPlatform = parseOriginFromSongKey(song.key.ifBlank { song.path })?.first
+            val isForeignCover = isForeignCoverForPlatform(originPlatform, song.albumArtPath)
+            val hasValidHttpCover = isValidRemoteCoverUrl(song.albumArtPath) && !isForeignCover
             val isUsingDefaultCover = song.albumArtPath.isNotBlank() && isPlaceholderUrl(song.albumArtPath)
             val hasPhysicalFile = song.path.startsWith("/") && File(song.path).exists()
-            // 针对当前无物理文件且缺少有效网络封面，或明确使用了默认占位封面的条目触发 QQ 音乐优先寻源
-            if (song.title.isNotBlank() && (isUsingDefaultCover || (!hasValidHttpCover && !hasPhysicalFile))) {
+            // 针对无有效同源封面、默认占位封面或跨平台错位封面的条目触发同源优先寻源
+            if (song.title.isNotBlank() && (isForeignCover || isUsingDefaultCover || (!hasValidHttpCover && !hasPhysicalFile))) {
                 requestArtworkResolution(song.title, song.artist, song.key)
             }
         }
@@ -400,13 +500,33 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
         val originSongId = origin?.second.orEmpty()
 
         val repository = OnlineMusicRepository.getInstance()
+
+        // 0. 若明确来自 QQ 音乐且携带原始 songMid，优先直接按 songMid 精确查询 QQ 官方详情与封面（0 搜索误差、绝不串图）
+        if (originPlatform == OnlinePlatform.QQ && originSongId.isNotBlank()) {
+            val exactQQ = runCatching {
+                repository.getQQMusicSource().getSongDetailByMid(originSongId)
+            }.getOrNull()
+            if (exactQQ != null && isValidRemoteCoverUrl(exactQQ.coverUrl)) {
+                return ResolvedOnlineTrackMetadata(
+                    platformId = OnlinePlatform.QQ.id,
+                    songId = exactQQ.id.ifBlank { originSongId },
+                    title = exactQQ.title.ifBlank { title },
+                    artist = exactQQ.artist.ifBlank { artist },
+                    album = exactQQ.album,
+                    durationMs = exactQQ.durationMs,
+                    coverUrl = exactQQ.coverUrl.orEmpty(),
+                )
+            }
+        }
+
         val defaultFallback = listOf(
             OnlinePlatform.QQ,
             OnlinePlatform.NETEASE,
             OnlinePlatform.KUWO,
         )
+        // 若歌曲已明确归属某在线平台（如 QQ 平台标签），严格锁定从该原平台获取标签与封面，禁止跨平台去网易云缝合异源封面
         val platforms = if (originPlatform != null) {
-            listOf(originPlatform) + defaultFallback.filter { it != originPlatform }
+            listOf(originPlatform)
         } else {
             defaultFallback
         }
@@ -415,19 +535,22 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
 
         for (platform in platforms) {
             try {
-                val items = repository.searchSongs(keyword, page = 1, pageSize = 8, platform = platform)
+                val items = repository.searchSongs(keyword, page = 1, pageSize = 10, platform = platform)
                     .getOrNull()
                     .orEmpty()
                 if (items.isEmpty()) continue
                 val expectedSongId = if (platform == originPlatform) originSongId else ""
                 val best = pickBestMetadataMatch(items, title, artist, expectedSongId) ?: continue
-                val validCover = best.coverUrl?.takeIf { isValidRemoteCoverUrl(it) }.orEmpty()
+                val validCover = best.coverUrl
+                    ?.takeIf { isValidRemoteCoverUrl(it) && !isForeignCoverForPlatform(platform, it) }
+                    .orEmpty()
                     .ifBlank {
-                        // 同平台若首选条目缺封面，从同批通过歌名+歌手校验的候选中补取有效封面
+                        // 同平台若首选条目缺封面，仅允许从同平台通过歌名+歌手+版本/语种校验的候选中补取有效封面
                         items.firstOrNull { item ->
                             com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isTitleMatched(title, item.title) &&
                                 com.rawsmusic.module.online.playback.OnlinePlaybackMatcher.isArtistMatched(artist, item.artist) &&
-                                isValidRemoteCoverUrl(item.coverUrl)
+                                isValidRemoteCoverUrl(item.coverUrl) &&
+                                !isForeignCoverForPlatform(platform, item.coverUrl)
                         }?.coverUrl.orEmpty()
                     }
                 val candidate = ResolvedOnlineTrackMetadata(
@@ -440,8 +563,8 @@ object OnlineArtworkResolver : PlaylistArtworkFallbackDelegate {
                     coverUrl = validCover,
                 )
                 if (validCover.isNotBlank()) {
-                    // 若前面优先平台（原平台或 QQ 音乐）已有元数据但缺封面，保留其元数据并仅补齐真实封面
-                    return fallbackMetaWithoutCover?.copy(coverUrl = validCover) ?: candidate
+                    // 标签与封面保持严格同源一致，禁止把网易封面嫁接到 QQ 平台的标签记录上
+                    return candidate
                 }
                 if (fallbackMetaWithoutCover == null) {
                     fallbackMetaWithoutCover = candidate

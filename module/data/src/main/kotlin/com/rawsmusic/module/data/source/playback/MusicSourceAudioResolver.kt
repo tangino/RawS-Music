@@ -268,7 +268,7 @@ object MusicSourceAudioResolver {
     }
 
     /**
-     * 酷我车载非加密直链兜底（2000k/4000k FLAC 或 320k/128k MP3），可直接交由播放器流式秒开。
+     * 酷我车载非加密直链兜底（2000k/4000k FLAC 或 320k/128k MP3/OGG），可直接交由播放器流式秒开。
      */
     private suspend fun resolveViaKuwoCarEngine(
         item: RawSourceMediaItem,
@@ -277,7 +277,6 @@ object MusicSourceAudioResolver {
         if (item.title.isBlank()) return null
         return runCatching {
             val artist = item.artists.joinToString(" & ")
-            val validator = audioUrlValidator
             var verifiedUrl = ""
             val pair = KuwoCarAudioEngine.resolveValidatedSongResource(
                 title = item.title,
@@ -288,23 +287,16 @@ object MusicSourceAudioResolver {
                 allowEncrypted = false,
                 maxRidCandidates = 3,
             ) { match, candidate ->
-                val probeExpectedDur = if (item.durationMs > 0L) item.durationMs else match.durationSec * 1000L
-                if (validator != null) {
-                    val validated = validator.validate(
-                        url = candidate.downloadUrl,
-                        expectedDurationMs = probeExpectedDur,
-                        sourceId = "kuwo",
-                        expectedBitrateKbps = candidate.bitrate,
-                    )
-                    if (validated != null) {
-                        verifiedUrl = validated.first
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    verifiedUrl = candidate.downloadUrl
+                val validated = KuwoCarAudioEngine.validateCarStreamUrl(
+                    match = match,
+                    resource = candidate,
+                    expectedDurationMs = item.durationMs,
+                )
+                if (validated != null) {
+                    verifiedUrl = validated.first
                     true
+                } else {
+                    false
                 }
             } ?: return null
             val resource = pair.second
@@ -318,7 +310,8 @@ object MusicSourceAudioResolver {
             RawResolvedAudioSource(
                 url = finalUrl,
                 quality = quality,
-                userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                headers = mapOf("Referer" to "http://www.kuwo.cn/"),
+                userAgent = "okhttp/4.10.0",
                 platform = "kuwo_car",
                 sourceName = "酷我车载",
             )

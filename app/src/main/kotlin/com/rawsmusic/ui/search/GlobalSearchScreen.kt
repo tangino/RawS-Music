@@ -139,7 +139,41 @@ fun GlobalSearchScreen(
     val session = remember(context, initialScope) {
         GlobalSearchSessionStore.get(context, initialScope)
     }
-    val songs by MusicRepository.songs.collectAsState()
+    val localSongs by MusicRepository.songs.collectAsState()
+    val playlistStore = remember(context) { com.rawsmusic.module.data.prefs.PlaylistStore.getInstance(context) }
+    val userPlaylists by playlistStore.playlists.collectAsState()
+    val playlistMatchVersion by playlistStore.matchCacheVersion.collectAsState()
+    // 合并本地曲库与所有本地歌单中的非本地/在线歌曲（优先保留本地曲库实体，避免本地歌单里的在线歌曲无法被搜索到）
+    val songs = remember(localSongs, userPlaylists, playlistMatchVersion) {
+        if (userPlaylists.isEmpty()) {
+            localSongs
+        } else {
+            val merged = ArrayList<AudioFile>(localSongs.size + 64)
+            val seenPaths = HashSet<String>(localSongs.size * 2)
+            val seenTitleArtist = HashSet<String>(localSongs.size * 2)
+            for (s in localSongs) {
+                merged.add(s)
+                if (s.path.isNotBlank()) seenPaths.add(s.path.lowercase())
+                if (s.title.isNotBlank()) {
+                    seenTitleArtist.add("${s.title.trim().lowercase()}\u0000${s.artist.trim().lowercase()}")
+                }
+            }
+            for (playlist in userPlaylists) {
+                val resolved = playlistStore.peekCachedPlaylistSongs(playlist, localSongs)
+                for (s in resolved) {
+                    val isNonLocal = s.path.startsWith("online://", ignoreCase = true) ||
+                        s.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
+                    if (!isNonLocal && s.path.isNotBlank() && s.path.lowercase() in seenPaths) continue
+                    val pathKey = s.path.lowercase()
+                    val metaKey = "${s.title.trim().lowercase()}\u0000${s.artist.trim().lowercase()}"
+                    if (pathKey.isNotBlank() && !seenPaths.add(pathKey)) continue
+                    if (s.title.isNotBlank() && !seenTitleArtist.add(metaKey)) continue
+                    merged.add(s)
+                }
+            }
+            merged
+        }
+    }
     val historyStore = remember(context) { SearchHistoryStore(context) }
     var history by remember { mutableStateOf(emptyList<String>()) }
     var historyHintIndex by remember { mutableIntStateOf(0) }
@@ -1046,7 +1080,7 @@ private fun buildCatalog(
     }.sortedBy { it.title.lowercase() }
 
     val folders = songs.asSequence()
-        .filter { it.path.isNotBlank() }
+        .filter { it.path.isNotBlank() && !it.path.startsWith("online://", ignoreCase = true) }
         .groupBy { File(it.path).parentFile?.absolutePath.orEmpty() }
         .filterKeys { it.isNotBlank() }
         .map { (path, group) ->

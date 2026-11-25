@@ -23,6 +23,57 @@ object AppPreferences {
         runCatching { onlineMetadataKv.encode(cacheKey, json) }
     }
 
+    fun allOnlineTrackMetadataKeys(): Array<String> =
+        runCatching { onlineMetadataKv.allKeys() ?: emptyArray() }.getOrDefault(emptyArray())
+
+    /**
+     * 清洗上次播放曲目与持久化播放队列中残留的跨平台错位封面（如 `online://qq/...` 挂着 `126.net`/`163.com` 封面）。
+     */
+    fun sanitizeCrossPlatformPlayerPersistence() {
+        fun isDirty(path: String, art: String): Boolean {
+            if (path.isBlank() || art.isBlank()) return false
+            val p = path.trim().lowercase()
+            val a = art.trim().lowercase()
+            return when {
+                p.startsWith("online://qq/") -> a.contains("126.net") || a.contains("163.com")
+                p.startsWith("online://netease/") -> a.contains("gtimg.cn") || a.contains("y.qq.com")
+                else -> false
+            }
+        }
+
+        if (isDirty(Player.lastSongPath, Player.lastSongAlbumArtPath)) {
+            Player.lastSongAlbumArtPath = ""
+        }
+
+        fun cleanQueueJson(rawJson: String): String? {
+            if (rawJson.isBlank()) return null
+            val lower = rawJson.lowercase()
+            if (!lower.contains("126.net") && !lower.contains("163.com") &&
+                !lower.contains("gtimg.cn") && !lower.contains("y.qq.com")
+            ) {
+                return null
+            }
+            return runCatching {
+                val arr = org.json.JSONArray(rawJson)
+                var modified = false
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val path = obj.optString("path", "")
+                    val art = obj.optString("albumArtPath", "")
+                    if (isDirty(path, art)) {
+                        obj.put("albumArtPath", "")
+                        modified = true
+                    }
+                }
+                if (modified) arr.toString() else null
+            }.getOrNull()
+        }
+
+        cleanQueueJson(Player.playQueueSongsJson)?.let { Player.playQueueSongsJson = it }
+        cleanQueueJson(Player.originalQueueSongsJson)?.let { Player.originalQueueSongsJson = it }
+        cleanQueueJson(Player.priorityQueueSongsJson)?.let { Player.priorityQueueSongsJson = it }
+    }
+
     /** Flush pending mmap writes before the process is intentionally terminated. */
     fun sync() {
         kv.sync()

@@ -16,11 +16,45 @@ object OnlinePlaybackMatcher {
     /**
      * 特殊版本标签。命中集合必须**完全相同**才算歌名匹配 ——
      * 这样原曲不会被匹配到 Live / 伴奏 / 试听片段。
+     *
+     * 注意：Android ICU 正则中汉字与数字均属 `\w`，若用 `\blive\b` 会漏掉 `(live版)`、`(2023live)`、`歌曲名live`，
+     * 因此英文词统一使用 ASCII 字母边界 `(?<![a-zA-Z])...(?![a-zA-Z])`。
      */
-    private val SPECIAL_TAGS = listOf(
-        "live", "伴奏", "instrumental", "inst", "remix", "cover", "翻唱", "dj", "纯音乐",
-        "demo", "片段", "铃声", "ringtone", "慢摇", "变奏", "钢琴版", "吉他版", "八音盒",
-        "试听", "试听版", "试听片段", "截取", "audition", "preview", "trial", "sample",
+    private val LIVE_TAG_REGEX = Regex("""(?i)((?<![a-zA-Z])(live|unplugged)(?![a-zA-Z])|现场版?|演唱会|音乐节|音乐会现场|巡演现场)""")
+
+    private val ALBUM_LIVE_REGEX = Regex(
+        """(?i)((?<![a-zA-Z])(live|concert|unplugged|livehouse)(?![a-zA-Z])|演唱会|音乐节|现场版|现场实况|音乐会现场|巡演|巡回演出)"""
+    )
+
+    private val VERSION_TAG_GROUPS: List<Pair<String, Regex>> = listOf(
+        "live" to LIVE_TAG_REGEX,
+        "inst" to Regex("""(?i)(伴奏|纯音乐|(?<![a-zA-Z])(instrumental|off\s*vocal|inst\.?|karaoke)(?![a-zA-Z])|消音版|无人声|卡拉ok)"""),
+        "remix" to Regex("""(?i)((?<![a-zA-Z])(remix|dj|mashup|bootleg)(?![a-zA-Z])|慢摇|串烧|蹦迪|电音版|舞曲版)"""),
+        "cover" to Regex("""(?i)(翻唱|(?<![a-zA-Z])cover(?![a-zA-Z]))"""),
+        "demo" to Regex("""(?i)((?<![a-zA-Z])demo(?![a-zA-Z])|小样)"""),
+        "acoustic" to Regex("""(?i)(钢琴版|吉他版|八音盒|(?<![a-zA-Z])acoustic(?![a-zA-Z])|清唱|阿卡贝拉)"""),
+        "speed" to Regex("""(?i)(加速版?|降调版?|变速版?|0\.\d+x|1\.\d+x|(?<![a-zA-Z])(nightcore|slowed|sped\s*up)(?![a-zA-Z]))"""),
+        "trial" to Regex("""(?i)(片段|铃声|(?<![a-zA-Z])(ringtone|audition|preview|trial|sample)(?![a-zA-Z])|试听|试听版|试听片段|截取)"""),
+    )
+
+    private val BRACKET_CONTENT_REGEX = Regex("""[\(\[（【［\{]([^)\]）】］\}]*)[\)\]）】］\}]""")
+
+    private val EXPLICIT_LANG_PATTERNS: List<Pair<String, Regex>> = listOf(
+        "cantonese" to Regex("""(?i)(粤语版?|广东话版?|(?<![a-zA-Z])cantonese(?![a-zA-Z]))"""),
+        "mandarin" to Regex("""(?i)(国语版?|普通话版?|(?<![a-zA-Z])mandarin(?![a-zA-Z]))"""),
+        "english" to Regex("""(?i)(英语版|英文版|(?<![a-zA-Z])english\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        "japanese" to Regex("""(?i)(日语版|日文版|(?<![a-zA-Z])japanese\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        "korean" to Regex("""(?i)(韩语版|韩文版|(?<![a-zA-Z])korean\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        "minnan" to Regex("""(?i)(闽南语版?|台语版?)"""),
+    )
+
+    private val BRACKET_SHORT_LANG_PATTERNS: List<Pair<String, Regex>> = listOf(
+        "cantonese" to Regex("""(?i)^[\s\-·•]*(粤|粤语|粤语版|广东话|cantonese)[\s\-·•]*$"""),
+        "mandarin" to Regex("""(?i)^[\s\-·•]*(国|国语|国语版|普通话|mandarin)[\s\-·•]*$"""),
+        "english" to Regex("""(?i)^[\s\-·•]*(英|英文|英语|英文版|英语版|english|eng\s*ver\.?)[\s\-·•]*$"""),
+        "japanese" to Regex("""(?i)^[\s\-·•]*(日|日文|日语|日文版|日语版|japanese|jp\s*ver\.?)[\s\-·•]*$"""),
+        "korean" to Regex("""(?i)^[\s\-·•]*(韩|韩文|韩语|韩文版|韩语版|korean|kr\s*ver\.?)[\s\-·•]*$"""),
+        "minnan" to Regex("""(?i)^[\s\-·•]*(闽|闽南|闽南语|台|台语)[\s\-·•]*$"""),
     )
 
     private val HTML_TAG_REGEX = Regex("<[^>]+>")
@@ -78,10 +112,61 @@ object OnlinePlaybackMatcher {
         return base.substringBefore(" - ").substringBefore(" — ").trim()
     }
 
-    /** 提取文本中命中的特殊版本标签。 */
-    private fun extractTags(text: String): Set<String> {
-        val lower = text.lowercase()
-        return SPECIAL_TAGS.filter { lower.contains(it) }.toSet()
+    /** 提取文本中命中的特殊版本标签（归一化分组）。 */
+    fun extractTags(text: String): Set<String> {
+        val cleaned = cleanText(text)
+        if (cleaned.isEmpty()) return emptySet()
+        val result = HashSet<String>(2)
+        for ((tag, regex) in VERSION_TAG_GROUPS) {
+            if (regex.containsMatchIn(cleaned)) {
+                result.add(tag)
+            }
+        }
+        return result
+    }
+
+    /**
+     * 提取歌名中的语种版本标记（如 `(粤)` / `(粤语)` / `(国)` / `(国语)` / `粤语版` 等）。
+     * 仅识别括号内标记或显式带「语/版」后缀，避免误伤《中国话》《日不落》《广东爱情故事》等常规歌名。
+     */
+    fun extractLanguageTags(text: String): Set<String> {
+        val cleaned = cleanText(text)
+        if (cleaned.isEmpty()) return emptySet()
+        val result = HashSet<String>(2)
+        for ((lang, regex) in EXPLICIT_LANG_PATTERNS) {
+            if (regex.containsMatchIn(cleaned)) {
+                result.add(lang)
+            }
+        }
+        BRACKET_CONTENT_REGEX.findAll(cleaned).forEach { match ->
+            val inner = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            if (inner.isNotEmpty()) {
+                for ((lang, regex) in BRACKET_SHORT_LANG_PATTERNS) {
+                    if (regex.matches(inner)) {
+                        result.add(lang)
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    /** 判断专辑名是否为演唱会/音乐节/Live 现场专辑。 */
+    fun isLiveAlbum(album: String?): Boolean {
+        val cleaned = cleanText(album)
+        if (cleaned.isEmpty()) return false
+        return ALBUM_LIVE_REGEX.containsMatchIn(cleaned)
+    }
+
+    /** 判断括号或副标题修饰部分是否显式携带 Live 标签（用于核心歌名自身含单词 `live` 时的消歧，如 `Live Forever` vs `Live Forever (Live)`）。 */
+    private fun hasModifierLiveTag(rawTitle: String): Boolean {
+        val cleaned = cleanText(rawTitle)
+        if (cleaned.isEmpty()) return false
+        if (BRACKET_CONTENT_REGEX.findAll(cleaned).any { LIVE_TAG_REGEX.containsMatchIn(it.groupValues.getOrNull(1).orEmpty()) }) {
+            return true
+        }
+        val afterDash = cleaned.substringAfter(" - ", "").ifEmpty { cleaned.substringAfter(" — ", "") }
+        return afterDash.isNotEmpty() && LIVE_TAG_REGEX.containsMatchIn(afterDash)
     }
 
     /** 歌名是否一致。 */
@@ -93,15 +178,30 @@ object OnlinePlaybackMatcher {
         // 1. 完全一致
         if (normTarget == normCandidate) return true
 
-        // 2. 特殊版本标签必须一致（原曲不该匹配到 Live 版）
+        // 2. 特殊版本标签必须一致（原曲不该匹配到 Live / 伴奏 / DJ 版）
         val targetTags = extractTags(targetTitle)
         val candidateTags = extractTags(candidateTitle)
         if (targetTags != candidateTags) {
             return false
         }
 
-        // 3. 核心歌名比对
-        val coreTarget = normalizeForCompare(extractCoreTitle(targetTitle))
+        // 2.1 若核心歌名本身包含单词 `live`（如《Live Forever》），校验括号/副标题修饰区 Live 标记必须一致
+        val coreTargetRaw = extractCoreTitle(targetTitle)
+        if ("live" in targetTags && LIVE_TAG_REGEX.containsMatchIn(coreTargetRaw)) {
+            if (hasModifierLiveTag(targetTitle) != hasModifierLiveTag(candidateTitle)) {
+                return false
+            }
+        }
+
+        // 3. 语种版本标记必须对称一致（杜绝 `歌曲名(粤)` 误匹配无括号国语版 `歌曲名`）
+        val targetLangs = extractLanguageTags(targetTitle)
+        val candidateLangs = extractLanguageTags(candidateTitle)
+        if (targetLangs != candidateLangs) {
+            return false
+        }
+
+        // 4. 核心歌名比对
+        val coreTarget = normalizeForCompare(coreTargetRaw)
         val coreCandidate = normalizeForCompare(extractCoreTitle(candidateTitle))
         if (coreTarget.isNotEmpty() && coreTarget == coreCandidate) {
             return true
@@ -155,7 +255,7 @@ object OnlinePlaybackMatcher {
     }
 
     /**
-     * 严格综合匹配判定：歌名一致 + 歌手一致 + 时长误差不超过 5 秒。
+     * 严格综合匹配判定：歌名一致 + 非 Live 源曲严禁匹配演唱会/Live 专辑 + 歌手一致 + 时长误差不超过 5 秒。
      */
     fun isMatched(
         targetTitle: String,
@@ -164,7 +264,16 @@ object OnlinePlaybackMatcher {
         candidateArtist: String,
         targetDurationMs: Long,
         candidateDurationMs: Long,
+        targetAlbum: String = "",
+        candidateAlbum: String = "",
     ): Boolean {
+        val targetIsLive = ("live" in extractTags(targetTitle)) || isLiveAlbum(targetAlbum)
+        val candidateIsLive = ("live" in extractTags(candidateTitle)) || isLiveAlbum(candidateAlbum)
+        // 核心铁律：除非源歌曲本身就是 Live，否则绝不允许匹配任何标题或专辑带 Live/演唱会特征的候选
+        if (!targetIsLive && candidateIsLive) {
+            return false
+        }
+
         if (!isTitleMatched(targetTitle, candidateTitle)) {
             return false
         }

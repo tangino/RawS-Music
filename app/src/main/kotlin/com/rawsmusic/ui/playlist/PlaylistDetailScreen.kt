@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,12 +42,18 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,6 +83,7 @@ import com.rawsmusic.ui.settings.appFontFamily
 import com.rawsmusic.ui.settings.themeColors
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
@@ -139,34 +149,105 @@ fun PlaylistDetailScreen(
     val multiSelectState = rememberSongMultiSelectState()
     var exportDialog by remember { mutableStateOf(false) }
     var offlineSaveDialog by remember { mutableStateOf(false) }
+    var isSearchMode by remember(playlist?.id) { mutableStateOf(false) }
+    var searchQuery by remember(playlist?.id) { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
     val colors = themeColors()
 
-    // 处于多选模式时，按系统返回键优先退出多选
-    BackHandler(enabled = multiSelectState.isActive) {
-        multiSelectState.exit()
-    }
-
-    // 顶栏右侧保持克制留白：仅在多选模式激活时显示关闭按钮，平时由下方轻量快捷操作栏承载歌单操作
-    val headerTrailingContent: (@Composable () -> Unit)? = if (multiSelectState.isActive) {
-        {
-            IconButton(
-                onClick = { multiSelectState.exit() },
-                modifier = Modifier.size(42.dp),
-            ) {
-                Icon(
-                    imageVector = MiuixIcons.Regular.Close,
-                    contentDescription = stringResource(R.string.common_cancel),
-                    tint = colors.primary,
-                    modifier = Modifier.size(20.dp),
-                )
+    // 歌单内实时过滤：同时覆盖本地歌曲与非本地/网络歌曲（按歌名、歌手、专辑匹配）
+    val normalizedQuery = remember(searchQuery) { searchQuery.trim().lowercase() }
+    val displayedSongs = remember(songs, isSearchMode, normalizedQuery) {
+        if (!isSearchMode || normalizedQuery.isEmpty()) {
+            songs
+        } else {
+            songs.filter { song ->
+                song.title.contains(normalizedQuery, ignoreCase = true) ||
+                    song.artist.contains(normalizedQuery, ignoreCase = true) ||
+                    song.album.contains(normalizedQuery, ignoreCase = true) ||
+                    song.displayName.contains(normalizedQuery, ignoreCase = true)
             }
         }
-    } else null
+    }
 
-    val showActionBar = !multiSelectState.isActive && (songs.isNotEmpty() || playlist != null)
+    LaunchedEffect(isSearchMode) {
+        if (isSearchMode) {
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
+    // 处于多选或搜索模式时，按系统返回键优先退出当前模式
+    BackHandler(enabled = multiSelectState.isActive || isSearchMode) {
+        if (multiSelectState.isActive) {
+            multiSelectState.exit()
+        } else {
+            keyboard?.hide()
+            isSearchMode = false
+            searchQuery = ""
+        }
+    }
+
+    // 顶栏右侧：多选模式显示关闭；常规模式有歌曲时提供歌单内搜索入口
+    val headerTrailingContent: (@Composable () -> Unit)? = when {
+        multiSelectState.isActive -> {
+            {
+                IconButton(
+                    onClick = { multiSelectState.exit() },
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Close,
+                        contentDescription = stringResource(R.string.common_cancel),
+                        tint = colors.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+        isSearchMode -> {
+            {
+                IconButton(
+                    onClick = {
+                        keyboard?.hide()
+                        isSearchMode = false
+                        searchQuery = ""
+                    },
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Close,
+                        contentDescription = stringResource(R.string.common_cancel),
+                        tint = colors.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+        songs.isNotEmpty() -> {
+            {
+                IconButton(
+                    onClick = { isSearchMode = true },
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Regular.Search,
+                        contentDescription = stringResource(com.rawsmusic.core.ui.R.string.playlist_in_search_action),
+                        tint = colors.onSurface,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+        else -> null
+    }
+
+    val showActionBar = !multiSelectState.isActive && !isSearchMode && (songs.isNotEmpty() || playlist != null)
+    val showSearchBar = !multiSelectState.isActive && isSearchMode
     val showOfflineSaveAction = (onlineCount > 0 || activeDownloadTasks.isNotEmpty()) && playlist != null
 
     val statsText = when {
+        isSearchMode && normalizedQuery.isNotEmpty() ->
+            stringResource(com.rawsmusic.core.ui.R.string.playlist_in_search_result_count, displayedSongs.size, songs.size)
         localCount > 0 && onlineCount > 0 ->
             "混合歌单 · 共 ${songs.size} 首 (本地 $localCount · 网络 $onlineCount)"
         onlineCount > 0 ->
@@ -175,8 +256,8 @@ fun PlaylistDetailScreen(
             stringResource(com.rawsmusic.core.ui.R.string.library_statistics_songs, songs.size)
     }
 
-    val selectedPositions = remember(songs, multiSelectState.isActive, multiSelectState.selectedKeys) {
-        multiSelectState.computeListSelectedPositions(songs)
+    val selectedPositions = remember(displayedSongs, multiSelectState.isActive, multiSelectState.selectedKeys) {
+        multiSelectState.computeListSelectedPositions(displayedSongs)
     }
 
     LibraryListScaffold(
@@ -184,42 +265,50 @@ fun PlaylistDetailScreen(
         sceneId = NavScene.PLAYLIST_DETAIL_PAGE.name,
         statisticsText = statsText,
         onBack = {
-            if (multiSelectState.isActive) {
-                multiSelectState.exit()
-            } else {
-                onBack()
+            when {
+                multiSelectState.isActive -> multiSelectState.exit()
+                isSearchMode -> {
+                    keyboard?.hide()
+                    isSearchMode = false
+                    searchQuery = ""
+                }
+                else -> onBack()
             }
         },
         virtualListState = state,
-        onSelect = { if (songs.isNotEmpty()) multiSelectState.enter() },
-        onPlay = { if (songs.isNotEmpty()) onPlaySong(songs, 0) },
-        onShuffle = { if (songs.isNotEmpty()) onPlaySong(songs.shuffled(), 0) },
+        onSelect = { if (displayedSongs.isNotEmpty()) multiSelectState.enter() },
+        onPlay = { if (displayedSongs.isNotEmpty()) onPlaySong(displayedSongs, 0) },
+        onShuffle = { if (displayedSongs.isNotEmpty()) onPlaySong(displayedSongs.shuffled(), 0) },
         showHeaderShuffle = false,
         headerTrailingContent = headerTrailingContent,
         contentOverlap = 0.dp,
         modifier = Modifier.fillMaxSize().bottomChromeNestedScroll()
     ) { topPadding, backdropSource ->
-        val actionBarSpace = if (showActionBar) 54.dp else 8.dp
+        val actionBarSpace = if (showActionBar || showSearchBar) 54.dp else 8.dp
         val bannerTopOffset = topPadding + actionBarSpace
         val listTopPadding = when {
             activeDownloadTasks.isNotEmpty() -> bannerTopOffset + 78.dp
             showFailedBanner -> bannerTopOffset + 68.dp
             else -> bannerTopOffset
         }
-        if (songs.isEmpty()) {
+        if (displayedSongs.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().then(backdropSource),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = stringResource(R.string.playlist_empty),
+                    text = if (isSearchMode && normalizedQuery.isNotEmpty()) {
+                        stringResource(com.rawsmusic.core.ui.R.string.playlist_in_search_empty)
+                    } else {
+                        stringResource(R.string.playlist_empty)
+                    },
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     fontSize = 15.sp
                 )
             }
         } else {
             ComposeVirtualListFull(
-                songs = songs,
+                songs = displayedSongs,
                 playingSongId = playingSongId,
                 selectedPositions = selectedPositions,
                 state = state,
@@ -228,6 +317,16 @@ fun PlaylistDetailScreen(
                 onSongClick = { song, index ->
                     if (multiSelectState.isActive) {
                         multiSelectState.toggle(song)
+                    } else if (isSearchMode && normalizedQuery.isNotEmpty()) {
+                        keyboard?.hide()
+                        val realIndex = songs.indexOfFirst { it.path == song.path && it.id == song.id }
+                            .takeIf { it >= 0 }
+                            ?: songs.indexOf(song)
+                        if (realIndex in songs.indices) {
+                            onPlaySong(songs, realIndex)
+                        } else {
+                            onPlaySong(displayedSongs, index)
+                        }
                     } else {
                         onPlaySong(songs, index)
                     }
@@ -240,6 +339,77 @@ fun PlaylistDetailScreen(
                     }
                 }
             )
+        }
+
+        // 歌单内搜索栏（支持搜索当前歌单内的本地与非本地/网络歌曲）
+        if (showSearchBar) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(top = topPadding + 6.dp, start = 14.dp, end = 14.dp)
+                    .zIndex(20f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                BasicTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = colors.onSurface,
+                        fontSize = 14.sp,
+                        fontFamily = appFontFamily(),
+                    ),
+                    cursorBrush = SolidColor(colors.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.surface)
+                        .padding(horizontal = 12.dp)
+                        .focusRequester(searchFocusRequester),
+                    decorationBox = { inner ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.Regular.Search,
+                                contentDescription = null,
+                                tint = colors.secondaryText,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                if (searchQuery.isEmpty()) {
+                                    Text(
+                                        text = stringResource(com.rawsmusic.core.ui.R.string.playlist_in_search_hint),
+                                        color = colors.secondaryText,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        fontFamily = appFontFamily(),
+                                    )
+                                }
+                                inner()
+                            }
+                            if (searchQuery.isNotEmpty()) {
+                                Icon(
+                                    imageVector = MiuixIcons.Regular.Close,
+                                    contentDescription = stringResource(R.string.common_cancel),
+                                    tint = colors.secondaryText,
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clickable { searchQuery = "" },
+                                )
+                            }
+                        }
+                    },
+                )
+            }
         }
 
         // 歌单快捷操作栏：左主右次（播放全部 + 随机播放 / 离线保存 + 多选 + 导出），与顶栏留足呼吸间距

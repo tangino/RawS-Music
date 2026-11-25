@@ -221,6 +221,7 @@ object OnlineAudioSourceResolver {
         title: String,
         artist: String,
         expectedDurationMs: Long = 0L,
+        targetAlbum: String = "",
     ): List<MatchedPlatformSong> = withContext(Dispatchers.IO) {
         val keyword = "$title $artist".trim()
         val matchedList = mutableListOf<MatchedPlatformSong>()
@@ -253,10 +254,14 @@ object OnlineAudioSourceResolver {
                                 val candArtist = (0 until (artistsArr?.length() ?: 0))
                                     .mapNotNull { artistsArr?.optJSONObject(it)?.optString("name") }
                                     .joinToString(" / ")
+                                val candAlbum = OnlinePlaybackMatcher.cleanText(
+                                    obj.optJSONObject("album")?.optString("name")
+                                        ?.ifEmpty { obj.optJSONObject("al")?.optString("name").orEmpty() }
+                                )
                                 val candDur = obj.optLong("duration", 0L)
 
-                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur)) {
-                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur)
+                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)) {
+                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)
                                     matchedList.add(MatchedPlatformSong(targetPlatform, id, matchTitle = candTitle, matchArtist = candArtist, durationMs = candDur, matchScore = score))
                                 }
                             }
@@ -301,10 +306,16 @@ object OnlineAudioSourceResolver {
                                 val candArtist = (0 until (singerArr?.length() ?: 0))
                                     .mapNotNull { singerArr?.optJSONObject(it)?.optString("name") }
                                     .joinToString(" / ")
+                                val albumObj = first.optJSONObject("album")
+                                val candAlbum = OnlinePlaybackMatcher.cleanText(
+                                    albumObj?.optString("name").orEmpty()
+                                        .ifEmpty { albumObj?.optString("title").orEmpty() }
+                                        .ifEmpty { first.optString("albumname") }
+                                )
                                 val candDur = first.optLong("interval", 0L) * 1000L
 
-                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur)) {
-                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur)
+                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)) {
+                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)
                                     matchedList.add(MatchedPlatformSong(targetPlatform, mid, matchTitle = candTitle, matchArtist = candArtist, durationMs = candDur, matchScore = score))
                                 }
                             }
@@ -329,10 +340,13 @@ object OnlineAudioSourceResolver {
                                 if (hash.isBlank() && id.isBlank()) continue
                                 val candTitle = OnlinePlaybackMatcher.cleanText(first.optString("SongName"))
                                 val candArtist = OnlinePlaybackMatcher.cleanText(first.optString("SingerName"))
+                                val candAlbum = OnlinePlaybackMatcher.cleanText(
+                                    first.optString("AlbumName").ifEmpty { first.optString("album_name") }
+                                )
                                 val candDur = first.optLong("Duration", 0L) * 1000L
 
-                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur)) {
-                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur)
+                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)) {
+                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)
                                     matchedList.add(MatchedPlatformSong(targetPlatform, if (id.isNotEmpty()) id else hash, hash = hash, matchTitle = candTitle, matchArtist = candArtist, durationMs = candDur, matchScore = score))
                                 }
                             }
@@ -341,26 +355,28 @@ object OnlineAudioSourceResolver {
                 }
                 OnlinePlatform.KUWO -> {
                     val encoded = URLEncoder.encode(keyword, "UTF-8")
-                    val url = "http://search.kuwo.cn/r.s?all=$encoded&ft=music&itemset=web_2013&client=kt&pn=0&rn=10&rformat=json&encoding=utf8"
+                    val url = "http://search.kuwo.cn/r.s?client=kt&all=$encoded&ft=music&encoding=utf8&rformat=json&pcjson=1&itemset=web_2013&vipver=1&newver=1&mobi=1&pn=0&rn=15"
                     val req = Request.Builder()
                         .url(url)
-                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                        .header("User-Agent", "kwplayer_ar_9.2.2.1")
                         .build()
                     val raw = okHttpClient.newCall(req).execute().use { it.body?.string() }
                     if (!raw.isNullOrBlank()) {
-                        val fixed = raw.replace('\'', '"')
-                        val list = JSONObject(fixed).optJSONArray("abslist")
+                        val rootJson = runCatching { JSONObject(raw) }
+                            .getOrElse { JSONObject(raw.replace('\'', '"')) }
+                        val list = rootJson.optJSONArray("abslist")
                         if (list != null) {
                             for (i in 0 until list.length()) {
                                 val first = list.optJSONObject(i) ?: continue
                                 val id = first.optString("MUSICRID").replace("MUSIC_", "").ifEmpty { first.optString("id") }
                                 if (id.isBlank()) continue
-                                val candTitle = OnlinePlaybackMatcher.cleanText(first.optString("SONGNAME").ifEmpty { first.optString("name") })
+                                val candTitle = OnlinePlaybackMatcher.cleanText(first.optString("SONGNAME").ifEmpty { first.optString("NAME") }.ifEmpty { first.optString("name") })
                                 val candArtist = OnlinePlaybackMatcher.cleanText(first.optString("ARTIST").ifEmpty { first.optString("artist") })
+                                val candAlbum = OnlinePlaybackMatcher.cleanText(first.optString("ALBUM").ifEmpty { first.optString("album") })
                                 val candDur = first.optLong("DURATION", 0L) * 1000L
 
-                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur)) {
-                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur)
+                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)) {
+                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)
                                     matchedList.add(MatchedPlatformSong(targetPlatform, id, matchTitle = candTitle, matchArtist = candArtist, durationMs = candDur, matchScore = score))
                                 }
                             }
@@ -391,6 +407,13 @@ object OnlineAudioSourceResolver {
                                 } else {
                                     OnlinePlaybackMatcher.cleanText(first.optString("singer"))
                                 }
+                                val albumsArr = first.optJSONArray("albums")
+                                val candAlbum = OnlinePlaybackMatcher.cleanText(
+                                    (0 until (albumsArr?.length() ?: 0))
+                                        .mapNotNull { albumsArr?.optJSONObject(it)?.optString("name") }
+                                        .firstOrNull().orEmpty()
+                                        .ifEmpty { first.optString("album") }
+                                )
                                 val lengthStr = first.optString("length", "")
                                 val candDur = if (lengthStr.contains(":")) {
                                     val parts = lengthStr.split(":")
@@ -401,8 +424,8 @@ object OnlineAudioSourceResolver {
                                     lengthStr.toLongOrNull()?.let { if (it < 1000) it * 1000L else it } ?: 0L
                                 }
 
-                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur)) {
-                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur)
+                                if (OnlinePlaybackMatcher.isMatched(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)) {
+                                    val score = OnlinePlaybackMatcher.calculateMatchScore(title, artist, candTitle, candArtist, expectedDurationMs, candDur, targetAlbum, candAlbum)
                                     matchedList.add(MatchedPlatformSong(targetPlatform, id, matchTitle = candTitle, matchArtist = candArtist, durationMs = candDur, matchScore = score))
                                 }
                             }
@@ -459,7 +482,7 @@ object OnlineAudioSourceResolver {
         // 跨平台寻源或原平台初步失败时，搜索匹配符合严格规则的候选集（2500ms 超时保护，只取最匹配的前 1 首）
         if (!isOriginal || candidates.isEmpty()) {
             val searched = kotlinx.coroutines.withTimeoutOrNull(2500L) {
-                searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+                searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs, album)
             } ?: emptyList()
             candidates.addAll(searched.take(1))
         }
@@ -617,20 +640,12 @@ object OnlineAudioSourceResolver {
 
         val qualityTryList = OnlineQualityLadder.qualityTryList(explicitQuality)
 
-        // 2. 候选平台列表：无论歌曲来自哪个平台，网易平台永远优先作为第一个寻源平台，QQ音乐平台永远放到最后
+        // 2. 候选平台列表：原声平台永远第一优先（使用精确原始 songId，绝不串版）；原声平台未命中时再按序跨平台严格匹配搜救
         val candidatePlatforms = buildList {
-            add(OnlinePlatform.NETEASE)
-            if (platform != OnlinePlatform.NETEASE && platform != OnlinePlatform.QQ) {
-                add(platform)
-            }
-            listOf(
-                OnlinePlatform.KUGOU,
-                OnlinePlatform.KUWO,
-                OnlinePlatform.MIGU,
-            ).forEach { p ->
+            add(platform)
+            CLASSIC_POLLING_PLATFORMS.forEach { p ->
                 if (p !in this) add(p)
             }
-            add(OnlinePlatform.QQ)
         }
 
         // 3. 所有可用音源列表：主音源优先，备用音源依次轮询
@@ -663,7 +678,7 @@ object OnlineAudioSourceResolver {
 
             // 跨平台寻源时获取该平台严格匹配的候选单曲（按评分降序精准取第 1 首，完全对齐 OrbitPlayer）
             if (!isOriginal) {
-                val searched = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+                val searched = searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs, album)
                 candidates.addAll(searched.take(1))
             }
 
@@ -783,7 +798,7 @@ object OnlineAudioSourceResolver {
             // 4.4 若原平台原始 ID 解析失败，但在原平台上尚未搜索其他版本，进行原平台二度搜救 (只取第 1 首)
             if (resolvedResult == null && isOriginal) {
                 val searchedOriginal = (kotlinx.coroutines.withTimeoutOrNull(2500L) {
-                    searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs)
+                    searchMatchedSongsOnPlatform(targetPlatform, title, artist, expectedDurationMs, album)
                 } ?: emptyList())
                     .filter { it.songId != songId }
                     .take(1)
@@ -945,8 +960,8 @@ object OnlineAudioSourceResolver {
 
         val qualityTryList = OnlineQualityLadder.qualityTryList(explicitQuality)
 
-        // 3. 第一阶段：网易平台永远优先寻源通道（无论原始平台为何，均首选网易云）
-        val firstPlatform = OnlinePlatform.NETEASE
+        // 3. 第一阶段：原声平台优先寻源通道（使用原始精确 songId，0 搜索误差，杜绝双语/Live 串版）
+        val firstPlatform = platform
         var resolvedResult = resolveSinglePlatformSource(
             context = context,
             targetPlatform = firstPlatform,
@@ -955,26 +970,14 @@ object OnlineAudioSourceResolver {
             artist = artist,
             album = album,
             expectedDurationMs = expectedDurationMs,
-            isOriginal = (firstPlatform == platform),
+            isOriginal = true,
             lxSource = primarySource,
             qualityTryList = qualityTryList,
         )
 
-        // 4. 第二阶段：主音源跨平台并发搜救寻源 (网易云未命中时，对酷狗、酷我、咪咕及原平台发起搜救，QQ音乐最后兜底)
+        // 4. 第二阶段：主音源跨平台并发搜救寻源（原声平台未命中时，对其他候选平台发起严格版本/语种/5秒时长匹配搜救）
         if (resolvedResult == null) {
-            val fallbackPlatforms = buildList {
-                if (platform != OnlinePlatform.NETEASE && platform != OnlinePlatform.QQ) {
-                    add(platform)
-                }
-                listOf(
-                    OnlinePlatform.KUGOU,
-                    OnlinePlatform.KUWO,
-                    OnlinePlatform.MIGU,
-                ).forEach { p ->
-                    if (p !in this) add(p)
-                }
-                add(OnlinePlatform.QQ)
-            }
+            val fallbackPlatforms = CLASSIC_POLLING_PLATFORMS.filter { it != firstPlatform }
             val channel = Channel<ResolvedAudioSource?>(fallbackPlatforms.size)
             val isFound = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -1165,16 +1168,14 @@ object OnlineAudioSourceResolver {
                         allowEncrypted = false,
                         maxRidCandidates = 3,
                     ) { match, candidate ->
-                        val probeExpectedDur = if (expectedDurationMs > 0L) expectedDurationMs else match.durationSec * 1000L
-                        val probePair = OnlinePlaybackProbe.probeAndValidateAudioUrl(
-                            rawUrl = candidate.downloadUrl,
-                            expectedDurationMs = probeExpectedDur,
-                            targetPlatform = OnlinePlatform.KUWO,
-                            expectedBitrateKbps = candidate.bitrate,
+                        val validated = com.rawsmusic.module.data.source.kuwo.KuwoCarAudioEngine.validateCarStreamUrl(
+                            match = match,
+                            resource = candidate,
+                            expectedDurationMs = expectedDurationMs,
                         )
-                        if (probePair != null) {
-                            verifiedUrl = probePair.first
-                            verifiedDur = if (probePair.second > 0L) probePair.second else probeExpectedDur
+                        if (validated != null) {
+                            verifiedUrl = validated.first
+                            verifiedDur = if (validated.second > 0L) validated.second else expectedDurationMs
                             true
                         } else {
                             false

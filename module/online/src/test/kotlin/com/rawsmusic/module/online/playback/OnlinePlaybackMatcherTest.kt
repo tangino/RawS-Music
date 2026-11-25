@@ -20,15 +20,69 @@ class OnlinePlaybackMatcherTest {
 
     @Test
     fun testTitleMatch_specialTags_preventCrossVersion() {
-        // 原曲不得匹配到 Live 版、伴奏版、翻唱版
+        // 原曲不得匹配到任何形态的 Live 版、伴奏版、翻唱版（含中英/数英紧邻无空格格式）
         assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天 (Live)"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天(live版)"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天(2023live)"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天live"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("Alive", "Alive (Live)"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("Live Forever", "Live Forever (Live)"))
         assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天 (伴奏)"))
         assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天 (Remix)"))
         assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天 (Cover 周杰伦)"))
         assertFalse(OnlinePlaybackMatcher.isTitleMatched("晴天", "晴天 (试听版)"))
 
-        // 双方都有相同标签则允许匹配
+        // 国粤双语版本严格隔离
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("明年今日(粤)", "明年今日"))
+        assertFalse(OnlinePlaybackMatcher.isTitleMatched("富士山下", "富士山下(粤语)"))
+
+        // 双方本身都是 Live 版本时允许正常匹配
         assertTrue(OnlinePlaybackMatcher.isTitleMatched("晴天 (Live)", "晴天 (Live 版)"))
+        assertTrue(OnlinePlaybackMatcher.isTitleMatched("晴天(live)", "晴天(live版)"))
+        // 英文含 live 单词的原版歌曲不应被误判
+        assertTrue(OnlinePlaybackMatcher.isTitleMatched("Alive", "Alive"))
+    }
+
+    @Test
+    fun testLiveAlbumRejectedWhenTargetIsNotLive() {
+        // 歌名未写 `(Live)`，但候选专辑为演唱会/Live 专辑时，只要目标歌曲本身不是 Live 一律淘汰
+        assertFalse(
+            OnlinePlaybackMatcher.isMatched(
+                targetTitle = "富士山下",
+                targetArtist = "陈奕迅",
+                candidateTitle = "富士山下",
+                candidateArtist = "陈奕迅",
+                targetDurationMs = 259_000L,
+                candidateDurationMs = 260_000L,
+                targetAlbum = "What's Going On...?",
+                candidateAlbum = "DUO 陈奕迅2010演唱会",
+            )
+        )
+        assertFalse(
+            OnlinePlaybackMatcher.isMatched(
+                targetTitle = "浮夸",
+                targetArtist = "陈奕迅",
+                candidateTitle = "浮夸",
+                candidateArtist = "陈奕迅",
+                targetDurationMs = 283_000L,
+                candidateDurationMs = 284_000L,
+                targetAlbum = "U87",
+                candidateAlbum = "Get A Life Live",
+            )
+        )
+        // 若歌单中目标歌曲本身就是 Live（标题带 Live 或专辑是演唱会），则允许匹配 Live 候选
+        assertTrue(
+            OnlinePlaybackMatcher.isMatched(
+                targetTitle = "富士山下 (Live)",
+                targetArtist = "陈奕迅",
+                candidateTitle = "富士山下 (Live)",
+                candidateArtist = "陈奕迅",
+                targetDurationMs = 260_000L,
+                candidateDurationMs = 261_000L,
+                targetAlbum = "",
+                candidateAlbum = "DUO 陈奕迅2010演唱会",
+            )
+        )
     }
 
     @Test
@@ -51,21 +105,9 @@ class OnlinePlaybackMatcherTest {
     }
 
     @Test
-    fun testDurationThreshold_twoSeconds() {
-        // 误差 <= 2.5秒（允许误差2秒左右）允许匹配
+    fun testDurationThreshold_fiveSeconds() {
+        // 误差 <= 5秒允许匹配
         assertTrue(
-            OnlinePlaybackMatcher.isMatched(
-                targetTitle = "夜曲",
-                targetArtist = "周杰伦",
-                candidateTitle = "夜曲",
-                candidateArtist = "周杰伦",
-                targetDurationMs = 226_000L,
-                candidateDurationMs = 228_000L, // 误差 2s
-            )
-        )
-
-        // 误差 > 2.5秒（如 3s、6s）严格拦截
-        assertFalse(
             OnlinePlaybackMatcher.isMatched(
                 targetTitle = "夜曲",
                 targetArtist = "周杰伦",
@@ -75,6 +117,8 @@ class OnlinePlaybackMatcherTest {
                 candidateDurationMs = 229_000L, // 误差 3s
             )
         )
+
+        // 误差 > 5秒（如 6s）严格拦截
         assertFalse(
             OnlinePlaybackMatcher.isMatched(
                 targetTitle = "夜曲",

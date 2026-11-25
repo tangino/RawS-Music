@@ -924,9 +924,10 @@ object MusicSourceDownloadController {
         }
 
         val resolvedArtworkUrl = task.item.artworkUrl.ifBlank {
+            val songKey = com.rawsmusic.core.common.model.onlineSongKey(task.item.sourceId, task.item.remoteId)
             PlaylistStore.getInstance(context.applicationContext)
                 .artworkFallbackDelegate
-                ?.getCachedArtworkUrl(task.item.title, task.item.artists.joinToString(" / "))
+                ?.getCachedArtworkUrl(task.item.title, task.item.artists.joinToString(" / "), songKey)
                 .orEmpty()
         }
         if (resolvedArtworkUrl.isNotBlank()) {

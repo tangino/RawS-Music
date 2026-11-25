@@ -48,10 +48,22 @@ class CoverUriResolver(
      * make the high-res path go through an extra album-id query. For the player surface we want the
      * stable audio-file key so all 192/512/1024 requests share the same embedded/folder-cover source.
      */
+    private fun isForeignOnlineArtwork(songPath: String, artUrl: String): Boolean {
+        if (songPath.isBlank() || artUrl.isBlank()) return false
+        val p = songPath.trim().lowercase()
+        val a = artUrl.trim().lowercase()
+        return when {
+            p.startsWith("online://qq/") -> a.contains("126.net") || a.contains("163.com")
+            p.startsWith("online://netease/") -> a.contains("gtimg.cn") || a.contains("y.qq.com")
+            else -> false
+        }
+    }
+
     fun resolveCoverUri(song: AudioFile): String {
         val albumArt = song.albumArtPath.trim()
         if ((albumArt.startsWith("http://", ignoreCase = true) || albumArt.startsWith("https://", ignoreCase = true)) &&
-            !com.rawsmusic.core.ui.widget.bitmaps.RemoteArtworkDownloader.isPlaceholderUrl(albumArt)
+            !com.rawsmusic.core.ui.widget.bitmaps.RemoteArtworkDownloader.isPlaceholderUrl(albumArt) &&
+            !isForeignOnlineArtwork(song.path, albumArt)
         ) {
             val httpsUrl = if (albumArt.startsWith("http://", ignoreCase = true)) {
                 "https://" + albumArt.substring(7)
@@ -74,7 +86,8 @@ class CoverUriResolver(
         val cacheKey = stableSongCacheKey(song)
 
         coverKeyCache[cacheKey]?.let { cached ->
-            if (cached.isNotBlank()) return cached
+            if (cached.isNotBlank() && !isForeignOnlineArtwork(song.path, cached)) return cached
+            if (cached.isNotBlank()) coverKeyCache.remove(cacheKey)
         }
 
         val albumArtPath = song.albumArtPath.trim()
@@ -98,8 +111,9 @@ class CoverUriResolver(
             }
         }
 
-        if (albumArtPath.startsWith("http://", ignoreCase = true) ||
-            albumArtPath.startsWith("https://", ignoreCase = true)
+        if ((albumArtPath.startsWith("http://", ignoreCase = true) ||
+                albumArtPath.startsWith("https://", ignoreCase = true)) &&
+            !isForeignOnlineArtwork(song.path, albumArtPath)
         ) {
             coverKeyCache[cacheKey] = albumArtPath
             return albumArtPath
@@ -110,7 +124,11 @@ class CoverUriResolver(
             song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
 
         if (isOnlineTrack && song.title.isNotBlank()) {
-            val cachedOnline = com.rawsmusic.module.online.sync.OnlineArtworkResolver.getCachedArtworkUrl(song.title, song.artist)
+            val cachedOnline = com.rawsmusic.module.online.sync.OnlineArtworkResolver.getCachedArtworkUrl(
+                title = song.title,
+                artist = song.artist,
+                songKey = song.path,
+            )
             if (!cachedOnline.isNullOrBlank() &&
                 !com.rawsmusic.core.ui.widget.bitmaps.RemoteArtworkDownloader.isPlaceholderUrl(cachedOnline)
             ) {

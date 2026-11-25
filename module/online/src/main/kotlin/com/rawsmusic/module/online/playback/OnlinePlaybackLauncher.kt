@@ -227,6 +227,7 @@ object OnlinePlaybackLauncher {
             val rawMediaItem = OnlineSourceMediaMapper.toRawSourceMediaItem(item).copy(
                 durationMs = if (resolved.durationMs > 0L) resolved.durationMs else item.durationMs,
             )
+            val isKuwoCar = resolved.sourceName == "酷我车载"
             val platformReferer = when (resolved.platform) {
                 com.rawsmusic.module.online.model.OnlinePlatform.KUWO -> "http://www.kuwo.cn/"
                 com.rawsmusic.module.online.model.OnlinePlatform.QQ -> "https://y.qq.com/"
@@ -238,7 +239,11 @@ object OnlinePlaybackLauncher {
                 url = resolved.url,
                 quality = quality,
                 headers = mapOf("Referer" to platformReferer),
-                userAgent = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                userAgent = if (isKuwoCar) {
+                    "okhttp/4.10.0"
+                } else {
+                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                },
             )
             MusicSourcePlaybackController.playResolved(
                 context = context,

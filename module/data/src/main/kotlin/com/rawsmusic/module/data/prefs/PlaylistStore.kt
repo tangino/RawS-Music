@@ -106,11 +106,14 @@ data class ResolvedMetadataUpdate(
  */
 interface PlaylistArtworkFallbackDelegate {
     /** 仅查询纯内存缓存（供主线程首帧预览使用，绝不触发磁盘 I/O 或 JSON 解析）。 */
-    fun peekCachedArtworkUrlInMemory(title: String, artist: String): String? = getCachedArtworkUrl(title, artist)
-    fun peekCachedMetadataInMemory(title: String, artist: String): ResolvedOnlineTrackMetadata? = getCachedMetadata(title, artist)
+    fun peekCachedArtworkUrlInMemory(title: String, artist: String, songKey: String = ""): String? =
+        getCachedArtworkUrl(title, artist, songKey)
 
-    fun getCachedArtworkUrl(title: String, artist: String): String?
-    fun getCachedMetadata(title: String, artist: String): ResolvedOnlineTrackMetadata? = null
+    fun peekCachedMetadataInMemory(title: String, artist: String, songKey: String = ""): ResolvedOnlineTrackMetadata? =
+        getCachedMetadata(title, artist, songKey)
+
+    fun getCachedArtworkUrl(title: String, artist: String, songKey: String = ""): String?
+    fun getCachedMetadata(title: String, artist: String, songKey: String = ""): ResolvedOnlineTrackMetadata? = null
     fun requestArtworkResolution(title: String, artist: String, songKey: String = "")
 }
 
@@ -261,17 +264,46 @@ class PlaylistStore private constructor(private val context: Context) {
     }
 
     /**
-     * 判断是否为有效的外部网络封面 URL（必须是 http(s) 且非默认占位图）。
+     * 判断封面 URL 是否与当前歌曲的归属平台发生跨平台错位（如 QQ 平台标签歌曲却挂着网易云 `126.net`/`163.com` 封面）。
      */
-    private fun isValidExternalArtworkUrl(url: String?): Boolean {
+    private fun isForeignPlatformArtwork(
+        songKeyOrPath: String?,
+        platformIdHint: String?,
+        url: String?,
+    ): Boolean {
         if (url.isNullOrBlank()) return false
-        val trimmed = url.trim()
-        return (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) &&
-            !isDefaultOrPlaceholderArtwork(trimmed)
+        val lowerUrl = url.trim().lowercase(Locale.ROOT)
+        val keyLower = songKeyOrPath?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        val platform = when {
+            keyLower.startsWith("online://qq/") -> "qq"
+            keyLower.startsWith("online://netease/") -> "netease"
+            !platformIdHint.isNullOrBlank() -> platformIdHint.trim().lowercase(Locale.ROOT)
+            else -> ""
+        }
+        return when (platform) {
+            "qq", "tx" -> lowerUrl.contains("126.net") || lowerUrl.contains("163.com")
+            "netease", "wy" -> lowerUrl.contains("gtimg.cn") || lowerUrl.contains("y.qq.com")
+            else -> false
+        }
     }
 
     /**
-     * 异步回填单曲封面至内存歌单与数据库中（混合歌单封面自愈）。
+     * 判断是否为有效且未发生跨平台错位的外部网络封面 URL。
+     */
+    private fun isValidExternalArtworkUrl(
+        url: String?,
+        songKeyOrPath: String? = null,
+        platformIdHint: String? = null,
+    ): Boolean {
+        if (url.isNullOrBlank()) return false
+        val trimmed = url.trim()
+        return (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) &&
+            !isDefaultOrPlaceholderArtwork(trimmed) &&
+            !isForeignPlatformArtwork(songKeyOrPath, platformIdHint, trimmed)
+    }
+
+    /**
+     * 异步回填单曲封面至内存歌单与数据库中（混合歌单封面自愈，支持覆盖跨平台错位脏封面）。
      */
     fun updateSongArtworkInMemoryAndDb(title: String, artist: String, artworkUrl: String) {
         if (title.isBlank() || !isValidExternalArtworkUrl(artworkUrl)) return
@@ -281,15 +313,22 @@ class PlaylistStore private constructor(private val context: Context) {
         val newPlaylists = currentPlaylists.map { playlist ->
             var playlistChanged = false
             val newSongs = playlist.songs.map { song ->
-                if (song.title.equals(title, ignoreCase = true) &&
+                val refKey = song.key.ifBlank { song.path }
+                val canAcceptArtwork = !isForeignPlatformArtwork(refKey, null, artworkUrl)
+                val needsHeal = isDefaultOrPlaceholderArtwork(song.albumArtPath) ||
+                    isForeignPlatformArtwork(refKey, null, song.albumArtPath)
+                if (canAcceptArtwork &&
+                    song.title.equals(title, ignoreCase = true) &&
                     (artist.isBlank() || song.artist.equals(artist, ignoreCase = true)) &&
-                    isDefaultOrPlaceholderArtwork(song.albumArtPath)
+                    needsHeal
                 ) {
                     playlistChanged = true
                     anyUpdated = true
                     // 原地更新已缓存条目的封面，保留其已识别的网络/本地身份，绝不粗暴驱逐导致重新识别
                     onlineToLocalMatchCache.get(song.key)?.let { cached ->
-                        if (isDefaultOrPlaceholderArtwork(cached.albumArtPath)) {
+                        if (isDefaultOrPlaceholderArtwork(cached.albumArtPath) ||
+                            isForeignPlatformArtwork(cached.path, null, cached.albumArtPath)
+                        ) {
                             onlineToLocalMatchCache.put(song.key, cached.copy(albumArtPath = artworkUrl))
                         }
                     }
@@ -388,15 +427,6 @@ class PlaylistStore private constructor(private val context: Context) {
             val nextAlbum = audio.album.ifBlank { metadata.album }
             val nextArtist = audio.artist.ifBlank { metadata.artist }
             val nextDuration = if (audio.duration > 0L) audio.duration else metadata.durationMs
-            val nextCover = if (isValidExternalArtworkUrl(audio.albumArtPath)) {
-                audio.albumArtPath
-            } else if (isValidExternalArtworkUrl(metadata.coverUrl)) {
-                metadata.coverUrl
-            } else if (isDefaultOrPlaceholderArtwork(audio.albumArtPath)) {
-                ""
-            } else {
-                audio.albumArtPath
-            }
             val nextPath = if (audio.path.startsWith("online://") &&
                 metadata.platformId.isNotBlank() &&
                 metadata.songId.isNotBlank()
@@ -404,6 +434,17 @@ class PlaylistStore private constructor(private val context: Context) {
                 "online://${metadata.platformId}/${metadata.songId}"
             } else {
                 audio.path
+            }
+            val nextCover = if (isValidExternalArtworkUrl(audio.albumArtPath, nextPath, metadata.platformId)) {
+                audio.albumArtPath
+            } else if (isValidExternalArtworkUrl(metadata.coverUrl, nextPath, metadata.platformId)) {
+                metadata.coverUrl
+            } else if (isDefaultOrPlaceholderArtwork(audio.albumArtPath) ||
+                isForeignPlatformArtwork(nextPath, metadata.platformId, audio.albumArtPath)
+            ) {
+                ""
+            } else {
+                audio.albumArtPath
             }
             return if (nextPath != audio.path || nextAlbum != audio.album ||
                 nextArtist != audio.artist || nextDuration != audio.duration ||
@@ -431,6 +472,13 @@ class PlaylistStore private constructor(private val context: Context) {
             val newSongs = playlist.songs.map { song ->
                 val matched = findUpdate(song.title, song.artist) ?: return@map song
                 val metadata = matched.metadata
+                val refKey = song.key.ifBlank { song.path }
+                // 若原条目显式归属某在线平台（如 `online://qq/...`），拒绝异源平台（如 `netease`）覆盖其封面
+                if (refKey.startsWith("online://", ignoreCase = true) &&
+                    isForeignPlatformArtwork(refKey, null, metadata.coverUrl)
+                ) {
+                    return@map song
+                }
 
                 // 优先原地更新 onlineToLocalMatchCache 中的已识别结果，绝不 remove 造成属性还原
                 onlineToLocalMatchCache.get(song.key)?.let { cached ->
@@ -445,11 +493,13 @@ class PlaylistStore private constructor(private val context: Context) {
                 val nextAlbum = song.album.ifBlank { metadata.album }
                 val nextArtist = song.artist.ifBlank { metadata.artist }
                 val nextDuration = if (song.duration > 0L) song.duration else metadata.durationMs
-                val nextCover = if (isValidExternalArtworkUrl(song.albumArtPath)) {
+                val nextCover = if (isValidExternalArtworkUrl(song.albumArtPath, refKey, metadata.platformId)) {
                     song.albumArtPath
-                } else if (isValidExternalArtworkUrl(metadata.coverUrl)) {
+                } else if (isValidExternalArtworkUrl(metadata.coverUrl, refKey, metadata.platformId)) {
                     metadata.coverUrl
-                } else if (isDefaultOrPlaceholderArtwork(song.albumArtPath)) {
+                } else if (isDefaultOrPlaceholderArtwork(song.albumArtPath) ||
+                    isForeignPlatformArtwork(refKey, metadata.platformId, song.albumArtPath)
+                ) {
                     ""
                 } else {
                     song.albumArtPath
@@ -1047,24 +1097,29 @@ class PlaylistStore private constructor(private val context: Context) {
 
         val cachedLookup = libraryLookupCache?.takeIf { it.sourceSongs === librarySongs }
         val rawList = playlist.songs.map { stored ->
+            val refKey = stored.key.ifBlank { stored.path }
             val cached = onlineToLocalMatchCache.get(stored.key)
             if (cached != null) {
-                val fallbackCover = stored.albumArtPath.takeIf(::isValidExternalArtworkUrl).orEmpty().ifBlank {
-                    artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist)
-                        ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
+                val fallbackCover = stored.albumArtPath.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty().ifBlank {
+                    artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist, stored.key)
+                        ?.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty()
                 }
-                if (isDefaultOrPlaceholderArtwork(cached.albumArtPath)) {
+                if (isDefaultOrPlaceholderArtwork(cached.albumArtPath) ||
+                    isForeignPlatformArtwork(cached.path, null, cached.albumArtPath)
+                ) {
                     cached.copy(albumArtPath = fallbackCover)
                 } else {
                     cached
                 }
             } else if (stored.isOnlineEntry()) {
-                val fallbackCover = stored.albumArtPath.takeIf(::isValidExternalArtworkUrl).orEmpty().ifBlank {
-                    artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist)
-                        ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
+                val fallbackCover = stored.albumArtPath.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty().ifBlank {
+                    artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist, stored.key)
+                        ?.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty()
                 }
                 stored.toAudioFile().let { audio ->
-                    if (isDefaultOrPlaceholderArtwork(audio.albumArtPath)) {
+                    if (isDefaultOrPlaceholderArtwork(audio.albumArtPath) ||
+                        isForeignPlatformArtwork(refKey, null, audio.albumArtPath)
+                    ) {
                         audio.copy(albumArtPath = fallbackCover)
                     } else audio
                 }
@@ -1072,8 +1127,8 @@ class PlaylistStore private constructor(private val context: Context) {
                 val matchedLocal = cachedLookup?.byIdentity?.get(stored.key)
                 if (matchedLocal != null) {
                     if (isDefaultOrPlaceholderArtwork(matchedLocal.albumArtPath)) {
-                        val fallbackCover = artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist)
-                            ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
+                        val fallbackCover = artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist, stored.key)
+                            ?.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty()
                         if (fallbackCover.isNotBlank() || matchedLocal.albumArtPath.isNotBlank()) {
                             matchedLocal.copy(albumArtPath = fallbackCover)
                         } else matchedLocal
@@ -1082,7 +1137,7 @@ class PlaylistStore private constructor(private val context: Context) {
                     }
                 } else if (librarySongs.isEmpty() && stored.title.isNotBlank() && !stored.path.startsWith("content://", ignoreCase = true)) {
                     // 无本地音乐库且尚未写入单曲缓存时，仅查纯内存元数据或缺失路径缓存，首帧直接构造网络虚拟歌曲且绝不阻塞主线程
-                    val cachedMeta = artworkFallbackDelegate?.peekCachedMetadataInMemory(stored.title, stored.artist)
+                    val cachedMeta = artworkFallbackDelegate?.peekCachedMetadataInMemory(stored.title, stored.artist, stored.key)
                     val pathKnownMissing = stored.path.isBlank() || stored.path in missingLocalPathCache
                     if (cachedMeta != null || pathKnownMissing) {
                         buildVirtualOnlineAudio(stored, cachedMeta, memoryOnlyCoverLookup = true)
@@ -1106,18 +1161,21 @@ class PlaylistStore private constructor(private val context: Context) {
         cachedMeta: ResolvedOnlineTrackMetadata?,
         memoryOnlyCoverLookup: Boolean = false,
     ): AudioFile {
-        val cachedCover = cachedMeta?.coverUrl?.takeIf(::isValidExternalArtworkUrl)
+        val platformId = cachedMeta?.platformId?.takeIf(String::isNotBlank) ?: "qq"
+        val refKey = stored.key.ifBlank { stored.path }
+        val cachedCover = cachedMeta?.coverUrl?.takeIf { isValidExternalArtworkUrl(it, refKey, platformId) }
             ?: (if (memoryOnlyCoverLookup) {
-                artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist)
+                artworkFallbackDelegate?.peekCachedArtworkUrlInMemory(stored.title, stored.artist, stored.key)
             } else {
-                artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist)
-            })?.takeIf(::isValidExternalArtworkUrl).orEmpty()
-        val cleanedArtPath = stored.albumArtPath.takeIf(::isValidExternalArtworkUrl).orEmpty().ifBlank { cachedCover }
+                artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist, stored.key)
+            })?.takeIf { isValidExternalArtworkUrl(it, refKey, platformId) }.orEmpty()
+        val cleanedArtPath = stored.albumArtPath.takeIf { isValidExternalArtworkUrl(it, refKey, platformId) }
+            .orEmpty()
+            .ifBlank { cachedCover }
         val baseAudio = stored.toAudioFile()
         if (stored.title.isBlank()) {
             return baseAudio.copy(albumArtPath = cleanedArtPath)
         }
-        val platformId = cachedMeta?.platformId?.takeIf(String::isNotBlank) ?: "qq"
         val virtualSongId = cachedMeta?.songId?.takeIf(String::isNotBlank)
             ?: "${stored.title}_${stored.artist}".hashCode().toString()
         val onlinePath = "online://$platformId/$virtualSongId"
@@ -1212,19 +1270,24 @@ class PlaylistStore private constructor(private val context: Context) {
         for (stored in playlist.songs) {
             val resolvedAudio: AudioFile = if (stored.isOnlineEntry()) {
                 val cacheKey = stored.key
-                val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist)
-                    ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
-                val cleanedArtPath = stored.albumArtPath.takeIf(::isValidExternalArtworkUrl).orEmpty().ifBlank { cachedCover }
+                val refKey = stored.key.ifBlank { stored.path }
+                val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist, refKey)
+                    ?.takeIf { isValidExternalArtworkUrl(it, refKey) }.orEmpty()
+                val cleanedArtPath = stored.albumArtPath.takeIf { isValidExternalArtworkUrl(it, refKey) }
+                    .orEmpty()
+                    .ifBlank { cachedCover }
 
-                // 若当前在线条目仍无有效网络封面（含默认占位图），优先从 QQ 音乐平台异步寻源自愈
+                // 若当前在线条目无有效同源封面（含默认占位图或跨平台错位脏封面），自动从原声平台（或 QQ 音乐）异步寻源自愈
                 if (cleanedArtPath.isBlank() && stored.title.isNotBlank() && artworkResolutionCount < 60) {
                     artworkResolutionCount++
-                    artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                    artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, refKey)
                 }
 
                 fun buildOnlineAudio(): AudioFile {
                     return stored.toAudioFile().let { song ->
-                        if (isDefaultOrPlaceholderArtwork(song.albumArtPath)) {
+                        if (isDefaultOrPlaceholderArtwork(song.albumArtPath) ||
+                            isForeignPlatformArtwork(refKey, null, song.albumArtPath)
+                        ) {
                             song.copy(albumArtPath = cleanedArtPath)
                         } else {
                             song
@@ -1249,8 +1312,10 @@ class PlaylistStore private constructor(private val context: Context) {
                     } else {
                         audio
                     }
-                    // 2. 清洗默认占位图并补充有效网络封面作为外置回退，绝不展示默认封面。
-                    return if (isDefaultOrPlaceholderArtwork(enriched.albumArtPath)) {
+                    // 2. 清洗默认占位图及跨平台错位封面，补充有效同源网络封面作为外置回退。
+                    return if (isDefaultOrPlaceholderArtwork(enriched.albumArtPath) ||
+                        isForeignPlatformArtwork(refKey, null, enriched.albumArtPath)
+                    ) {
                         if (cleanedArtPath.isNotBlank() || enriched.albumArtPath.isNotBlank()) {
                             enriched.copy(albumArtPath = cleanedArtPath)
                         } else {
@@ -1308,15 +1373,16 @@ class PlaylistStore private constructor(private val context: Context) {
                 val cached = onlineToLocalMatchCache.get(cacheKey)
                 if (cached != null && cached.path.startsWith("online://")) {
                     // 高速缓存命中：此前已确认本地无此物理文件并识别为网络歌曲，直接 O(1) 复用，0 磁盘 I/O
-                    val cachedMeta = artworkFallbackDelegate?.getCachedMetadata(stored.title, stored.artist)
-                    val hasValidMetaCover = isValidExternalArtworkUrl(cachedMeta?.coverUrl)
-                    val hasValidStoredCover = isValidExternalArtworkUrl(stored.albumArtPath)
-                    val hasValidCachedCover = isValidExternalArtworkUrl(cached.albumArtPath)
+                    val cachedMeta = artworkFallbackDelegate?.getCachedMetadata(stored.title, stored.artist, stored.key)
+                    val hintPlatform = cachedMeta?.platformId ?: "qq"
+                    val hasValidMetaCover = isValidExternalArtworkUrl(cachedMeta?.coverUrl, cached.path, hintPlatform)
+                    val hasValidStoredCover = isValidExternalArtworkUrl(stored.albumArtPath, cached.path, hintPlatform)
+                    val hasValidCachedCover = isValidExternalArtworkUrl(cached.albumArtPath, cached.path, hintPlatform)
                     if ((!hasValidMetaCover && !hasValidStoredCover && !hasValidCachedCover) &&
                         stored.title.isNotBlank() && artworkResolutionCount < 60
                     ) {
                         artworkResolutionCount++
-                        artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                        artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, cached.path)
                     }
                     if (cachedMeta != null) {
                         val merged = buildVirtualOnlineAudio(stored, cachedMeta)
@@ -1325,11 +1391,13 @@ class PlaylistStore private constructor(private val context: Context) {
                         }
                         merged
                     } else {
-                        val fallbackCover = stored.albumArtPath.takeIf(::isValidExternalArtworkUrl).orEmpty().ifBlank {
-                            artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist)
-                                ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
+                        val fallbackCover = stored.albumArtPath.takeIf { isValidExternalArtworkUrl(it, cached.path, hintPlatform) }.orEmpty().ifBlank {
+                            artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist, cached.path)
+                                ?.takeIf { isValidExternalArtworkUrl(it, cached.path, hintPlatform) }.orEmpty()
                         }
-                        if (isDefaultOrPlaceholderArtwork(cached.albumArtPath)) {
+                        if (isDefaultOrPlaceholderArtwork(cached.albumArtPath) ||
+                            isForeignPlatformArtwork(cached.path, hintPlatform, cached.albumArtPath)
+                        ) {
                             cached.copy(albumArtPath = fallbackCover).also {
                                 onlineToLocalMatchCache.put(cacheKey, it)
                             }
@@ -1340,7 +1408,7 @@ class PlaylistStore private constructor(private val context: Context) {
                 } else if (cached != null && isUsableLocalAudio(cached)) {
                     // 本地正缓存命中：若封面缺失或为默认占位图，清洗并优先从 QQ 音乐补齐真实封面
                     if (isDefaultOrPlaceholderArtwork(cached.albumArtPath) && stored.title.isNotBlank()) {
-                        val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist)
+                        val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist, stored.key)
                             ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
                         if (cachedCover.isNotBlank()) {
                             cached.copy(albumArtPath = cachedCover).also {
@@ -1385,7 +1453,7 @@ class PlaylistStore private constructor(private val context: Context) {
                     if (matched != null) {
                         // 若本地物理文件缺少外置封面路径或为默认占位图，清洗并优先从 QQ 音乐获取真实封面作为回退
                         val localResult = if (isDefaultOrPlaceholderArtwork(matched.albumArtPath) && stored.title.isNotBlank()) {
-                            val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist)
+                            val cachedCover = artworkFallbackDelegate?.getCachedArtworkUrl(stored.title, stored.artist, stored.key)
                                 ?.takeIf(::isValidExternalArtworkUrl).orEmpty()
                             if (cachedCover.isNotBlank()) {
                                 matched.copy(albumArtPath = cachedCover)
@@ -1406,14 +1474,20 @@ class PlaylistStore private constructor(private val context: Context) {
                         // 1. 优先从 QQ 音乐平台获取并补齐歌曲标签信息（专辑/歌手/时长/封面）；
                         // 2. 运行时转为在线播放身份（online://qq/...），并写入缓存确保返回再进入 0ms 秒开不还原；
                         // 3. 数据库仍保留原 stored.key，后续扫描到本地曲库或离线下载后自动无缝切回本地。
-                        val cachedMeta = artworkFallbackDelegate?.getCachedMetadata(stored.title, stored.artist)
-                        val hasValidCover = isValidExternalArtworkUrl(cachedMeta?.coverUrl) ||
-                            isValidExternalArtworkUrl(stored.albumArtPath)
+                        val cachedMeta = artworkFallbackDelegate?.getCachedMetadata(stored.title, stored.artist, stored.key)
+                        val hintPlatform = cachedMeta?.platformId ?: "qq"
+                        val virtualAudio = buildVirtualOnlineAudio(stored, cachedMeta)
+                        val hasValidCover = isValidExternalArtworkUrl(cachedMeta?.coverUrl, virtualAudio.path, hintPlatform) ||
+                            isValidExternalArtworkUrl(stored.albumArtPath, virtualAudio.path, hintPlatform)
                         if ((cachedMeta == null || !hasValidCover) && stored.title.isNotBlank() && artworkResolutionCount < 60) {
                             artworkResolutionCount++
-                            artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, stored.key)
+                            val resolveKey = if (virtualAudio.path.startsWith("online://") && cachedMeta?.songId?.isNotBlank() == true) {
+                                virtualAudio.path
+                            } else {
+                                stored.key
+                            }
+                            artworkFallbackDelegate?.requestArtworkResolution(stored.title, stored.artist, resolveKey)
                         }
-                        val virtualAudio = buildVirtualOnlineAudio(stored, cachedMeta)
                         if (virtualAudio.path.startsWith("online://")) {
                             onlineToLocalMatchCache.put(cacheKey, virtualAudio)
                         }
@@ -2067,7 +2141,91 @@ class PlaylistStore private constructor(private val context: Context) {
         )
     }
 
+    /**
+     * 扫描并清洗 Room 数据库与内存歌单中存量的跨平台错位封面（例如 QQ 平台标签歌曲却残留网易云 `126.net`/`163.com` 封面），
+     * 并自动触发同源平台（如 QQ 音乐按 `songMid` 精确详情）重新拉取正版封面回填落库。
+     */
+    suspend fun repairCrossPlatformArtworks() = withContext(databaseDispatcher) {
+        ready.await()
+        val delegate = artworkFallbackDelegate
+        val pendingReFetch = LinkedHashMap<String, Triple<String, String, String>>()
+        mutationMutex.withLock {
+            runCatching { dao.clearCrossPlatformDirtyArtworks() }
+            val current = _playlists.value
+            var anyChanged = false
+            val cleanedPlaylists = current.map { playlist ->
+                var playlistChanged = false
+                val dirtyKeysInPlaylist = ArrayList<String>()
+                val cleanedSongs = playlist.songs.map { song ->
+                    val refKey = song.key.ifBlank { song.path }
+                    val cachedMeta = if (!song.isOnlineEntry() && song.title.isNotBlank()) {
+                        delegate?.getCachedMetadata(song.title, song.artist, song.key)
+                    } else null
+                    val hasMissingLocalFile = !song.isOnlineEntry() &&
+                        song.path.isNotBlank() &&
+                        !song.path.startsWith("content://", ignoreCase = true) &&
+                        !File(song.path).exists()
+                    val platformHint = when {
+                        song.isOnlineEntry() -> null
+                        cachedMeta?.platformId?.isNotBlank() == true -> cachedMeta.platformId
+                        hasMissingLocalFile -> "qq"
+                        else -> null
+                    }
+                    val isDirty = isForeignPlatformArtwork(refKey, platformHint, song.albumArtPath)
+                    if (isDirty) {
+                        playlistChanged = true
+                        anyChanged = true
+                        dirtyKeysInPlaylist.add(song.key)
+                        onlineToLocalMatchCache.remove(song.key)
+                        if (song.title.isNotBlank()) {
+                            val targetSongKey = when {
+                                refKey.startsWith("online://", ignoreCase = true) -> refKey
+                                cachedMeta != null && cachedMeta.platformId.isNotBlank() && cachedMeta.songId.isNotBlank() ->
+                                    "online://${cachedMeta.platformId}/${cachedMeta.songId}"
+                                else -> song.key
+                            }
+                            pendingReFetch.putIfAbsent(
+                                "${song.title.lowercase(Locale.ROOT)}__${song.artist.lowercase(Locale.ROOT)}__$targetSongKey",
+                                Triple(song.title, song.artist, targetSongKey),
+                            )
+                        }
+                        song.copy(albumArtPath = "")
+                    } else if (song.isOnlineEntry() &&
+                        refKey.startsWith("online://qq/", ignoreCase = true) &&
+                        isDefaultOrPlaceholderArtwork(song.albumArtPath) &&
+                        song.title.isNotBlank()
+                    ) {
+                        pendingReFetch.putIfAbsent(
+                            "${song.title.lowercase(Locale.ROOT)}__${song.artist.lowercase(Locale.ROOT)}__$refKey",
+                            Triple(song.title, song.artist, refKey),
+                        )
+                        song
+                    } else {
+                        song
+                    }
+                }
+                if (dirtyKeysInPlaylist.isNotEmpty()) {
+                    dirtyKeysInPlaylist.chunked(200).forEach { chunk ->
+                        runCatching { dao.clearArtworksForSongs(playlist.id, chunk) }
+                    }
+                    resolvedSnapshotByPlaylistId.remove(playlist.id)
+                }
+                if (playlistChanged) playlist.copy(songs = cleanedSongs) else playlist
+            }
+            if (anyChanged) {
+                _playlists.value = cleanedPlaylists
+                _matchCacheVersion.value++
+            }
+        }
+        if (delegate != null && pendingReFetch.isNotEmpty()) {
+            for ((title, artist, songKey) in pendingReFetch.values) {
+                delegate.requestArtworkResolution(title, artist, songKey)
+            }
+        }
+    }
+
     private suspend fun loadRoomSnapshot(): List<UserPlaylist> {
+        runCatching { dao.clearCrossPlatformDirtyArtworks() }
         val songsByPlaylist = dao.getSongs()
             .groupBy(UserPlaylistSongEntity::playlistId)
             .mapValues { (_, songs) -> songs.map(UserPlaylistSongEntity::toModel) }

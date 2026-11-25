@@ -82,6 +82,20 @@ object PlayHistoryManager {
     }
 
     /**
+     * 检测在线歌曲路径与封面 URL 是否发生跨平台错位（如 `online://qq/...` 却携带网易云 `126.net`/`163.com` 封面）。
+     */
+    fun isCrossPlatformDirtyCover(path: String?, url: String?): Boolean {
+        if (path.isNullOrBlank() || url.isNullOrBlank()) return false
+        val p = path.trim().lowercase()
+        val u = url.trim().lowercase()
+        return when {
+            p.startsWith("online://qq/") -> u.contains("126.net") || u.contains("163.com")
+            p.startsWith("online://netease/") -> u.contains("gtimg.cn") || u.contains("y.qq.com")
+            else -> false
+        }
+    }
+
+    /**
      * 点击播放歌曲后自动记录进入历史。
      * 若已在历史中，则移到最前（更新为最新播放时间），并根据上限自动裁剪。
      */
@@ -94,6 +108,8 @@ object PlayHistoryManager {
             (song.path.isNotBlank() && it.path == song.path) ||
             (song.title.isNotBlank() && it.title == song.title && it.artist == song.artist)
         }
+        val safeCoverKey = song.coverKey.takeUnless { isCrossPlatformDirtyCover(song.path, it) }.orEmpty()
+        val safeArtPath = song.albumArtPath.takeUnless { isCrossPlatformDirtyCover(song.path, it) }.orEmpty()
         val newItem = PlayHistoryItem(
             id = song.id,
             title = song.title,
@@ -101,8 +117,8 @@ object PlayHistoryManager {
             album = song.album,
             duration = song.duration,
             path = song.path,
-            coverKey = song.coverKey,
-            albumArtPath = song.albumArtPath,
+            coverKey = safeCoverKey,
+            albumArtPath = safeArtPath,
             playedAt = System.currentTimeMillis(),
         )
         current.add(0, newItem)
@@ -110,6 +126,35 @@ object PlayHistoryManager {
         val trimmed = if (current.size > limit) current.take(limit) else current
         _history.value = trimmed
         saveHistory(trimmed)
+    }
+
+    /**
+     * 当后台同源封面自愈完成后，同步更新播放历史中对应在线歌曲的封面路径。
+     */
+    fun refreshOnlineTrackArtwork(title: String, artist: String, platformId: String, coverUrl: String) {
+        if (title.isBlank() || coverUrl.isBlank()) return
+        val current = _history.value
+        if (current.isEmpty()) return
+        val expectedPrefix = if (platformId.isNotBlank()) "online://${platformId.lowercase()}/" else "online://"
+        var changed = false
+        val updated = current.map { item ->
+            val isTargetOnline = item.path.lowercase().startsWith(expectedPrefix) &&
+                item.title.equals(title, ignoreCase = true) &&
+                (artist.isBlank() || item.artist.equals(artist, ignoreCase = true))
+            val needsHeal = item.albumArtPath.isBlank() ||
+                isCrossPlatformDirtyCover(item.path, item.albumArtPath) ||
+                isCrossPlatformDirtyCover(item.path, item.coverKey)
+            if (isTargetOnline && needsHeal) {
+                changed = true
+                item.copy(coverKey = coverUrl, albumArtPath = coverUrl)
+            } else {
+                item
+            }
+        }
+        if (changed) {
+            _history.value = updated
+            saveHistory(updated)
+        }
     }
 
     /**
@@ -151,13 +196,20 @@ object PlayHistoryManager {
             val array = JSONArray(jsonStr)
             val list = mutableListOf<PlayHistoryItem>()
             val limit = maxHistoryCount
-            var hadPodcast = false
+            var hadPodcastOrDirtyCover = false
             for (i in 0 until minOf(array.length(), limit)) {
                 val obj = array.optJSONObject(i) ?: continue
                 val path = obj.optString("path", "")
                 if (isPodcastPath(path)) {
-                    hadPodcast = true
+                    hadPodcastOrDirtyCover = true
                     continue
+                }
+                val rawCoverKey = obj.optString("coverKey", "")
+                val rawAlbumArt = obj.optString("albumArtPath", "")
+                val dirtyKey = isCrossPlatformDirtyCover(path, rawCoverKey)
+                val dirtyArt = isCrossPlatformDirtyCover(path, rawAlbumArt)
+                if (dirtyKey || dirtyArt) {
+                    hadPodcastOrDirtyCover = true
                 }
                 list.add(
                     PlayHistoryItem(
@@ -167,13 +219,13 @@ object PlayHistoryManager {
                         album = obj.optString("album", ""),
                         duration = obj.optLong("duration", 0L),
                         path = path,
-                        coverKey = obj.optString("coverKey", ""),
-                        albumArtPath = obj.optString("albumArtPath", ""),
+                        coverKey = if (dirtyKey) "" else rawCoverKey,
+                        albumArtPath = if (dirtyArt) "" else rawAlbumArt,
                         playedAt = obj.optLong("playedAt", 0L),
                     )
                 )
             }
-            if (hadPodcast) {
+            if (hadPodcastOrDirtyCover) {
                 saveHistory(list)
             }
             list

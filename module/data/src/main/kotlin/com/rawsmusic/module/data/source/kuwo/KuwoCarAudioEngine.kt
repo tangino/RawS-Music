@@ -84,20 +84,35 @@ object KuwoCarAudioEngine {
         val cleanT = extractCoreTitle(title)
         val cleanA = cleanKeyword(artist)
         val normA = normalizeArtist(cleanA)
+        val srcVersionTags = extractVersionTags(title)
+        val srcIsLive = (VersionTag.LIVE in srcVersionTags) || isLiveAlbum(expectedAlbum)
+        val srcLanguageTags = extractLanguageTags(title)
+        val langSearchHint = when {
+            LanguageTag.CANTONESE in srcLanguageTags -> "粤"
+            LanguageTag.MANDARIN in srcLanguageTags -> "国语"
+            LanguageTag.ENGLISH in srcLanguageTags -> "英文"
+            LanguageTag.JAPANESE in srcLanguageTags -> "日语"
+            LanguageTag.KOREAN in srcLanguageTags -> "韩语"
+            LanguageTag.MINNAN in srcLanguageTags -> "闽南语"
+            else -> ""
+        }
 
-        // 第一阶段：精准关键词搜索（纯净主歌名 + 规范化歌手）
-        val keyword1 = if (normA.isNotBlank() && !cleanT.contains(normA, ignoreCase = true)) {
-            "$cleanT $normA"
+        // 第一阶段：若原曲本身明确为语种/Live 版本，才携带限定词搜索；否则搜纯净「主歌名 + 歌手」
+        val primaryTitleQuery = buildString {
+            append(cleanT)
+            if (langSearchHint.isNotEmpty()) append(' ').append(langSearchHint)
+            if (srcIsLive) append(" live")
+        }.trim()
+        val keyword1 = if (normA.isNotBlank() && !primaryTitleQuery.contains(normA, ignoreCase = true)) {
+            "$primaryTitleQuery $normA"
         } else {
-            cleanT
+            primaryTitleQuery
         }
 
         var candidateItems = searchApi(keyword1)
 
-        // 检查第一阶段候选池中是否已有与目标主歌名+歌手相符的高品质结果；
-        // 避免同名不同歌手的母带曲目导致跳过补全搜索。
-        val cleanTLower = cleanT.lowercase()
-        val hasMatchedHighQuality = candidateItems.any { item ->
+        // 检查第一阶段候选池中是否已有通过严格门控（歌名+歌手+版本+语种+5秒时长）的高品质结果
+        val hasValidStrictMatch = candidateItems.any { item ->
             val candTitle = item.optString("SONGNAME")
                 .ifEmpty { item.optString("NAME") }
                 .ifEmpty { item.optString("FSONGNAME").trim('"') }
@@ -105,26 +120,36 @@ object KuwoCarAudioEngine {
             val candArtist = item.optString("ARTIST")
                 .ifEmpty { item.optString("AARTIST") }
                 .ifEmpty { item.optString("artist") }
-            val candCore = extractCoreTitle(candTitle).lowercase()
-            val titleHit = cleanTLower.isNotBlank() &&
-                (candCore == cleanTLower || candCore.contains(cleanTLower) || cleanTLower.contains(candCore))
-            if (!titleHit || !isArtistMatched(artist, candArtist)) return@any false
-            val info = item.optString("N_MINFO").ifEmpty { item.optString("MINFO") }
-            info.contains("bitrate:20900") || info.contains("bitrate:2000") || info.contains("bitrate:4000")
+            val candAlbum = item.optString("ALBUM").ifEmpty { item.optString("album") }
+            val candDurMs = item.optLong("DURATION", 0L) * 1000L
+            val qualities = parseMinfo(item.optString("N_MINFO").ifEmpty { item.optString("MINFO") })
+            val score = calculateMatchScore(
+                title, artist, expectedAlbum,
+                candTitle, candArtist, candAlbum,
+                expectedDurationMs, candDurMs, qualities,
+            )
+            score >= 60
         }
 
-        if (!hasMatchedHighQuality && cleanT.isNotBlank() && keyword1 != cleanT) {
-            val fallbackItems = searchApi(cleanT)
-            if (fallbackItems.isNotEmpty()) {
-                val existingRids = candidateItems.map { it.optString("MUSICRID").ifBlank { it.optString("id") } }.toSet()
-                val merged = candidateItems.toMutableList()
-                for (it in fallbackItems) {
-                    val r = it.optString("MUSICRID").ifBlank { it.optString("id") }
-                    if (r !in existingRids) {
-                        merged.add(it)
+        if (!hasValidStrictMatch && cleanT.isNotBlank()) {
+            val fallbackKeyword = if (primaryTitleQuery != cleanT && normA.isNotBlank()) {
+                "$cleanT $normA"
+            } else {
+                cleanT
+            }
+            if (fallbackKeyword != keyword1) {
+                val fallbackItems = searchApi(fallbackKeyword)
+                if (fallbackItems.isNotEmpty()) {
+                    val existingRids = candidateItems.map { it.optString("MUSICRID").ifBlank { it.optString("id") } }.toSet()
+                    val merged = candidateItems.toMutableList()
+                    for (it in fallbackItems) {
+                        val r = it.optString("MUSICRID").ifBlank { it.optString("id") }
+                        if (r !in existingRids) {
+                            merged.add(it)
+                        }
                     }
+                    candidateItems = merged
                 }
-                candidateItems = merged
             }
         }
 
@@ -207,7 +232,7 @@ object KuwoCarAudioEngine {
                 "&newver=1" +
                 "&mobi=1" +
                 "&pn=0" +
-                "&rn=20"
+                "&rn=30"
 
             val req = Request.Builder()
                 .url(url)
@@ -219,8 +244,11 @@ object KuwoCarAudioEngine {
                 resp.body?.string()
             } ?: return emptyList()
 
-            val fixedJson = rawResp.replace('\'', '"')
-            val absList = JSONObject(fixedJson).optJSONArray("abslist") ?: return emptyList()
+            // 注意：携带 `pcjson=1` 时酷我返回标准双引号 JSON（对齐 HotDownloader `search.rs`）。
+            // 严禁无条件 `replace('\'', '"')`，否则歌名/专辑中的英文单引号（如 `Don't`、`Eason's`）会直接破坏 JSON 结构！
+            val rootJson = runCatching { JSONObject(rawResp) }
+                .getOrElse { JSONObject(rawResp.replace('\'', '"')) }
+            val absList = rootJson.optJSONArray("abslist") ?: return emptyList()
             val result = mutableListOf<JSONObject>()
             for (i in 0 until absList.length()) {
                 absList.optJSONObject(i)?.let { result.add(it) }
@@ -240,7 +268,7 @@ object KuwoCarAudioEngine {
         val list = mutableListOf<KuwoQualityOption>()
         val pattern = Pattern.compile("level:(\\w+),bitrate:(\\d+),format:(\\w+),size:([\\w.]+)")
         val matcher = pattern.matcher(infoStr)
-        val seenBitrates = mutableSetOf<Int>()
+        val seenKeys = mutableSetOf<String>()
 
         while (matcher.find()) {
             val level = matcher.group(1) ?: ""
@@ -250,7 +278,7 @@ object KuwoCarAudioEngine {
             val sizeBytes = parseSizeBytes(sizeStr)
             if (sizeBytes <= 0L) continue
 
-            if (seenBitrates.add(bitrate)) {
+            if (seenKeys.add("$bitrate:${format.lowercase()}")) {
                 list.add(KuwoQualityOption(level, bitrate, format, sizeStr, sizeBytes))
             }
         }
@@ -329,10 +357,11 @@ object KuwoCarAudioEngine {
                 addOption(320, "p", "mp3")
                 addOption(300, "p", "ogg")
                 addOption(192, "p", "ogg")
+                addOption(2000, "ff", "flac")
+                addOption(4000, "hr", "flac")
                 addOption(128, "h", "mp3")
                 addOption(100, "h", "ogg")
                 addOption(48, "s", "aac")
-                addOption(2000, "ff", "flac")
             }
             RawSourceQuality.Standard -> {
                 addOption(128, "h", "mp3")
@@ -342,6 +371,7 @@ object KuwoCarAudioEngine {
                 addOption(300, "p", "ogg")
                 addOption(48, "s", "aac")
                 addOption(2000, "ff", "flac")
+                addOption(4000, "hr", "flac")
             }
         }
 
@@ -355,21 +385,122 @@ object KuwoCarAudioEngine {
             }
         }
 
-        var validationRejectCount = 0
         for (opt in filtered) {
             val res = requestCarApi(songMatch.rid, opt.bitrate, opt.format) ?: continue
             if (urlValidator == null || urlValidator(res)) {
                 return@withContext res
             }
-            validationRejectCount++
             AppLogger.w(TAG, "酷我音质档位校验未通过（疑似提示音/试听），尝试下一档位: rid=${songMatch.rid}, br=${opt.bitrate}${opt.format}")
-            // 同一 RID 连续 2 个档位都被判定为短试听/版权提示音，说明该曲目在酷我受限，直接放弃当前 RID 以便快速回退原平台
-            if (validationRejectCount >= 2) {
-                AppLogger.w(TAG, "酷我同一 RID 连续 $validationRejectCount 档返回短音频，快速放弃当前 RID: rid=${songMatch.rid}")
-                break
-            }
         }
         null
+    }
+
+    /**
+     * 轻量快速校验酷我车机签名直链（对齐 HotDownloader `kuwo/download.rs` Header 与流完整性语义）：
+     * - 使用车机同款 `User-Agent: okhttp/4.10.0` 与 `Referer: http://www.kuwo.cn/` 发起首块 Range 探活；
+     * - 校验 HTTP 200/206、排除网页/JSON 错误体及试听 URL；
+     * - 通过响应 `Content-Range` 总字节数（或 `N_MINFO` 声明体积）验证完整正片大小，彻底避免
+     *   `MediaMetadataRetriever` 在 30MB+ 无损 FLAC HTTP 流上超时导致的误杀，同时精准拦截 5s 版权提示音与 30s/60s 试听片段。
+     */
+    suspend fun validateCarStreamUrl(
+        match: KuwoSongMatch,
+        resource: KuwoDownloadResource,
+        expectedDurationMs: Long = 0L,
+    ): Pair<String, Long>? = withContext(Dispatchers.IO) {
+        val rawUrl = resource.downloadUrl.trim()
+        if (rawUrl.isBlank() || !rawUrl.startsWith("http", ignoreCase = true)) return@withContext null
+        val lowerUrl = rawUrl.lowercase()
+        if (lowerUrl.contains("audition") || lowerUrl.contains("preview") || lowerUrl.contains("trial") ||
+            lowerUrl.contains("listen_part") || lowerUrl.contains("/short/") || lowerUrl.contains("试听")
+        ) {
+            return@withContext null
+        }
+
+        val effectiveDurMs = when {
+            expectedDurationMs > 5000L -> expectedDurationMs
+            match.durationSec > 5L -> match.durationSec * 1000L
+            else -> 0L
+        }
+        // 当外部传入了明确预期时长且候选记录也有有效时长时，二次确认时长误差 ≤ 5 秒
+        if (expectedDurationMs > 5000L && match.durationSec > 5L) {
+            if (kotlin.math.abs(expectedDurationMs - match.durationSec * 1000L) > 5000L) {
+                return@withContext null
+            }
+        }
+
+        try {
+            val req = Request.Builder()
+                .url(rawUrl)
+                .header("User-Agent", "okhttp/4.10.0")
+                .header("Referer", "http://www.kuwo.cn/")
+                .header("Range", "bytes=0-4095")
+                .build()
+
+            httpClient.newCall(req).execute().use { resp ->
+                val code = resp.code
+                val finalUrl = resp.request.url.toString()
+                val contentType = resp.header("Content-Type", "")?.lowercase().orEmpty()
+                if (code >= 400 || contentType.contains("text/html") || contentType.contains("application/json")) {
+                    AppLogger.w(TAG, "酷我直链探活拒绝: status=$code, contentType=$contentType")
+                    return@withContext null
+                }
+                if (!resp.isSuccessful && code != 206) {
+                    return@withContext null
+                }
+
+                val finalLower = finalUrl.lowercase()
+                if (finalLower.contains("audition") || finalLower.contains("preview") || finalLower.contains("trial") ||
+                    finalLower.contains("listen_part") || finalLower.contains("/short/")
+                ) {
+                    return@withContext null
+                }
+
+                var totalBytes = -1L
+                val contentRange = resp.header("Content-Range")
+                if (!contentRange.isNullOrBlank() && contentRange.contains('/')) {
+                    totalBytes = contentRange.substringAfterLast('/').trim().toLongOrNull() ?: -1L
+                }
+                if (totalBytes <= 0L && code == 200) {
+                    totalBytes = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                }
+                if (totalBytes <= 0L) {
+                    totalBytes = match.qualities
+                        .firstOrNull { it.bitrate == resource.bitrate }
+                        ?.sizeBytes ?: -1L
+                }
+
+                // 防版权提示音（通常 < 500KB）与防 30s~60s 短试听体积下限校验
+                val minBytesPerSec = when {
+                    resource.bitrate >= 1000 -> 35_000L
+                    resource.bitrate >= 300 -> 24_000L
+                    resource.bitrate >= 120 -> 10_000L
+                    else -> 4_500L
+                }
+                if (effectiveDurMs >= 65_000L && totalBytes > 0L) {
+                    val minExpectedBytes = (effectiveDurMs / 1000L) * minBytesPerSec
+                    if (totalBytes < minExpectedBytes) {
+                        AppLogger.w(
+                            TAG,
+                            "酷我直链体积疑似试听/提示音: actual=$totalBytes < min=$minExpectedBytes (dur=${effectiveDurMs}ms, br=${resource.bitrate}k)"
+                        )
+                        return@withContext null
+                    }
+                } else if (totalBytes in 1..600_000L && effectiveDurMs >= 45_000L) {
+                    return@withContext null
+                }
+
+                // 读取前几个字节确认不是伪装成 200 的空流或错误文本
+                val headBytes = resp.body?.source()?.apply { request(16) }?.buffer?.clone()?.readByteArray()
+                if (headBytes != null && headBytes.isEmpty()) {
+                    return@withContext null
+                }
+
+                return@withContext finalUrl to effectiveDurMs
+            }
+        } catch (e: Throwable) {
+            AppLogger.w(TAG, "酷我车机直链探活异常: ${e.message}")
+            return@withContext null
+        }
     }
 
     /**
@@ -507,6 +638,33 @@ object KuwoCarAudioEngine {
         ACOUSTIC,
     }
 
+    private enum class LanguageTag {
+        CANTONESE,
+        MANDARIN,
+        ENGLISH,
+        JAPANESE,
+        KOREAN,
+        MINNAN,
+    }
+
+    private val bracketContentRegex = Regex("""[\(\[（【［\{]([^)\]）】］\}]*)[\)\]）】］\}]""")
+    private val explicitLangPatterns: List<Pair<LanguageTag, Regex>> = listOf(
+        LanguageTag.CANTONESE to Regex("""(?i)(粤语版?|广东话版?|(?<![a-zA-Z])cantonese(?![a-zA-Z]))"""),
+        LanguageTag.MANDARIN to Regex("""(?i)(国语版?|普通话版?|(?<![a-zA-Z])mandarin(?![a-zA-Z]))"""),
+        LanguageTag.ENGLISH to Regex("""(?i)(英语版|英文版|(?<![a-zA-Z])english\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        LanguageTag.JAPANESE to Regex("""(?i)(日语版|日文版|(?<![a-zA-Z])japanese\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        LanguageTag.KOREAN to Regex("""(?i)(韩语版|韩文版|(?<![a-zA-Z])korean\s*ver(sion|\.)?(?![a-zA-Z]))"""),
+        LanguageTag.MINNAN to Regex("""(?i)(闽南语版?|台语版?)"""),
+    )
+    private val bracketShortLangPatterns: List<Pair<LanguageTag, Regex>> = listOf(
+        LanguageTag.CANTONESE to Regex("""(?i)^[\s\-·•]*(粤|粤语|粤语版|广东话|cantonese)[\s\-·•]*$"""),
+        LanguageTag.MANDARIN to Regex("""(?i)^[\s\-·•]*(国|国语|国语版|普通话|mandarin)[\s\-·•]*$"""),
+        LanguageTag.ENGLISH to Regex("""(?i)^[\s\-·•]*(英|英文|英语|英文版|英语版|english|eng\s*ver\.?)[\s\-·•]*$"""),
+        LanguageTag.JAPANESE to Regex("""(?i)^[\s\-·•]*(日|日文|日语|日文版|日语版|japanese|jp\s*ver\.?)[\s\-·•]*$"""),
+        LanguageTag.KOREAN to Regex("""(?i)^[\s\-·•]*(韩|韩文|韩语|韩文版|韩语版|korean|kr\s*ver\.?)[\s\-·•]*$"""),
+        LanguageTag.MINNAN to Regex("""(?i)^[\s\-·•]*(闽|闽南|闽南语|台|台语)[\s\-·•]*$"""),
+    )
+
     private val pairedBracketsRegex = Regex("""\s*[\(\[\{（【].*?[\]\)\}】]""")
     private val unclosedTrailingBracketRegex = Regex("""\s*[\(\[\{（【].*$""")
     private val dashSubtitleRegex = Regex(
@@ -515,12 +673,28 @@ object KuwoCarAudioEngine {
     private val trailingBookSubtitleRegex = Regex(
         """(?i)\s*《[^》]*》?\s*(电视剧|电影|网剧|动画|动漫|游戏|综艺|主题曲|片头曲|片尾曲|插曲|推广曲|宣传曲|原声|ost)?.*$"""
     )
-    private val versionLiveRegex = Regex("""(?i)(\blive\b|现场版?|演唱会|音乐节|unplugged|演唱会现场)""")
-    private val versionInstrumentalRegex = Regex("""(?i)(伴奏|纯音乐|\binstrumental\b|\boff\s*vocal\b|\binst\.?\b|消音版|无人声)""")
-    private val versionDjRemixRegex = Regex("""(?i)(\bdj\b|\bremix\b|串烧|蹦迪|慢摇|电音版|舞曲版|mashup)""")
-    private val versionCoverRegex = Regex("""(?i)(翻唱|\bcover\b)""")
-    private val versionSpeedRegex = Regex("""(?i)(加速版?|降调版?|变速版?|0\.\d+x|1\.\d+x|\bnightcore\b|\bslowed\b|\bsped\s*up\b)""")
-    private val versionAcousticRegex = Regex("""(?i)(吉他版|钢琴版|清唱|阿卡贝拉|\bacoustic\b|口琴版|古筝版|二胡版|笛子版)""")
+    // Android ICU 正则中汉字与数字均属 `\w`，必须用 ASCII 字母边界以确保 `(live版)`、`(2023live)`、`歌曲名live` 100% 识别
+    private val versionLiveRegex = Regex("""(?i)((?<![a-zA-Z])(live|unplugged)(?![a-zA-Z])|现场版?|演唱会|音乐节|演唱会现场|音乐会现场|巡演现场)""")
+    private val albumLiveRegex = Regex("""(?i)((?<![a-zA-Z])(live|concert|unplugged|livehouse)(?![a-zA-Z])|演唱会|音乐节|现场版|现场实况|音乐会现场|巡演|巡回演出)""")
+    private val versionInstrumentalRegex = Regex("""(?i)(伴奏|纯音乐|(?<![a-zA-Z])(instrumental|off\s*vocal|inst\.?|karaoke)(?![a-zA-Z])|消音版|无人声|卡拉ok)""")
+    private val versionDjRemixRegex = Regex("""(?i)((?<![a-zA-Z])(dj|remix|mashup|bootleg)(?![a-zA-Z])|串烧|蹦迪|慢摇|电音版|舞曲版)""")
+    private val versionCoverRegex = Regex("""(?i)(翻唱|(?<![a-zA-Z])cover(?![a-zA-Z]))""")
+    private val versionSpeedRegex = Regex("""(?i)(加速版?|降调版?|变速版?|0\.\d+x|1\.\d+x|(?<![a-zA-Z])(nightcore|slowed|sped\s*up)(?![a-zA-Z]))""")
+    private val versionAcousticRegex = Regex("""(?i)(吉他版|钢琴版|清唱|阿卡贝拉|(?<![a-zA-Z])acoustic(?![a-zA-Z])|口琴版|古筝版|二胡版|笛子版)""")
+
+    private fun isLiveAlbum(rawAlbum: String): Boolean {
+        if (rawAlbum.isBlank()) return false
+        return albumLiveRegex.containsMatchIn(rawAlbum)
+    }
+
+    private fun hasModifierLiveTag(rawTitle: String): Boolean {
+        if (rawTitle.isBlank()) return false
+        if (bracketContentRegex.findAll(rawTitle).any { versionLiveRegex.containsMatchIn(it.groupValues.getOrNull(1).orEmpty()) }) {
+            return true
+        }
+        val afterDash = rawTitle.substringAfter(" - ", "").ifEmpty { rawTitle.substringAfter(" — ", "") }
+        return afterDash.isNotEmpty() && versionLiveRegex.containsMatchIn(afterDash)
+    }
 
     /**
      * 提取纯净主歌名：剥离括号、连字符后的影视/综艺/OST 副标题以及尾部书名号说明，
@@ -640,6 +814,31 @@ object KuwoCarAudioEngine {
             .lowercase()
     }
 
+    /**
+     * 从清洗前的完整歌名中提取语种版本标记（如 `歌曲名(粤)` / `(粤语)` / `(国)` / `粤语版`），
+     * 用于对称硬门控，彻底杜绝国粤双语同名曲串版。
+     */
+    private fun extractLanguageTags(rawTitle: String): Set<LanguageTag> {
+        if (rawTitle.isBlank()) return emptySet()
+        val tags = HashSet<LanguageTag>(2)
+        for ((lang, regex) in explicitLangPatterns) {
+            if (regex.containsMatchIn(rawTitle)) {
+                tags.add(lang)
+            }
+        }
+        bracketContentRegex.findAll(rawTitle).forEach { match ->
+            val inner = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            if (inner.isNotEmpty()) {
+                for ((lang, regex) in bracketShortLangPatterns) {
+                    if (regex.matches(inner)) {
+                        tags.add(lang)
+                    }
+                }
+            }
+        }
+        return tags
+    }
+
     private fun calculateMatchScore(
         srcTitle: String,
         srcArtist: String,
@@ -657,41 +856,43 @@ object KuwoCarAudioEngine {
         val sA = normalizeArtist(cleanKeyword(srcArtist))
         val cA = normalizeArtist(cleanKeyword(candArtist))
 
-        // 1. 纯净主歌名匹配（已剥离 -《剧名》/括号等无害附加信息）
-        var titleMatched = false
-        if (sT.isNotBlank() && cT.isNotBlank()) {
-            if (sT == cT) {
-                score += 55
-                titleMatched = true
-            } else if (cT.contains(sT) || sT.contains(cT)) {
-                score += 32
-                titleMatched = true
-            }
+        // 1. 纯净主歌名硬门控
+        if (sT.isBlank() || cT.isBlank()) return -1000
+        when {
+            sT == cT -> score += 55
+            minOf(sT.length, cT.length) >= 2 && (cT.contains(sT) || sT.contains(cT)) -> score += 32
+            else -> return -1000
         }
 
-        // 2. 版本特征对称校验：防止 Live / 伴奏 / DJ / 翻唱 / 加速版靠高音质挤掉原版
+        // 2. 版本特征对称硬门控：除非源歌曲本身就是 Live（歌名或专辑明确为 Live），否则严禁匹配任何标题或专辑带 Live/现场特征的候选！
         val srcTags = extractVersionTags(srcTitle)
         val candTags = extractVersionTags(candTitle)
-        var hasVersionConflict = false
-        for (tag in candTags) {
-            if (tag !in srcTags) {
-                hasVersionConflict = true
-                score -= when (tag) {
-                    VersionTag.INSTRUMENTAL, VersionTag.DJ_REMIX, VersionTag.COVER, VersionTag.SPEED -> 60
-                    VersionTag.LIVE, VersionTag.ACOUSTIC -> 45
-                }
-            }
+        val srcIsLive = (VersionTag.LIVE in srcTags) || isLiveAlbum(srcAlbum)
+        val candIsLive = (VersionTag.LIVE in candTags) || isLiveAlbum(candAlbum)
+        if (!srcIsLive && candIsLive) {
+            return -1000
         }
-        for (tag in srcTags) {
-            if (tag in candTags) {
-                score += 20
-            } else {
-                hasVersionConflict = true
-                score -= 25
+        // 其余非 Live 版本标签（伴奏/DJ/翻唱/加速/器乐）严格对称比对；若源不是专辑级 Live，则标题级 LIVE 标签也必须对称
+        val srcCompareTags = if (srcIsLive) srcTags + VersionTag.LIVE else srcTags
+        val candCompareTags = if (candIsLive) candTags + VersionTag.LIVE else candTags
+        if (srcCompareTags != candCompareTags) {
+            return -1000
+        }
+        // 若核心歌名本身包含单词 `live`（如《Live Forever》），校验括号/副标题修饰区的 Live 标签必须一致
+        if (VersionTag.LIVE in srcTags && versionLiveRegex.containsMatchIn(sT)) {
+            if (hasModifierLiveTag(srcTitle) != hasModifierLiveTag(candTitle)) {
+                return -1000
             }
         }
 
-        // 3. 歌手硬门控 + 加权（先按分隔符拆分多歌手再归一化；若双方均有有效歌手且完全不匹配，直接淘汰）
+        // 3. 语种版本对称硬门控：杜绝 `歌曲名(粤)` 误匹配无括号国语版 `歌曲名`（或反之）
+        val srcLangs = extractLanguageTags(srcTitle)
+        val candLangs = extractLanguageTags(candTitle)
+        if (srcLangs != candLangs) {
+            return -1000
+        }
+
+        // 4. 歌手硬门控 + 加权
         val sTokens = extractArtistTokens(srcArtist)
         val cTokens = extractArtistTokens(candArtist)
         val hasValidBothArtists = sTokens.isNotEmpty() && cTokens.isNotEmpty() &&
@@ -709,21 +910,20 @@ object KuwoCarAudioEngine {
             }
         }
 
-        // 4. 时长精准对齐校验（第一梯队核心因子）
-        var durationSeverelyOff = false
-        if (expectedDurMs > 0L && candDurMs > 0L) {
+        // 5. 时长 5 秒硬门控（超过 5 秒一律淘汰，交由原声平台提供精确音频）
+        if (expectedDurMs > 5000L && candDurMs > 5000L) {
             val diff = kotlin.math.abs(expectedDurMs - candDurMs)
-            if (diff <= 3500L) {
-                score += 35
-            } else if (diff <= 8000L) {
-                score += 15
-            } else if (diff > 25000L) {
-                score -= 35
-                durationSeverelyOff = true
+            if (diff > 5000L) {
+                return -1000
+            }
+            score += when {
+                diff <= 1500L -> 35
+                diff <= 3500L -> 25
+                else -> 12
             }
         }
 
-        // 5. 专辑匹配（次级加权因子：不做硬淘汰，但在歌名/歌手/时长均达标时优先命中原专辑而非精选集/合辑）
+        // 6. 专辑匹配（次级加权因子：优先命中原专辑而非精选集/合辑）
         val sAlb = normalizeAlbum(srcAlbum)
         val cAlb = normalizeAlbum(candAlbum)
         if (sAlb.isNotBlank() && cAlb.isNotBlank() &&
@@ -736,15 +936,13 @@ object KuwoCarAudioEngine {
             }
         }
 
-        // 6. 品质加权：仅在主歌名命中、版本无冲突且时长未严重偏离时才加分，避免低相关母带逆袭
+        // 7. 品质加权：所有硬门控均通过的前提下，优先选择更高规格母带/无损版本
         val hasMaster = qualities.any { it.bitrate == 20900 }
         val hasFlac = qualities.any { it.bitrate == 2000 || it.bitrate == 4000 }
-        if (titleMatched && !hasVersionConflict && !durationSeverelyOff) {
-            if (hasMaster) {
-                score += 40
-            } else if (hasFlac) {
-                score += 25
-            }
+        if (hasMaster) {
+            score += 40
+        } else if (hasFlac) {
+            score += 25
         }
         if (qualities.isNotEmpty() && qualities.all { it.bitrate <= 128 }) {
             score -= 20
