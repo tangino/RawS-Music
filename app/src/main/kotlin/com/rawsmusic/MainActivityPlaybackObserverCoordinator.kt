@@ -73,6 +73,32 @@ internal class MainActivityPlaybackObserverCoordinator(
                     lastPublishedOnlineIdentity = null
                     return@collect
                 }
+                // 核心同步：在线歌曲/播客/WebDAV 直连状态推进时，立即更新外部观察者播放状态（双竖线/三角形）
+                if (lastPublishedOnlineStatus != onlineSnapshot.status) {
+                    lastPublishedOnlineStatus = onlineSnapshot.status
+                    when (onlineSnapshot.status) {
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing -> {
+                            onPlaybackState(PlayState.PLAYING)
+                        }
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Paused -> {
+                            onPlaybackState(PlayState.PAUSED)
+                        }
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing,
+                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving -> {
+                            onPlaybackState(PlayState.PREPARING)
+                        }
+                        else -> Unit
+                    }
+                }
+
+                // WebDAV 直连播放由 PlayerController.currentSong 持有权威 AudioFile（含真实 http URL 与内嵌封面）。
+                // 绝不能构造 online://webdav/... 虚拟对象覆盖 onCurrentSong，否则会导致：
+                // 1) LyricsCoordinator 中 lastSongKey(online://webdav/...) != currentSong(http://...)，拉回的歌词被全部当作 stale 丢弃；
+                // 2) CoverUriResolver 误判为在线平台曲目触发 OnlineArtworkResolver 搜出错误封面。
+                if (onlineItem.sourceId.equals("webdav", ignoreCase = true)) {
+                    return@collect
+                }
+
                 val onlinePathKey = com.rawsmusic.core.common.model.onlineSongKey(onlineItem.sourceId, onlineItem.remoteId)
                 val resolvedId = if (cur != null && cur.path == onlinePathKey && cur.id != 0L) {
                     cur.id
@@ -90,23 +116,6 @@ internal class MainActivityPlaybackObserverCoordinator(
                     albumArtPath = onlineItem.artworkUrl,
                     encodingFormat = com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER,
                 )
-                // 核心同步：在线歌曲/播客状态推进时，立即更新外部观察者播放状态（双竖线/三角形）
-                if (lastPublishedOnlineStatus != onlineSnapshot.status) {
-                    lastPublishedOnlineStatus = onlineSnapshot.status
-                    when (onlineSnapshot.status) {
-                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Playing -> {
-                            onPlaybackState(PlayState.PLAYING)
-                        }
-                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Paused -> {
-                            onPlaybackState(PlayState.PAUSED)
-                        }
-                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Preparing,
-                        com.rawsmusic.module.data.source.playback.MusicSourcePlaybackStatus.Resolving -> {
-                            onPlaybackState(PlayState.PREPARING)
-                        }
-                        else -> Unit
-                    }
-                }
 
                 // MusicSourcePlaybackController.snapshot also updates on every position tick.
                 // Publishing on each tick re-ran miniPlayer.updateSong + lyrics.markSongPending,

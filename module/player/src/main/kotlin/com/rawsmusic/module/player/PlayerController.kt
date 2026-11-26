@@ -876,9 +876,12 @@ class PlayerController private constructor(context: Context) {
     )
 
     private var webDavPrefetchJob: Job? = null
+    private var webDavDirectStreamJob: Job? = null
 
     private fun prefetchWebDavSong(path: String) {
         if (!path.startsWith("http://", true) && !path.startsWith("https://", true)) return
+        // 非 USB 独占模式下 WebDAV 走 Media3 边播边下秒开，不再后台全量下载下一首 150MB+ 大文件争抢局域网带宽
+        if (!_usbExclusiveActive.value && !ffmpegPlayer.usbExclusiveMode) return
         if (!com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.findCachedPath(context, path).isNullOrBlank()) {
             return
         }
@@ -6222,6 +6225,94 @@ class PlayerController private constructor(context: Context) {
         index: Int = 0,
         deferPublicCommitToRenderer: Boolean = false,
     ) {
+        webDavDirectStreamJob?.cancel()
+        webDavDirectStreamJob = null
+        val isHttpDirectSong =
+            (song.path.startsWith("http://", true) || song.path.startsWith("https://", true)) &&
+                song.cueEndMs <= 0L &&
+                !song.format.equals("SACD-ISO", true)
+        if (isHttpDirectSong && !_usbExclusiveActive.value && !ffmpegPlayer.usbExclusiveMode) {
+            // 常规输出模式（非 USB 独占）：若本地尚未缓存完整文件，直接接入 Media3 边播边缓存 + 原生 DSP 均衡器管线，
+            // 彻底消除 100MB+ Hi-Res 大文件全量下载等待，实现局域网毫秒级秒开与即时拖拽寻址。
+            val existingCached = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver
+                .findCachedPath(context, song.path, song.fileSize)
+            if (existingCached.isNullOrBlank()) {
+                pausedSelectionPendingStart = false
+                lastTrackSwitchAtMs = SystemClock.elapsedRealtime()
+                pendingRendererUiCommit = null
+                try {
+                    com.rawsmusic.core.common.prefs.PlayHistoryManager.recordSong(song)
+                } catch (_: Throwable) {}
+                if (isReleased) return
+
+                val effectiveQueue = if (queue.isNotEmpty()) queue else _queue.value.songs.ifEmpty { listOf(song) }
+                val effectiveIndex = if (queue.isNotEmpty()) {
+                    index.coerceIn(0, (effectiveQueue.size - 1).coerceAtLeast(0))
+                } else {
+                    effectiveQueue.indexOfFirst { samePlaybackItem(it, song) }.takeIf { it >= 0 } ?: 0
+                }
+
+                // 停止旧的 FFmpeg 播放与 20Hz 本地进度轮询，杜绝双路发声与进度条抽搐
+                stopProgressUpdate()
+                if (ffmpegPlayer.state == FfmpegAudioPlayer.State.PLAYING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PREPARING ||
+                    ffmpegPlayer.state == FfmpegAudioPlayer.State.PAUSED
+                ) {
+                    runCatching { ffmpegPlayer.stop() }
+                }
+
+                primeSongSelectionForUi(song)
+                _currentSong.value = song
+                _playState.value = PlayState.PREPARING
+                _position.value = 0L
+                _duration.value = song.duration.coerceAtLeast(0L)
+                _queue.value = PlayQueue(songs = effectiveQueue, currentIndex = effectiveIndex)
+
+                webDavDirectStreamJob = scope.launch(Dispatchers.IO) {
+                    val resolvedReq = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.resolve(song.path)
+                    val safeUrl = resolvedReq?.url
+                        ?: com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.toSafeUrl(song.path)
+                        ?: song.path
+                    val headers = resolvedReq?.headers.orEmpty()
+                    val userAgent = resolvedReq?.userAgent.orEmpty()
+                    val mediaItem = com.rawsmusic.core.common.source.RawSourceMediaItem(
+                        sourceId = "webdav",
+                        remoteId = song.path,
+                        mediaType = com.rawsmusic.core.common.source.RawSourceMediaType.Music,
+                        title = song.title,
+                        artists = listOf(song.artist).filter { it.isNotBlank() },
+                        album = song.album,
+                        durationMs = song.duration.coerceAtLeast(0L),
+                        artworkUrl = song.albumArtPath,
+                    )
+                    val audioSource = com.rawsmusic.core.common.source.RawResolvedAudioSource(
+                        url = safeUrl,
+                        headers = headers,
+                        userAgent = userAgent.takeIf { it.isNotBlank() },
+                        quality = if (song.bitsPerSample >= 24 || song.sampleRate > 48_000) {
+                            com.rawsmusic.core.common.source.RawSourceQuality.HiRes
+                        } else {
+                            com.rawsmusic.core.common.source.RawSourceQuality.Lossless
+                        },
+                        platform = "webdav",
+                        sourceName = "WebDAV",
+                    )
+                    withContext(Dispatchers.Main) {
+                        val current = _currentSong.value
+                        if (isReleased || current == null || !samePlaybackItem(current, song)) return@withContext
+                        MusicSourcePlaybackController.playDirectStream(
+                            context = context,
+                            item = mediaItem,
+                            source = audioSource,
+                            startPositionMs = 0L,
+                            autoPlay = true,
+                            reason = "webdav_direct_stream",
+                        )
+                    }
+                }
+                return
+            }
+        }
         if (song.path.startsWith("http://", true) || song.path.startsWith("https://", true)) {
             com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.registerIfConfigured(song.path)
             val safe = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.toSafeUrl(song.path)
@@ -7089,6 +7180,8 @@ class PlayerController private constructor(context: Context) {
         if (MusicSourcePlaybackController.isMedia3Active()) {
             MusicSourcePlaybackController.stop()
         }
+        webDavDirectStreamJob?.cancel()
+        webDavDirectStreamJob = null
         webDavPrefetchJob?.cancel()
         com.rawsmusic.module.scanner.webdav.WebDavPlaybackCache.cancelAll("player_stop")
         clearPendingUiSelection()

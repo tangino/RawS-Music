@@ -86,6 +86,19 @@ class LyricLoadHelper(
     }
 
     private suspend fun fetchOnlineLyrics(song: AudioFile): LyricData {
+        // 1. 若为 WebDAV 远端曲目，优先读取同目录同名 .lrc 侧车歌词（局域网毫秒级精准命中）
+        if (song.path.startsWith("http://", ignoreCase = true) ||
+            song.path.startsWith("https://", ignoreCase = true)
+        ) {
+            val sidecarLrc = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver
+                .fetchSidecarLrc(song.path)
+            if (!sidecarLrc.isNullOrBlank()) {
+                val parsed = com.rawsmusic.module.scanner.parser.RawSLyricsParser.parse(sidecarLrc).withAnimationFlags()
+                if (!parsed.isEmpty) return parsed
+            }
+        }
+
+        // 2. 在线歌词抓取（优先 QQ 音乐，失败再并行兜底网易云/酷我/酷狗）
         if (song.title.isBlank() && song.artist.isBlank()) return LyricData()
         val (platform, songId) = if (com.rawsmusic.core.common.model.isOnlineSongKey(song.path)) {
             val rest = song.path.removePrefix("online://")

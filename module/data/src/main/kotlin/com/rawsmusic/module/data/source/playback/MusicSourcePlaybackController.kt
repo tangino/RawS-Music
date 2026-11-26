@@ -1208,6 +1208,60 @@ object MusicSourcePlaybackController {
         )
     }
 
+    /**
+     * 供已持有直链与请求头的远端流（如 WebDAV Hi-Res FLAC）直接接入 Media3 边播边下 + 原生 DSP 均衡器管线，
+     * 无需走插件寻源，也不覆盖宿主 PlayerController 的混合播放队列。
+     */
+    fun playDirectStream(
+        context: Context,
+        item: RawSourceMediaItem,
+        source: RawResolvedAudioSource,
+        startPositionMs: Long = 0L,
+        autoPlay: Boolean = true,
+        reason: String = "webdav_direct_stream",
+    ) {
+        applicationContext = context.applicationContext
+        val generation = generations.incrementAndGet()
+        resolveJob?.cancel()
+        resolveJob = null
+        cacheJob?.cancel()
+        cacheJob = null
+        mediaFallbackJob?.cancel()
+        mediaFallbackJob = null
+        releaseExoPlayer()
+        prepared = false
+        completionHandledGeneration = Long.MIN_VALUE
+        backendReachedPlayingGeneration = Long.MIN_VALUE
+        fallbackAttemptedGeneration = Long.MIN_VALUE
+        activeResolvedSource = source
+        activeStartPositionMs = startPositionMs.coerceAtLeast(0L)
+        activeAutoPlay = autoPlay
+        mutableSnapshot.value = MusicSourcePlaybackSnapshot(
+            status = MusicSourcePlaybackStatus.Preparing,
+            queue = listOf(item),
+            currentIndex = 0,
+            currentItem = item,
+            requestedQuality = source.quality,
+            resolvedQuality = source.quality,
+            originalPlatform = source.platform ?: item.sourceId,
+            resolvedPlatform = source.platform ?: item.sourceId,
+            sourceTag = reason,
+            positionMs = startPositionMs.coerceAtLeast(0L),
+            durationMs = item.durationMs.coerceAtLeast(0L),
+            bufferedPercent = 0,
+            error = "",
+        )
+        prepareExoPlayer(
+            generation = generation,
+            item = item,
+            source = source,
+            startPositionMs = startPositionMs.coerceAtLeast(0L),
+            autoPlay = autoPlay,
+            reason = reason,
+            syncBackend = false,
+        )
+    }
+
     @OptIn(UnstableApi::class)
     private fun prepareExoPlayer(
         generation: Long,
@@ -1216,6 +1270,7 @@ object MusicSourcePlaybackController {
         startPositionMs: Long,
         autoPlay: Boolean,
         reason: String,
+        syncBackend: Boolean = true,
     ) {
         val context = applicationContext ?: run {
             fail("在线播放上下文不可用")
@@ -1223,7 +1278,7 @@ object MusicSourcePlaybackController {
         }
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post {
-                prepareExoPlayer(generation, item, source, startPositionMs, autoPlay, reason)
+                prepareExoPlayer(generation, item, source, startPositionMs, autoPlay, reason, syncBackend)
             }
             return
         }
@@ -1231,18 +1286,20 @@ object MusicSourcePlaybackController {
         releaseExoPlayer()
 
         // 通知宿主 PlayerController 同步当前曲目/队列/前台保活，并停止底层 FFmpeg 引擎，杜绝双路发声
-        val currentState = mutableSnapshot.value
-        backend?.syncExternalPlayback(
-            MusicSourcePlaybackRequest(
-                generation = generation,
-                item = item,
-                source = source,
-                queue = currentState.queue,
-                queueIndex = currentState.currentIndex,
-                startPositionMs = startPositionMs,
-                autoPlay = autoPlay,
+        if (syncBackend) {
+            val currentState = mutableSnapshot.value
+            backend?.syncExternalPlayback(
+                MusicSourcePlaybackRequest(
+                    generation = generation,
+                    item = item,
+                    source = source,
+                    queue = currentState.queue,
+                    queueIndex = currentState.currentIndex,
+                    startPositionMs = startPositionMs,
+                    autoPlay = autoPlay,
+                )
             )
-        )
+        }
 
         val requestHeaders = LinkedHashMap(source.headers)
         source.userAgent

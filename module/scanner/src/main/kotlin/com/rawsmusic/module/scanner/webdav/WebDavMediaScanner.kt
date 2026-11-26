@@ -7,11 +7,17 @@ import com.rawsmusic.core.common.utils.AppLogger
 import com.rawsmusic.core.common.utils.AudioUtils
 import com.rawsmusic.module.data.repository.MusicRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -51,7 +57,7 @@ object WebDavMediaScanner {
 
         val queue = ArrayDeque<String>()
         val visited = HashSet<String>()
-        val collectedAudioFiles = mutableListOf<AudioFile>()
+        val discoveredEntries = mutableListOf<Pair<WebDavItem, String>>()
 
         queue.add(startUrl)
         visited.add(WebDavUrlTools.identity(startUrl))
@@ -81,15 +87,33 @@ object WebDavMediaScanner {
                         queue.add(resolved)
                     }
                 } else if (AudioUtils.isAudioFile(item.fileName)) {
-                    val audioFile = parseWebDavAudioFile(client, config, item, resolved, context)
-                    collectedAudioFiles.add(audioFile)
-                    onProgress?.invoke(collectedAudioFiles.size, "已发现 ${collectedAudioFiles.size} 首：${audioFile.title}")
+                    discoveredEntries.add(item to resolved)
+                    onProgress?.invoke(discoveredEntries.size, "已发现 ${discoveredEntries.size} 首：${item.fileName}")
                 }
             }
         }
 
-        val totalFound = collectedAudioFiles.size
-        AppLogger.i(TAG, "WebDAV scan completed, found $totalFound audio files. Persisting to repository...")
+        val totalFound = discoveredEntries.size
+        AppLogger.i(TAG, "WebDAV directory walk finished, found $totalFound audio files. Reading header tags via Range...")
+
+        // 并发通过 HTTP Range 仅读取前 64KB 文件头获取真实内嵌标签（零全量下载）
+        val semaphore = Semaphore(8)
+        val completedCount = AtomicInteger(0)
+        val collectedAudioFiles = coroutineScope {
+            discoveredEntries.map { (item, resolved) ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        coroutineContext.ensureActive()
+                        val audioFile = parseWebDavAudioFile(client, config, item, resolved, context)
+                        val done = completedCount.incrementAndGet()
+                        onProgress?.invoke(done, "正在读取标签 $done/$totalFound：${audioFile.title}")
+                        audioFile
+                    }
+                }
+            }.awaitAll()
+        }
+
+        AppLogger.i(TAG, "WebDAV scan completed, parsed $totalFound audio files. Persisting to repository...")
         onProgress?.invoke(totalFound, "正在写入音乐库...")
 
         val importedCount = if (collectedAudioFiles.isNotEmpty()) {
@@ -211,50 +235,109 @@ object WebDavMediaScanner {
             AppLogger.d(TAG, "WebDAV register credentials skipped: ${e.message}")
         }
 
-        // 2. 纯本地零流量智能拆解：去除音轨序号并精确分离歌手与歌名
-        var cleanName = rawBaseName.trim()
-        val trackPrefixRegex = Regex("""^(\d{1,3})[\s.\-_]+(.+)$""")
-        val trackMatch = trackPrefixRegex.find(cleanName)
-        if (trackMatch != null) {
-            trackNumber = trackMatch.groupValues[1].toIntOrNull() ?: 0
-            cleanName = trackMatch.groupValues[2].trim()
-        }
+        // 1.5 优先通过 HTTP Range 轻量拉取前 64KB 文件头，直接解析真实内嵌标签（FLAC/ID3v2/M4A）
+        // 若本地尚无缓存封面，顺带按 Range 提取内嵌封面写入 webdav_covers，列表页与播放页立刻显示真实封面
+        val needCoverExtract = context != null && coverPath.isBlank()
+        val headerTags = runCatching {
+            WebDavHeaderTagReader.readHeaderTags(
+                client = client,
+                config = config,
+                remoteUrl = safeUrl,
+                fileSizeBytes = item.size,
+                extractCover = needCoverExtract,
+            )
+        }.getOrNull()
 
-        // 智能分离歌手与歌名，支持 " - ", " — ", " -", "- ", "-", "_"
-        val splitDelimiters = listOf(" - ", " — ", " -", "- ", "-", "_")
-        var splitDone = false
-        for (delimiter in splitDelimiters) {
-            if (cleanName.contains(delimiter)) {
-                val parts = cleanName.split(delimiter, limit = 2)
-                if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
-                    artist = parts[0].trim()
-                    title = parts[1].trim()
-                    splitDone = true
-                    break
+        var albumArtist = ""
+        if (headerTags != null) {
+            if (headerTags.title.isNotBlank()) title = headerTags.title
+            if (headerTags.artist.isNotBlank()) artist = headerTags.artist
+            if (headerTags.album.isNotBlank()) album = headerTags.album
+            if (headerTags.albumArtist.isNotBlank()) albumArtist = headerTags.albumArtist
+            if (headerTags.trackNumber > 0) trackNumber = headerTags.trackNumber
+            if (headerTags.durationMs > 0L) durationMs = headerTags.durationMs
+            if (headerTags.sampleRate > 0) sampleRate = headerTags.sampleRate
+            if (headerTags.bitsPerSample > 0) bitsPerSample = headerTags.bitsPerSample
+            if (headerTags.channelCount > 0) channelCount = headerTags.channelCount
+            if (headerTags.bitRateKbps > 0) bitRate = headerTags.bitRateKbps
+            val extractedCover = headerTags.coverBytes
+            if (coverPath.isBlank() && context != null && extractedCover != null && extractedCover.size > 128) {
+                runCatching {
+                    val coverDir = File(context.cacheDir, "webdav_covers")
+                    coverDir.mkdirs()
+                    val coverFile = File(coverDir, "art_${(safeUrl.hashCode().toLong() and 0xFFFFFFFFL)}.jpg")
+                    val tmpFile = File(coverDir, "${coverFile.name}.tmp")
+                    tmpFile.writeBytes(extractedCover)
+                    if (tmpFile.renameTo(coverFile) || (coverFile.exists() && coverFile.length() > 128)) {
+                        coverPath = "file://${coverFile.absolutePath}"
+                    } else {
+                        coverFile.writeBytes(extractedCover)
+                        tmpFile.delete()
+                        coverPath = "file://${coverFile.absolutePath}"
+                    }
                 }
             }
         }
-        if (!splitDone) {
-            title = cleanName
+
+        // 2. 仅当文件头缺少歌名或歌手时，才回退到文件名拆解，并剔除 `_EM` 等常见文件名母带标记后缀
+        val hasTagTitle = headerTags?.title?.isNotBlank() == true
+        val hasTagArtist = headerTags?.artist?.isNotBlank() == true
+        if (!hasTagTitle || !hasTagArtist) {
+            var cleanName = rawBaseName.trim()
+            val trackPrefixRegex = Regex("""^(\d{1,3})[\s.\-_]+(.+)$""")
+            val trackMatch = trackPrefixRegex.find(cleanName)
+            if (trackMatch != null) {
+                if (trackNumber <= 0) {
+                    trackNumber = trackMatch.groupValues[1].toIntOrNull() ?: 0
+                }
+                cleanName = trackMatch.groupValues[2].trim()
+            }
+
+            // 剔除常见的文件名品质后缀（如 _EM / _SQ / _HQ / _HR），避免无标签文件歌名残留脏后缀
+            val qualitySuffixRegex = Regex("""(?i)_(em|sq|hq|hr|hires|flac|master)$""")
+            cleanName = cleanName.replace(qualitySuffixRegex, "").trim()
+
+            // 智能分离歌手与歌名，支持 " - ", " — ", " -", "- ", "-", "_"
+            val splitDelimiters = listOf(" - ", " — ", " -", "- ", "-", "_")
+            var parsedArtist = ""
+            var parsedTitle = cleanName
+            for (delimiter in splitDelimiters) {
+                if (cleanName.contains(delimiter)) {
+                    val parts = cleanName.split(delimiter, limit = 2)
+                    if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
+                        parsedArtist = parts[0].trim()
+                        parsedTitle = parts[1].trim()
+                        break
+                    }
+                }
+            }
+            if (!hasTagTitle && parsedTitle.isNotBlank()) {
+                title = parsedTitle
+            }
+            if (!hasTagArtist && parsedArtist.isNotBlank()) {
+                artist = parsedArtist
+            }
         }
 
-        // 3. 从 WebDAV URL 目录层级推导专辑名与歌手名（完全在本地推导，零网络开销）
-        val decodedSegments = runCatching {
-            val parsedUrl = WebDavUrlTools.toSafeHttpUrl(resolvedUrl)
-            parsedUrl?.pathSegments?.map {
-                URLDecoder.decode(it, StandardCharsets.UTF_8.name())
-            } ?: emptyList()
-        }.getOrDefault(emptyList())
+        // 3. 仅当标签未提供专辑/歌手时，从 WebDAV URL 目录层级兜底推导
+        if (album.isBlank() || artist.isBlank()) {
+            val decodedSegments = runCatching {
+                val parsedUrl = WebDavUrlTools.toSafeHttpUrl(resolvedUrl)
+                parsedUrl?.pathSegments?.map {
+                    URLDecoder.decode(it, StandardCharsets.UTF_8.name())
+                } ?: emptyList()
+            }.getOrDefault(emptyList())
 
-        if (decodedSegments.size >= 2) {
-            val parentFolder = decodedSegments[decodedSegments.size - 2].trim()
-            if (parentFolder.isNotBlank() && !parentFolder.equals("music", ignoreCase = true) && !parentFolder.equals("webdav", ignoreCase = true)) {
-                album = parentFolder
-            }
-            if (artist.isBlank() && decodedSegments.size >= 3) {
-                val grandParentFolder = decodedSegments[decodedSegments.size - 3].trim()
-                if (grandParentFolder.isNotBlank() && !grandParentFolder.equals("music", ignoreCase = true) && !grandParentFolder.equals("webdav", ignoreCase = true)) {
-                    artist = grandParentFolder
+            if (decodedSegments.size >= 2) {
+                val parentFolder = decodedSegments[decodedSegments.size - 2].trim()
+                if (album.isBlank() && parentFolder.isNotBlank() && !parentFolder.equals("music", ignoreCase = true) && !parentFolder.equals("webdav", ignoreCase = true)) {
+                    album = parentFolder
+                }
+                if (artist.isBlank() && decodedSegments.size >= 3) {
+                    val grandParentFolder = decodedSegments[decodedSegments.size - 3].trim()
+                    if (grandParentFolder.isNotBlank() && !grandParentFolder.equals("music", ignoreCase = true) && !grandParentFolder.equals("webdav", ignoreCase = true)) {
+                        artist = grandParentFolder
+                    }
                 }
             }
         }
@@ -274,6 +357,7 @@ object WebDavMediaScanner {
             title = title,
             artist = artist,
             album = album,
+            albumArtist = albumArtist,
             albumId = 0,
             duration = durationMs,
             sampleRate = sampleRate,

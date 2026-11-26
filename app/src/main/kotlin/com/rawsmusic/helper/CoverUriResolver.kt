@@ -119,6 +119,35 @@ class CoverUriResolver(
             return albumArtPath
         }
 
+        val isHttpWebDavTrack = (song.path.startsWith("http://", ignoreCase = true) ||
+            song.path.startsWith("https://", ignoreCase = true)) &&
+            com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.isConfiguredWebDavUrl(song.path)
+
+        if (isHttpWebDavTrack) {
+            val safeUrl = com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver.toSafeUrl(song.path)
+                ?: song.path
+            val scannedCover = File(
+                File(context.cacheDir, "webdav_covers"),
+                "art_${(safeUrl.hashCode().toLong() and 0xFFFFFFFFL)}.jpg"
+            )
+            if (scannedCover.exists() && scannedCover.length() > 128L) {
+                val uri = "file://${scannedCover.absolutePath}"
+                coverKeyCache[cacheKey] = uri
+                return uri
+            }
+            val remoteCover = File(
+                context.cacheDir,
+                "albumart/song_remote_${song.path.hashCode()}_${song.fileSize}.jpg"
+            )
+            if (remoteCover.exists() && remoteCover.length() > 128L) {
+                val uri = "file://${remoteCover.absolutePath}"
+                coverKeyCache[cacheKey] = uri
+                return uri
+            }
+            requestExtraction(song)
+            return ""
+        }
+
         val isOnlineTrack = com.rawsmusic.core.common.model.isOnlineAudioPath(song.path) ||
             com.rawsmusic.core.common.model.isOnlineSongKey(song.path) ||
             song.encodingFormat == com.rawsmusic.module.data.source.playback.MUSIC_SOURCE_ONLINE_ENCODING_MARKER
@@ -236,6 +265,11 @@ class CoverUriResolver(
         }
 
         if (remoteHttp) {
+            if (com.rawsmusic.module.scanner.webdav.WebDavPlaybackCredentialResolver
+                    .extractEmbeddedCoverToFile(path, coverFile)
+            ) {
+                return "file://${coverFile.absolutePath}"
+            }
             val remote = RemoteHttpStreamRegistry.lookup(path) ?: return null
             val resolvedUrl = remote.resolveUrl(path)
             val ret = FFmpegBridge.extractCover(

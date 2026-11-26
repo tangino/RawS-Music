@@ -233,11 +233,17 @@ object LyricReader {
             val info = when {
                 remote != null -> {
                     val resolvedUrl = remote.resolveUrl(songPath)
-                    FFmpegBridge.getMediaInfo(
-                        filePath = resolvedUrl,
-                        headers = remote.resolveHeaders(songPath),
-                        userAgent = remote.userAgent,
-                    )
+                    // 仅当已映射为本地缓存文件时才用 FFmpeg 读取内嵌歌词；
+                    // 对远端 HTTP/WebDAV 流跳过慢速 FFmpeg 探测，立刻交给在线歌词抓取（QQ 优先），避免阻塞歌词加载。
+                    if (resolvedUrl.startsWith("http://", true) || resolvedUrl.startsWith("https://", true)) {
+                        null
+                    } else {
+                        FFmpegBridge.getMediaInfo(
+                            filePath = resolvedUrl,
+                            headers = remote.resolveHeaders(songPath),
+                            userAgent = remote.userAgent,
+                        )
+                    }
                 }
                 remoteHttp -> null
                 else -> FFmpegBridge.getMediaInfo(songPath)

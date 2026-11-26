@@ -60,7 +60,91 @@ object WebDavPlaybackCredentialResolver {
 
     fun sanitizeUrlIfConfigured(url: String): String? = findConfigForUrl(url)?.first
 
+    fun isConfiguredWebDavUrl(url: String): Boolean = findConfigForUrl(url) != null
+
     fun toSafeUrl(url: String): String? = WebDavUrlTools.toSafeHttpUrl(url)?.toString()
+
+    /**
+     * 通过 HTTP Range 轻量提取 WebDAV 音频内嵌封面并写入目标文件（零全量下载、无需 FFmpeg）。
+     */
+    fun extractEmbeddedCoverToFile(url: String, outputFile: java.io.File): Boolean {
+        val (sanitizedUrl, config) = findConfigForUrl(url) ?: return false
+        val safeUrl = toSafeUrl(sanitizedUrl) ?: sanitizedUrl
+        return runCatching {
+            val bytes = WebDavHeaderTagReader.readEmbeddedCoverBytes(
+                client = client,
+                config = config,
+                remoteUrl = safeUrl,
+            ) ?: return false
+            if (bytes.size <= 128) return false
+            outputFile.parentFile?.mkdirs()
+            val tmp = java.io.File(outputFile.parentFile, "${outputFile.name}.tmp")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(outputFile)) {
+                outputFile.writeBytes(bytes)
+                tmp.delete()
+            }
+            outputFile.exists() && outputFile.length() > 128
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 尝试读取 WebDAV 同目录同名 .lrc 侧车歌词（如 `xxx.flac` -> `xxx.lrc`）。
+     * 仅支持已配置的 WebDAV 路径，上限 512KB，自动兼容 UTF-8 / GB18030 编码。
+     */
+    fun fetchSidecarLrc(audioUrl: String): String? {
+        val (sanitizedUrl, config) = findConfigForUrl(audioUrl) ?: return null
+        val noQuery = sanitizedUrl.substringBefore('?').substringBefore('#')
+        val lastDot = noQuery.lastIndexOf('.')
+        val lastSlash = noQuery.lastIndexOf('/')
+        if (lastDot <= lastSlash || lastDot < 0) return null
+        val lrcUrl = noQuery.substring(0, lastDot) + ".lrc"
+        val safeLrcUrl = toSafeUrl(lrcUrl) ?: lrcUrl
+
+        return runCatching {
+            val call = client.openStreamingCall(
+                config = config,
+                remotePath = safeLrcUrl,
+                rangeHeader = null,
+                headOnly = false,
+            )
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val contentType = resp.header("Content-Type").orEmpty().lowercase()
+                if (contentType.contains("text/html")) return null
+                val stream = resp.body?.byteStream() ?: return null
+                val maxBytes = 512 * 1024
+                val out = java.io.ByteArrayOutputStream(8192)
+                val buf = ByteArray(8192)
+                var total = 0
+                while (total < maxBytes) {
+                    val read = stream.read(buf, 0, minOf(buf.size, maxBytes - total))
+                    if (read <= 0) break
+                    out.write(buf, 0, read)
+                    total += read
+                }
+                val bytes = out.toByteArray()
+                if (bytes.isEmpty()) return null
+                decodeSidecarLrcBytes(bytes).takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
+    }
+
+    private fun decodeSidecarLrcBytes(bytes: ByteArray): String {
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        }
+        val utf8Strict = runCatching {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
+        if (utf8Strict != null) return utf8Strict
+        return runCatching { String(bytes, java.nio.charset.Charset.forName("GB18030")) }
+            .getOrElse { String(bytes, Charsets.UTF_8) }
+    }
 
     /**
      * 快速检查本地是否已存在该 WebDAV 歌曲的完整播放缓存文件。
