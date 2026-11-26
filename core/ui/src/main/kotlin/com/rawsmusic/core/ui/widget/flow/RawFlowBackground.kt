@@ -10,6 +10,7 @@ import android.graphics.Shader
 import android.graphics.Color as AndroidColor
 import android.util.LruCache
 import android.util.Log
+import com.rawsmusic.core.ui.widget.bitmaps.BitmapProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -182,6 +183,13 @@ private const val FLOW_EXTRACT_SIZE = 96
 private val FLOW_GLOBAL_EPOCH_NS = System.nanoTime()
 private val FLOW_PALETTE_RETRY_DELAYS_MS = longArrayOf(0L, 420L, 1400L)
 private val flowPaletteCache = LruCache<String, List<Color>>(48)
+/** 记录缓存色板对应的可见封面位图签名，避免封面异步加载/替换后仍命中旧图的色板。 */
+private val flowPaletteSourceCache = LruCache<String, Long>(48)
+
+private fun visibleBitmapSignature(bitmap: AndroidBitmap?): Long? {
+    val usable = bitmap?.takeUnless { it.isRecycled } ?: return null
+    return (System.identityHashCode(usable).toLong() shl 32) xor (usable.generationId.toLong() and 0xffffffffL)
+}
 
 private object RawFlowPaletteRuntimeState {
     var revision by mutableIntStateOf(0)
@@ -194,6 +202,7 @@ private object RawFlowPaletteRuntimeState {
 
 fun clearRawFlowMemoryCache() {
     flowPaletteCache.evictAll()
+    flowPaletteSourceCache.evictAll()
     RawFlowPaletteRuntimeState.bump()
     clearRawAlbumColorMemoryCache()
     clearRawStaticArtworkCache()
@@ -633,14 +642,17 @@ internal suspend fun loadRawFlowEndpointColors(
         return fallbackColors
     }
     val cacheKey = flowPaletteCacheKey(mode, isSystemDark, sourceCoverKey, backgroundStyle)
-    flowPaletteCache.get(cacheKey)?.let { cached ->
-        return cached
+    val supplied = sourceArtwork?.takeUnless { it.isRecycled }
+    val suppliedSig = visibleBitmapSignature(supplied)
+    val cachedPalette = flowPaletteCache.get(cacheKey)
+    val cachedSig = flowPaletteSourceCache.get(cacheKey)
+    if (cachedPalette != null && (suppliedSig == null || cachedSig == suppliedSig)) {
+        return cachedPalette
     }
 
-    val supplied = sourceArtwork?.takeUnless { it.isRecycled }
-    val bitmap = resolveRawFlowPixelAnalysisBitmap(context, sourceCoverKey, supplied)
-    val completed = bitmap?.takeUnless { it.isRecycled }?.let { artwork ->
-        run {
+    val (bitmap, ownsCopy) = resolveRawFlowPixelAnalysisBitmap(context, sourceCoverKey, supplied)
+    val completed = try {
+        bitmap?.takeUnless { it.isRecycled }?.let { artwork ->
             withContext(Dispatchers.Default) {
                 extractRawBackgroundColors(
                     bitmap = artwork,
@@ -652,34 +664,54 @@ internal suspend fun loadRawFlowEndpointColors(
                 }
             }
         }
+    } finally {
+        if (ownsCopy && bitmap != null && !bitmap.isRecycled) {
+            bitmap.recycle()
+        }
     }
     if (completed != null) {
         flowPaletteCache.put(cacheKey, completed)
+        if (suppliedSig != null) {
+            flowPaletteSourceCache.put(cacheKey, suppliedSig)
+        }
         RawFlowPaletteRuntimeState.bump()
         return completed
     }
     // Do not cache fallback as the artwork's palette. A prefetched neighbour may still be a
     // synthetic holder on the first frame and upgrade to the exact bitmap later.
-    return fallbackColors
+    return cachedPalette ?: fallbackColors
 }
 
+/**
+ * 解析用于取色的软件可读位图：
+ * - 优先使用当前屏幕真正显示的可见封面（若为 HARDWARE Bitmap 则在后台线程拷贝一次 ARGB_8888 并在取色后回收），
+ *   确保背景色与眼前封面像素 100% 一致；
+ * - 无可见位图时再回退到 ArtworkBitmapRuntime 按 key 解码。
+ */
 private suspend fun resolveRawFlowPixelAnalysisBitmap(
     context: Context,
     sourceCoverKey: String,
     supplied: AndroidBitmap?,
-): AndroidBitmap? {
+): Pair<AndroidBitmap?, Boolean> {
     val usable = supplied?.takeUnless { it.isRecycled }
-    if (
-        usable != null &&
-        !(android.os.Build.VERSION.SDK_INT >= 26 && usable.config == AndroidBitmap.Config.HARDWARE)
-    ) {
-        return usable
+    if (usable != null) {
+        val isHardware = android.os.Build.VERSION.SDK_INT >= 26 &&
+            usable.config == AndroidBitmap.Config.HARDWARE
+        if (!isHardware) {
+            return usable to false
+        }
+        val softwareCopy = withContext(Dispatchers.Default) {
+            runCatching { usable.copy(AndroidBitmap.Config.ARGB_8888, false) }.getOrNull()
+        }
+        if (softwareCopy != null && !softwareCopy.isRecycled) {
+            return softwareCopy to true
+        }
     }
     return ArtworkBitmapRuntime.executePixelAnalysisBitmap(
         context = context,
         key = sourceCoverKey,
         targetSide = FLOW_EXTRACT_SIZE,
-    )
+    ) to false
 }
 
 internal class RawFlowAaLiveSlots {
@@ -750,10 +782,10 @@ internal class RawFlowAaLiveSlots {
         secondaryReadyAtProgress = 0f
     }
 
-    fun updateCurrentIfIdle(key: String?, endpoint: List<Color>) {
+    fun updateCurrentIfIdle(key: String?, endpoint: List<Color>, forceFromVisibleArtwork: Boolean = false) {
         if (key != currentKey ||
             secondaryKey != null ||
-            currentEndpointLocked ||
+            (currentEndpointLocked && !forceFromVisibleArtwork) ||
             endpoint.isEmpty() ||
             endpoint == currentEndpoint
         ) return
@@ -920,6 +952,8 @@ fun RawFlowTransitionBackground(
     }
 
     val tuningRevision = RawFlowTuningState.revision
+    val artworkRevision = BitmapProvider.artworkRevision
+    val paletteRevision = RawFlowPaletteRuntimeState.revision
     val motionSpeed = RawFlowTuningState.speed
     val saturationScale = RawFlowTuningState.saturation
     val brightnessScale = RawFlowTuningState.brightness
@@ -934,7 +968,7 @@ fun RawFlowTransitionBackground(
      * until commit; commit remains only an ownership swap.
      */
     val scene = remember(flowMode, isSystemDark) { RawFlowAaLiveSlots() }
-    val currentMemoryEndpoint = remember(flowMode, isSystemDark, currentCoverKey, runtimeRevision) {
+    val currentMemoryEndpoint = remember(flowMode, isSystemDark, currentCoverKey, runtimeRevision, paletteRevision) {
         resolveFlowColorsFromMemory(
             context = context,
             sourceCoverKey = currentCoverKey,
@@ -953,6 +987,7 @@ fun RawFlowTransitionBackground(
         targetCoverKey,
         currentCoverKey,
         runtimeRevision,
+        paletteRevision,
         scene.revision,
     ) {
         if (!hasSecondaryIdentity) {
@@ -1027,21 +1062,27 @@ fun RawFlowTransitionBackground(
         flowMode,
         isSystemDark,
         runtimeRevision,
+        artworkRevision,
         deferHeavyEndpointWork,
     ) {
         if (deferHeavyEndpointWork) return@LaunchedEffect
         val requestedKey = currentCoverKey
+        val suppliedCurrentArtwork = currentArtwork?.takeUnless { it.isRecycled }
         val loaded = loadRawFlowEndpointColors(
             context = context,
             sourceCoverKey = requestedKey,
-            sourceArtwork = currentArtwork,
+            sourceArtwork = suppliedCurrentArtwork,
             mode = flowMode,
             isSystemDark = isSystemDark,
             fallbackColors = scene.currentEndpoint.ifEmpty { currentMemoryEndpoint },
             backgroundStyle = RawBackgroundStyle.FLOW,
             traceLane = "current",
         )
-        scene.updateCurrentIfIdle(requestedKey, loaded)
+        scene.updateCurrentIfIdle(
+            key = requestedKey,
+            endpoint = loaded,
+            forceFromVisibleArtwork = suppliedCurrentArtwork != null,
+        )
     }
     LaunchedEffect(
         targetCoverKey,
@@ -1049,6 +1090,7 @@ fun RawFlowTransitionBackground(
         flowMode,
         isSystemDark,
         runtimeRevision,
+        artworkRevision,
         deferHeavyEndpointWork,
     ) {
         val requestedKey = targetCoverKey?.takeIf { hasSecondaryIdentity } ?: return@LaunchedEffect
@@ -1302,6 +1344,7 @@ fun RawFlowBackground(
             ) ?: inheritedColors
         }
     }
+    val artworkRevision = BitmapProvider.artworkRevision
     var targetColors by remember(flowMode, isSystemDark, sourceCoverKey, backgroundStyle) {
         mutableStateOf(initialColors)
     }
@@ -1309,6 +1352,7 @@ fun RawFlowBackground(
     LaunchedEffect(
         flowMode,
         runtimeRevision,
+        artworkRevision,
         sourceCoverKey,
         providerArtwork,
         fallbackColors,
@@ -1332,13 +1376,16 @@ fun RawFlowBackground(
             return@LaunchedEffect
         }
 
-        flowPaletteCache.get(paletteCacheKey)?.let { cached ->
-            targetColors = cached
+        val suppliedSig = visibleBitmapSignature(providerArtwork)
+        val cachedPalette = flowPaletteCache.get(paletteCacheKey)
+        val cachedSig = flowPaletteSourceCache.get(paletteCacheKey)
+        if (cachedPalette != null && (suppliedSig == null || cachedSig == suppliedSig)) {
+            targetColors = cachedPalette
             PowerTraceLogger.flowPalette(
                 stage = "cache_hit",
                 mode = flowMode.prefValue,
                 source = "flowPaletteCache",
-                colorCount = cached.size,
+                colorCount = cachedPalette.size,
                 elapsedMs = SystemClock.elapsedRealtime() - paletteStartMs,
                 coverKey = sourceCoverKey
             )
@@ -1346,40 +1393,49 @@ fun RawFlowBackground(
         }
 
         var appliedAlbumPalette = false
-        val bitmap = resolveRawFlowPixelAnalysisBitmap(
+        val (bitmap, ownsCopy) = resolveRawFlowPixelAnalysisBitmap(
             context = context,
             sourceCoverKey = sourceCoverKey,
             supplied = providerArtwork,
         )
-        if (bitmap != null && !bitmap.isRecycled) {
-            val completed = withContext(Dispatchers.Default) {
-                extractRawBackgroundColors(
-                    bitmap = bitmap,
-                    backgroundStyle = backgroundStyle,
-                    mode = flowMode,
-                    isSystemDark = isSystemDark,
-                ).takeIf { it.isNotEmpty() }?.let { extracted ->
-                    finalizeExtractedBackgroundColors(
-                        extracted,
-                        fallbackColors,
-                        backgroundStyle,
-                    )
+        val completed = try {
+            bitmap?.takeUnless { it.isRecycled }?.let { artwork ->
+                withContext(Dispatchers.Default) {
+                    extractRawBackgroundColors(
+                        bitmap = artwork,
+                        backgroundStyle = backgroundStyle,
+                        mode = flowMode,
+                        isSystemDark = isSystemDark,
+                    ).takeIf { it.isNotEmpty() }?.let { extracted ->
+                        finalizeExtractedBackgroundColors(
+                            extracted,
+                            fallbackColors,
+                            backgroundStyle,
+                        )
+                    }
                 }
             }
-            if (completed != null) {
-                flowPaletteCache.put(paletteCacheKey, completed)
-                RawFlowPaletteRuntimeState.bump()
-                targetColors = completed
-                appliedAlbumPalette = true
-                PowerTraceLogger.flowPalette(
-                    stage = "memory_hit",
-                    mode = flowMode.prefValue,
-                    source = "Coil",
-                    colorCount = completed.size,
-                    elapsedMs = SystemClock.elapsedRealtime() - paletteStartMs,
-                    coverKey = sourceCoverKey
-                )
+        } finally {
+            if (ownsCopy && bitmap != null && !bitmap.isRecycled) {
+                bitmap.recycle()
             }
+        }
+        if (completed != null) {
+            flowPaletteCache.put(paletteCacheKey, completed)
+            if (suppliedSig != null) {
+                flowPaletteSourceCache.put(paletteCacheKey, suppliedSig)
+            }
+            RawFlowPaletteRuntimeState.bump()
+            targetColors = completed
+            appliedAlbumPalette = true
+            PowerTraceLogger.flowPalette(
+                stage = "memory_hit",
+                mode = flowMode.prefValue,
+                source = "Coil",
+                colorCount = completed.size,
+                elapsedMs = SystemClock.elapsedRealtime() - paletteStartMs,
+                coverKey = sourceCoverKey
+            )
         }
 
         if (!appliedAlbumPalette) {

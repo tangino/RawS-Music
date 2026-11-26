@@ -609,5 +609,7 @@
     <string name="online_plaza_guess_like_btn">Start Radio</string>
     <string name="online_plaza_guess_like_loading">Generating personalized radio…</string>
     <string name="online_plaza_guess_like_success">Radio started with endless queue</string>
+    <string name="home_fullscreen_enter">Fullscreen</string>
+    <string name="home_fullscreen_exit">Exit fullscreen</string>
 
 </resources>

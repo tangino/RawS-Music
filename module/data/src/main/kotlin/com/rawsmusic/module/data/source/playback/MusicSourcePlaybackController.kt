@@ -3,6 +3,7 @@ package com.rawsmusic.module.data.source.playback
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes as Media3AudioAttributes
 import androidx.media3.common.C
@@ -130,6 +131,10 @@ object MusicSourcePlaybackController {
     @Volatile
     var externalPcmDspHook: ExternalPcmDspHook? = null
     private var exoProgressJob: Job? = null
+    @Volatile
+    private var pendingSeekTargetMs: Long = -1L
+    @Volatile
+    private var pendingSeekUntilMs: Long = 0L
     private var mediaFallbackJob: Job? = null
     private var preloadJob: Job? = null
     private val preloadedResolvedMap = java.util.concurrent.ConcurrentHashMap<String, RawResolvedAudioSource>()
@@ -463,9 +468,12 @@ object MusicSourcePlaybackController {
         val maxDur = mutableSnapshot.value.durationMs.coerceAtLeast(0L)
         val target = if (maxDur > 0L) positionMs.coerceIn(0L, maxDur) else positionMs.coerceAtLeast(0L)
         if (isMedia3Active()) {
+            pendingSeekTargetMs = target
+            pendingSeekUntilMs = SystemClock.elapsedRealtime() + 1_500L
             runOnMainThread {
                 val player = exoPlayer ?: return@runOnMainThread
                 runCatching { player.seekTo(target) }.onFailure {
+                    pendingSeekTargetMs = -1L
                     AppLogger.w(TAG, "${OnlinePlaybackDiagnostics.PREFIX} EXO_SEEK_FAIL generation=$exoPlayerGeneration targetMs=$target", it)
                 }
             }
@@ -1496,7 +1504,8 @@ object MusicSourcePlaybackController {
                 if (state.currentItem == null) break
                 val rawDur = player.duration
                 val duration = if (rawDur != C.TIME_UNSET && rawDur > 0L) rawDur else state.durationMs
-                val pos = player.currentPosition.coerceAtLeast(0L)
+                val rawPos = player.currentPosition.coerceAtLeast(0L)
+                val pos = resolveStableExoPosition(rawPos, state.positionMs)
                 mutableSnapshot.value = state.copy(
                     positionMs = if (duration > 0L) pos.coerceAtMost(duration) else pos,
                     durationMs = duration.coerceAtLeast(0L),
@@ -1507,9 +1516,22 @@ object MusicSourcePlaybackController {
         }
     }
 
+    /** 过滤 ExoPlayer 异步 seek 尚未落地前的滞后旧位置，避免拖动进度条松手瞬间进度条闪回旧位置抽搐。 */
+    private fun resolveStableExoPosition(rawPosMs: Long, fallbackPosMs: Long): Long {
+        val target = pendingSeekTargetMs
+        if (target < 0L) return rawPosMs
+        if (kotlin.math.abs(rawPosMs - target) <= 1_500L || SystemClock.elapsedRealtime() >= pendingSeekUntilMs) {
+            pendingSeekTargetMs = -1L
+            return rawPosMs
+        }
+        return fallbackPosMs
+    }
+
     private fun releaseExoPlayer() {
         exoProgressJob?.cancel()
         exoProgressJob = null
+        pendingSeekTargetMs = -1L
+        pendingSeekUntilMs = 0L
         mediaFallbackJob?.cancel()
         mediaFallbackJob = null
         val playerToRelease = exoPlayer

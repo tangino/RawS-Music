@@ -961,6 +961,7 @@ class MainActivity : ComponentActivity() {
         )
     }
     private val systemBarsHelper by lazy { SystemBarsHelper(this) }
+    private var isFullscreenMode by mutableStateOf(false)
     private val audioPermissionHelper by lazy { AudioPermissionHelper(this) }
     private val playerServiceBridgeHelper by lazy {
         PlayerServiceBridgeHelper(
@@ -2419,6 +2420,8 @@ class MainActivity : ComponentActivity() {
             onSettingsClick = {
                 launchSettingsActivity(com.rawsmusic.ui.settings.SettingsActivity::class.java)
             },
+            isFullscreen = isFullscreenMode,
+            onToggleFullscreen = { toggleFullscreenMode() },
             onAudioEffectsClick = {
                 launchSettingsActivity(com.rawsmusic.ui.settings.AudioEffectsActivity::class.java)
             },
@@ -4804,10 +4807,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupEdgeToEdge() {
+        isFullscreenMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.isFullscreenMode
         systemBarsHelper.setupEdgeToEdge(isDarkMode)
-        systemBarsHelper.setStatusBarHidden(
-            com.rawsmusic.module.data.prefs.AppPreferences.UI.isStatusBarHidden
+        applySystemBarsVisibility()
+    }
+
+    private fun applySystemBarsVisibility() {
+        systemBarsHelper.setFullscreenMode(
+            fullscreen = isFullscreenMode,
+            statusBarHidden = com.rawsmusic.module.data.prefs.AppPreferences.UI.isStatusBarHidden,
         )
+    }
+
+    private fun toggleFullscreenMode() {
+        val next = !isFullscreenMode
+        isFullscreenMode = next
+        com.rawsmusic.module.data.prefs.AppPreferences.UI.isFullscreenMode = next
+        applySystemBarsVisibility()
     }
 
     /** Delegates predictive-back ownership to the standalone scene coordinator. */
@@ -5034,9 +5050,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         visualizerActivityResumed = true
-        systemBarsHelper.setStatusBarHidden(
-            com.rawsmusic.module.data.prefs.AppPreferences.UI.isStatusBarHidden
-        )
+        isFullscreenMode = com.rawsmusic.module.data.prefs.AppPreferences.UI.isFullscreenMode
+        applySystemBarsVisibility()
         UsbStatusNoticeBus.attach(usbStatusNoticeListener)
         activityForegroundForPower = true
         composeActivityForeground = true
@@ -5181,9 +5196,7 @@ class MainActivity : ComponentActivity() {
             // pausing/resuming this Activity, so onResume() is not a reliable restoration point.
             // Re-assert the persisted policy when the app window owns focus again. The helper also
             // uses transient-bars-by-swipe, so a normal top-edge peek remains accessible.
-            systemBarsHelper.setStatusBarHidden(
-                com.rawsmusic.module.data.prefs.AppPreferences.UI.isStatusBarHidden
-            )
+            applySystemBarsVisibility()
         }
         runtimeLifecycleCoordinator.onWindowFocusChanged(hasFocus)
     }

@@ -695,6 +695,11 @@ object AppPreferences {
             get() = kv.decodeBool("ui_status_bar_hidden", false)
             set(value) { kv.encode("ui_status_bar_hidden", value) }
 
+        /** 大屏设备全屏显示模式（同时隐藏状态栏与导航栏，边缘滑动临时呼出）。 */
+        var isFullscreenMode: Boolean
+            get() = kv.decodeBool("ui_fullscreen_mode", false)
+            set(value) { kv.encode("ui_fullscreen_mode", value) }
+
 
         /** Animate overflowing labels in player surfaces. */
         var animateLongLabels: Boolean

@@ -1783,6 +1783,9 @@ private fun StandardPlayerLyricStack(
     var playerLyricTitleBoundsInRoot by remember {
         mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
     }
+    var playerMiddleColumnBoundsInRoot by remember {
+        mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
+    }
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -2102,6 +2105,7 @@ private fun StandardPlayerLyricStack(
         val latestMainPlayerTransition by rememberUpdatedState(mainPlayerTransition)
         val latestPlayerLyricTransition by rememberUpdatedState(playerLyricTransition)
         val latestQueueVisible by rememberUpdatedState(queueVisible)
+        val latestMiddleColumnBoundsInRoot by rememberUpdatedState(playerMiddleColumnBoundsInRoot)
         val latestSceneGestureSuspended by rememberUpdatedState(sceneGestureSuspended)
         val latestSheetDragStart by rememberUpdatedState(onPlayerCoverSwipeDownStart)
         val latestSheetDragProgress by rememberUpdatedState(onPlayerCoverSwipeDownProgress)
@@ -2143,10 +2147,14 @@ private fun StandardPlayerLyricStack(
                     // that hit-region rule so MAIN content revealed during a transition remains
                     // immediately scrollable instead of becoming a full-screen recapture zone.
                     val downHitsCurrentSheet = down.position.y >= sheetTopAtDown
+                    // 大屏三栏播放页展开中间播放列表时，落在该可滚动列表内的手势必须完全交给列表滚动，
+                    // 不得被外层 Initial 通道抢占触发整个播放页下拉返回。
+                    val downHitsMiddleColumn = latestMiddleColumnBoundsInRoot?.contains(down.position) == true
                     val enabledAtDown =
                         !latestPlayerLyricTransition &&
                             !latestQueueVisible &&
                             !latestSceneGestureSuspended &&
+                            !downHitsMiddleColumn &&
                             downHitsCurrentSheet &&
                             (latestSheetCurrentScene == PlayerSceneController.Scene.PLAYER ||
                                 latestMainPlayerTransition)
@@ -2752,6 +2760,11 @@ private fun StandardPlayerLyricStack(
                 onLyricSwipeTitleBoundsChanged = { bounds ->
                     if (!prewarmOnly && playerLyricTitleBoundsInRoot != bounds) {
                         playerLyricTitleBoundsInRoot = bounds
+                    }
+                },
+                onMiddleColumnBoundsChanged = { bounds ->
+                    if (!prewarmOnly && playerMiddleColumnBoundsInRoot != bounds) {
+                        playerMiddleColumnBoundsInRoot = bounds
                     }
                 },
                 showAlbumArt = !mainArtworkOwnerActive && !artworkOverlayOwnsEndpoints,

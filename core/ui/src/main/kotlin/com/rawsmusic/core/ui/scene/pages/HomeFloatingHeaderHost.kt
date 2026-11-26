@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarsPadding
 import com.rawsmusic.core.ui.systemui.rawStableStatusBarTopPadding
 import com.rawsmusic.core.ui.scene.LocalRawWindowLayoutProfile
+import com.rawsmusic.core.ui.scene.RawWindowWidthClass
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -112,9 +113,11 @@ internal class HomeFloatingHeaderRegistration(
     val revealProgress: State<Float>,
     val sourceCoverKey: State<String?>,
     val showSettingsShortcut: State<Boolean>,
+    val isFullscreen: State<Boolean>,
     val onMenuClick: State<() -> Unit>,
     val onFlowBackgroundClick: State<() -> Unit>,
     val onSettingsClick: State<() -> Unit>,
+    val onToggleFullscreen: State<(() -> Unit)?>,
 )
 
 internal val LocalHomeFloatingHeaderController =
@@ -126,9 +129,11 @@ internal fun PublishHomeFloatingHeader(
     virtualListState: ComposeVirtualListState?,
     scrollState: ScrollState?,
     showSettingsShortcut: Boolean,
+    isFullscreen: Boolean = false,
     onMenuClick: () -> Unit,
     onFlowBackgroundClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onToggleFullscreen: (() -> Unit)? = null,
 ) {
     val controller = LocalHomeFloatingHeaderController.current ?: return
     val density = LocalDensity.current
@@ -148,17 +153,21 @@ internal fun PublishHomeFloatingHeader(
     }
     val coverKey = rememberUpdatedState(sourceCoverKey)
     val settingsVisible = rememberUpdatedState(showSettingsShortcut)
+    val fullscreenState = rememberUpdatedState(isFullscreen)
     val menuClick = rememberUpdatedState(onMenuClick)
     val flowClick = rememberUpdatedState(onFlowBackgroundClick)
     val settingsClick = rememberUpdatedState(onSettingsClick)
+    val toggleFullscreen = rememberUpdatedState(onToggleFullscreen)
     val registration = remember(progress) {
         HomeFloatingHeaderRegistration(
             revealProgress = progress,
             sourceCoverKey = coverKey,
             showSettingsShortcut = settingsVisible,
+            isFullscreen = fullscreenState,
             onMenuClick = menuClick,
             onFlowBackgroundClick = flowClick,
             onSettingsClick = settingsClick,
+            onToggleFullscreen = toggleFullscreen,
         )
     }
 
@@ -314,6 +323,9 @@ internal fun BoxScope.HomeFloatingHeaderHost(
     val settingsInteraction = rememberHomeFloatingInteractionState(
         longPressSpringEnabled = options.floatingLongPressSpringEnabled,
     )
+    val fullscreenInteraction = rememberHomeFloatingInteractionState(
+        longPressSpringEnabled = options.floatingLongPressSpringEnabled,
+    )
 
     val actionContentColor = if (mainButtonsSurface == LibraryBottomButtonsSurface.SOLID) {
         MiuixTheme.colorScheme.onSurface
@@ -397,6 +409,12 @@ internal fun BoxScope.HomeFloatingHeaderHost(
             }
 
             val showSettings = registration.showSettingsShortcut.value
+            val toggleFullscreenAction = registration.onToggleFullscreen.value
+            val showFullscreenAction =
+                windowLayoutProfile.widthClass.ordinal >= RawWindowWidthClass.Medium.ordinal &&
+                    toggleFullscreenAction != null
+            val isFullscreen = registration.isFullscreen.value
+            val rightSlotCount = 1 + (if (showSettings) 1 else 0) + (if (showFullscreenAction) 1 else 0)
             HomeFloatingGlassGroup(
                 revealProgress = revealProgress,
                 backdrop = backdrop,
@@ -404,8 +422,9 @@ internal fun BoxScope.HomeFloatingHeaderHost(
                 displacementEnabled = options.floatingPressDisplacementEnabled,
                 primaryInteraction = flowInteraction,
                 secondaryInteraction = settingsInteraction.takeIf { showSettings },
-                shape = if (showSettings) RoundedCornerShape(24.dp) else CircleShape,
-                width = if (showSettings) 96.dp else 48.dp,
+                tertiaryInteraction = fullscreenInteraction.takeIf { showFullscreenAction },
+                shape = if (rightSlotCount > 1) RoundedCornerShape(24.dp) else CircleShape,
+                width = (rightSlotCount * 48).dp,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .onGloballyPositioned { coordinates ->
@@ -447,6 +466,24 @@ internal fun BoxScope.HomeFloatingHeaderHost(
                                 contentDescription = stringResource(R.string.bottom_nav_settings),
                                 tint = actionContentColor,
                                 modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    }
+                    if (showFullscreenAction && toggleFullscreenAction != null) {
+                        HomeFloatingActionSlot(
+                            interaction = fullscreenInteraction,
+                            onClick = toggleFullscreenAction,
+                            enabled = !activeHomeTransition,
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (isFullscreen) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen
+                                ),
+                                contentDescription = stringResource(
+                                    if (isFullscreen) R.string.home_fullscreen_exit else R.string.home_fullscreen_enter
+                                ),
+                                tint = actionContentColor,
+                                modifier = Modifier.size(22.dp),
                             )
                         }
                     }
@@ -512,6 +549,7 @@ private fun HomeFloatingGlassGroup(
     displacementEnabled: Boolean,
     primaryInteraction: HomeFloatingInteractionState,
     secondaryInteraction: HomeFloatingInteractionState? = null,
+    tertiaryInteraction: HomeFloatingInteractionState? = null,
     shape: Shape,
     width: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
@@ -524,15 +562,19 @@ private fun HomeFloatingGlassGroup(
                 clip = false
                 val primaryTouch = primaryInteraction.highlight.pressProgress
                 val secondaryTouch = secondaryInteraction?.highlight?.pressProgress ?: 0f
-                val activeInteraction = if (secondaryTouch > primaryTouch) {
-                    secondaryInteraction ?: primaryInteraction
-                } else {
-                    primaryInteraction
+                val tertiaryTouch = tertiaryInteraction?.highlight?.pressProgress ?: 0f
+                val activeInteraction = when {
+                    tertiaryTouch >= secondaryTouch && tertiaryTouch > primaryTouch ->
+                        tertiaryInteraction ?: primaryInteraction
+                    secondaryTouch > primaryTouch ->
+                        secondaryInteraction ?: primaryInteraction
+                    else -> primaryInteraction
                 }
-                val touchProgress = maxOf(primaryTouch, secondaryTouch).coerceIn(0f, 1f)
+                val touchProgress = maxOf(primaryTouch, secondaryTouch, tertiaryTouch).coerceIn(0f, 1f)
                 val longProgress = maxOf(
                     primaryInteraction.longPressProgress,
                     secondaryInteraction?.longPressProgress ?: 0f,
+                    tertiaryInteraction?.longPressProgress ?: 0f,
                 ).coerceIn(0f, 1f)
                 val height = size.height.coerceAtLeast(1f)
                 val widthPx = size.width.coerceAtLeast(1f)
@@ -563,8 +605,10 @@ private fun HomeFloatingGlassGroup(
             interactionProgress = maxOf(
                 primaryInteraction.highlight.pressProgress,
                 secondaryInteraction?.highlight?.pressProgress ?: 0f,
+                tertiaryInteraction?.highlight?.pressProgress ?: 0f,
                 primaryInteraction.longPressProgress,
                 secondaryInteraction?.longPressProgress ?: 0f,
+                tertiaryInteraction?.longPressProgress ?: 0f,
             ).coerceIn(0f, 1f),
             backdrop = backdrop,
             surface = surface,

@@ -269,6 +269,7 @@ fun PlayerMainPage(
     onArtworkAnchorChanged: (PlayerLyricsArtworkAnchor?) -> Unit = {},
     onArtworkLayoutBoundsChanged: (Rect?) -> Unit = {},
     onLyricSwipeTitleBoundsChanged: (Rect?) -> Unit = {},
+    onMiddleColumnBoundsChanged: (Rect?) -> Unit = {},
     artworkCornerRadiusDp: Float = STANDARD_PLAYER_ARTWORK_CORNER_RADIUS_DP,
     showAlbumArt: Boolean = true,
     renderBackdrop: Boolean = true,
@@ -606,6 +607,14 @@ fun PlayerMainPage(
                         )
                     }
                 }
+                DisposableEffect(middleExpanded) {
+                    if (!middleExpanded) {
+                        onMiddleColumnBoundsChanged(null)
+                    }
+                    onDispose {
+                        onMiddleColumnBoundsChanged(null)
+                    }
+                }
                 if (middleExpanded) {
                     Spacer(Modifier.width(16.dp))
                     PlayerLibraryMiddleColumn(
@@ -623,7 +632,10 @@ fun PlayerMainPage(
                         chipBackgroundColor = queueTone.chipBackground,
                         modifier = Modifier
                             .weight(0.35f)
-                            .fillMaxHeight(),
+                            .fillMaxHeight()
+                            .onGloballyPositioned { coords ->
+                                onMiddleColumnBoundsChanged(coords.boundsInRoot())
+                            },
                     )
                     Spacer(Modifier.width(16.dp))
                 } else {

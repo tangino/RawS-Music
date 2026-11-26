@@ -216,6 +216,8 @@ fun HomePage(
     onSearchClick: () -> Unit,
     showSettingsShortcut: Boolean = false,
     onSettingsClick: () -> Unit = {},
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null,
     onHeaderMenuActionOverride: (() -> Unit)? = null,
     headerOptions: HomeHeaderOptionsState = rememberHomeHeaderOptionsState(),
     homeCardLayoutState: HomeCardLayoutState = rememberHomeCardLayoutState(),
@@ -456,9 +458,11 @@ fun HomePage(
                     externalLibraryOwner && virtualListProvider != null
                 },
                 showSettingsShortcut = showSettingsShortcut,
+                isFullscreen = isFullscreen,
                 onMenuClick = onHeaderMenuActionOverride ?: { showHeaderMenuDialog = true },
                 onFlowBackgroundClick = { showFlowModeDialog = true },
                 onSettingsClick = onSettingsClick,
+                onToggleFullscreen = onToggleFullscreen,
             )
         }
 

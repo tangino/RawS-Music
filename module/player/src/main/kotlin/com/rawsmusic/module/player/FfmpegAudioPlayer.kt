@@ -4042,11 +4042,20 @@ class FfmpegAudioPlayer(private val context: Context) {
     }
 
     private fun initDspEngine() {
-        dspRuntimeCoordinator.init(wavSampleRate, wavChannels)
+        synchronized(externalDspLock) {
+            dspRuntimeCoordinator.init(wavSampleRate, wavChannels)
+            // 本地管线已按自身采样率/声道重配 NativeDSPEngine，清空外部网络桥接缓存避免后续切回网络歌误命中旧采样率
+            externalDspSampleRate = 0
+            externalDspChannels = 0
+        }
     }
 
     private fun releaseDspEngine() {
-        dspRuntimeCoordinator.release()
+        synchronized(externalDspLock) {
+            dspRuntimeCoordinator.release()
+            externalDspSampleRate = 0
+            externalDspChannels = 0
+        }
     }
 
     private fun usbNeedsS32ToPacked24(runtime: UsbAudioEngine.UsbRuntimeFormat): Boolean {

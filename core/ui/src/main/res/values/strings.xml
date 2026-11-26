@@ -527,6 +527,8 @@
     <string name="immersive_waveform_climax_color">高潮段</string>
     <!-- Flow background -->
     <string name="flow_background_action">流光背景</string>
+    <string name="home_fullscreen_enter">全屏显示</string>
+    <string name="home_fullscreen_exit">退出全屏</string>
     <string name="flow_background_dialog_title">流光背景</string>
     <string name="flow_background_dialog_summary">选择主界面和列表页使用的流光配色。</string>
     <string name="album_color_background_dialog_title">专辑取色</string>

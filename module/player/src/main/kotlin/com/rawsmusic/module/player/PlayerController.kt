@@ -1020,9 +1020,19 @@ class PlayerController private constructor(context: Context) {
             cueEndMs = { cachedCueEndMs },
             cueSongDurationMs = { cachedSongDuration },
             displayedPositionMs = { _position.value },
-            setDisplayedPositionMs = { _position.value = it },
+            setDisplayedPositionMs = {
+                // Media3 接管在线流播放时由 MusicSourcePlaybackController.snapshot 独占发布进度，
+                // 严禁 ffmpegPlayer 的 20Hz 轮询把 0 或上一首本地歌旧位置反向覆盖回来造成进度条抽搐
+                if (!MusicSourcePlaybackController.isMedia3Active()) {
+                    _position.value = it
+                }
+            },
             displayedDurationMs = { _duration.value },
-            setDisplayedDurationMs = { _duration.value = it },
+            setDisplayedDurationMs = {
+                if (!MusicSourcePlaybackController.isMedia3Active()) {
+                    _duration.value = it
+                }
+            },
             currentSong = { _currentSong.value },
             onProgress = playbackStatsTracker::onProgress,
             shouldSyncUsbMediaIdentity = {
@@ -1096,6 +1106,8 @@ class PlayerController private constructor(context: Context) {
             MusicSourcePlaybackController.snapshot.collect { snapshot ->
                 val media3Active = MusicSourcePlaybackController.isMedia3Active()
                 if (media3Active) {
+                    // Media3 接管在线播放时停掉 ffmpegPlayer 的 20Hz 进度轮询，彻底消除双源写入竞态
+                    stopProgressUpdate()
                     if (snapshot.durationMs > 0L && _duration.value != snapshot.durationMs) {
                         _duration.value = snapshot.durationMs
                     }
@@ -8058,6 +8070,10 @@ class PlayerController private constructor(context: Context) {
     }
 
     private fun startProgressUpdate() {
+        if (MusicSourcePlaybackController.isMedia3Active()) {
+            stopProgressUpdate()
+            return
+        }
         playbackProgressController.start()
     }
 

@@ -2,6 +2,7 @@ package com.rawsmusic.helper
 
 import android.app.Activity
 import android.os.Build
+import android.view.WindowManager
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -23,6 +24,32 @@ class SystemBarsHelper(
             controller.hide(WindowInsetsCompat.Type.statusBars())
         } else {
             controller.show(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
+    /**
+     * 切换大屏沉浸式全屏显示：
+     * - 开启时同时隐藏状态栏与导航栏（边缘滑动可临时呼出并自动隐藏），并延伸至异形屏边缘；
+     * - 关闭时恢复导航栏，状态栏遵循用户原有的 [statusBarHidden] 偏好。
+     */
+    fun setFullscreenMode(fullscreen: Boolean, statusBarHidden: Boolean = false) {
+        val window = activity.window
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (fullscreen) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val attrs = window.attributes
+                if (attrs.layoutInDisplayCutoutMode != WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES) {
+                    attrs.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    window.attributes = attrs
+                }
+            }
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.navigationBars())
+            setStatusBarHidden(statusBarHidden)
         }
     }
 

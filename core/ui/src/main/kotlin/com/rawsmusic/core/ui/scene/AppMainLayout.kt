@@ -93,6 +93,8 @@ fun AppMainLayout(
     externalPageRenderer: ExternalPageRenderer? = null,
     onNavigateToPlayer: () -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null,
     onAudioEffectsClick: (() -> Unit)? = null,
     onSideRailDestination: (AppSideRailDestination) -> Unit = {},
     onOpenSideRail: () -> Unit = {},
@@ -580,6 +582,8 @@ fun AppMainLayout(
                                 externalPageRenderer = externalPageRenderer,
                                 showHomeSettingsShortcut = showHomeSettingsShortcut,
                                 onSettingsClick = onSettingsClick ?: { navState.navigateToSettings() },
+                                isFullscreen = isFullscreen,
+                                onToggleFullscreen = onToggleFullscreen,
                                 onHomeHeaderMenuAction = if (!bottomNavigationEnabled) {
                                     { onOpenSideRail() }
                                 } else {
