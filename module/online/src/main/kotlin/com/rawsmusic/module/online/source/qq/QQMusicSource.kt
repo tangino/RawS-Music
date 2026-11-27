@@ -555,11 +555,19 @@ class QQMusicSource(
 
         val cleanDissId = playlistId.removePrefix("dir_")
         val activeCookie = cookieProvider?.invoke()?.takeIf { it.isNotBlank() } ?: "uin=0; qm_keyst=;"
-        val uin = Regex("uin=([0-9]+)").find(activeCookie)?.groupValues?.getOrNull(1) ?: "0"
+        val uin = Regex("(?:^|;\\s*)(?:uin|p_uin|login_uin|qqmusic_uin)=o?0*([0-9]+)", RegexOption.IGNORE_CASE)
+            .find(activeCookie)?.groupValues?.getOrNull(1) ?: "0"
+        val keyForGtk = Regex("(?:^|;\\s*)(?:qm_keyst|qqmusic_key|p_skey|skey)=([^;]+)")
+            .find(activeCookie)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val gtk = if (keyForGtk.isNotBlank()) {
+            com.rawsmusic.module.online.auth.service.QQMusicAuthService.getGtk(keyForGtk)
+        } else {
+            5381L
+        }
 
         try {
             val url = "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg" +
-                    "?type=1&json=1&utf8=1&onlysong=0&disstid=$cleanDissId&dirid=$cleanDissId&format=json&inCharset=utf8&outCharset=utf-8&g_tk=5381&hostUin=$uin&loginUin=$uin"
+                    "?type=1&json=1&utf8=1&onlysong=0&disstid=$cleanDissId&dirid=$cleanDissId&format=json&inCharset=utf8&outCharset=utf-8&g_tk=$gtk&g_tk_new_20200303=$gtk&hostUin=$uin&loginUin=$uin"
 
             val request = Request.Builder()
                 .url(url)

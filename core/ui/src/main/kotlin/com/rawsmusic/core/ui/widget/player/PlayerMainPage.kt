@@ -252,6 +252,7 @@ fun PlayerMainPage(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onClosePlayer: () -> Unit = {},
@@ -480,6 +481,7 @@ fun PlayerMainPage(
         if (useWidePlayerLayout) {
             val middleColumnState = rememberPlayerMiddleColumnState()
             val middleExpanded = middleColumnState.expanded
+            val middleWideMode = middleExpanded && middleColumnState.wideMode
             val wideMaxWidth = if (middleExpanded) 1720.dp else windowLayoutProfile.playerContentMaxWidth
             val wideHorizontalPadding = when {
                 middleExpanded && isTabletWindow -> 20.dp
@@ -583,6 +585,55 @@ fun PlayerMainPage(
                         }
                 )
                     }
+                    if (middleWideMode) {
+                        val audioInfoCapsuleVisible by AudioInfoCapsulePreferences.visible.collectAsState()
+                        val audioInfoSlotVisible = audioInfoCapsuleVisible || smartTransitionVisible
+                        Spacer(Modifier.height(8.dp))
+                        StandardPlayerTimelineLane(
+                            currentSong = currentSong,
+                            coverPath = coverPath,
+                            currentPositionMs = currentPositionMs,
+                            currentPositionState = currentPositionState,
+                            totalDurationMs = totalDurationMs,
+                            audioVisualizerEnabled = audioVisualizerEnabled,
+                            audioSpectrum = audioSpectrum,
+                            audioSpectrumState = audioSpectrumState,
+                            lyricSong = lyricSong,
+                            lyricPositionMs = lyricPositionMs,
+                            lyricPositionState = lyricPositionState,
+                            isPlaying = isPlaying,
+                            displayTranslation = displayTranslation,
+                            displayRoma = displayRoma,
+                            progressStyle = progressStyle,
+                            textPosition = LyricTextPosition.from(AppPreferences.UI.playerTitleAlignment),
+                            waveformRemainingColor = waveformRemainingColor,
+                            waveformPlayedColor = waveformPlayedColor,
+                            waveformClimaxColor = Color(waveformClimaxColorInt),
+                            climaxEnabled = climaxEnabled,
+                            waveformBarCount = waveformBarCount,
+                            onOpenLyric = onOpenLyric,
+                            onSeekStart = onSeekStart,
+                            onSeekStop = onSeekStop,
+                            onInlineLyricSeek = onInlineLyricSeek,
+                        )
+                        if (audioInfoSlotVisible) {
+                            Spacer(Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                AudioInfoCapsule(
+                                    song = currentSong,
+                                    coverPath = coverPath,
+                                    text = audioInfoText,
+                                    playbackChainText = audioInfoPlaybackChainText,
+                                    smartTransitionVisible = smartTransitionVisible,
+                                    onClick = onAudioQuality,
+                                    onLongClick = onAudioQualityLongPress,
+                                )
+                            }
+                        }
+                    }
                     if (tabletPlayerChrome) {
                         Spacer(Modifier.height(if (isTabletWindow) 12.dp else 0.dp))
                         StandardTransportButtons(
@@ -607,7 +658,7 @@ fun PlayerMainPage(
                         )
                     }
                 }
-                DisposableEffect(middleExpanded) {
+                DisposableEffect(middleExpanded, middleWideMode) {
                     if (!middleExpanded) {
                         onMiddleColumnBoundsChanged(null)
                     }
@@ -623,24 +674,30 @@ fun PlayerMainPage(
                         queueCurrentIndex = queueCurrentIndex,
                         showCovers = middleColumnState.showCovers,
                         onToggleShowCovers = { middleColumnState.toggleShowCovers() },
+                        wideMode = middleWideMode,
+                        onToggleWideMode = { middleColumnState.toggleWideMode() },
                         onCollapse = { middleColumnState.updateExpanded(false) },
                         onQueueSongClick = onQueueSongClick,
                         onPlayLibraryQueue = onPlayLibraryQueue,
+                        onAppendLibraryQueue = onAppendLibraryQueue,
                         primaryTextColor = queueTone.primary,
                         secondaryTextColor = queueTone.secondary,
                         accentColor = baseColor,
                         chipBackgroundColor = queueTone.chipBackground,
                         modifier = Modifier
-                            .weight(0.35f)
+                            .weight(if (middleWideMode) 0.69f else 0.35f)
                             .fillMaxHeight()
                             .onGloballyPositioned { coords ->
                                 onMiddleColumnBoundsChanged(coords.boundsInRoot())
                             },
                     )
-                    Spacer(Modifier.width(16.dp))
+                    if (!middleWideMode) {
+                        Spacer(Modifier.width(16.dp))
+                    }
                 } else {
                     Spacer(Modifier.width(28.dp))
                 }
+                if (!middleWideMode) {
                 StandardPlayerBody(
                     currentSong = currentSong,
                     artworkTransitionState = artworkTransitionState,
@@ -715,6 +772,7 @@ fun PlayerMainPage(
                     mainPlayerContentOffsetProvider = mainPlayerContentOffsetProvider,
                     modifier = Modifier.weight(if (middleExpanded) 0.34f else 0.54f).clipToBounds()
                 )
+                }
             }
         } else {
             Column(
@@ -1772,6 +1830,7 @@ private fun StandardPlayerBody(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     onQueueBoundsChanged: (Rect) -> Unit,

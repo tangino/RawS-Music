@@ -1112,6 +1112,7 @@ private fun LandscapePlayerScreen(
                         }
 
                         val middleColumnState = rememberPlayerMiddleColumnState()
+                        val middleNoticeContext = androidx.compose.ui.platform.LocalContext.current
                         if (middleColumnState.expanded) {
                             PlayerLibraryMiddleColumn(
                                 currentSong = currentSong,
@@ -1119,6 +1120,8 @@ private fun LandscapePlayerScreen(
                                 queueCurrentIndex = queue.currentIndex,
                                 showCovers = middleColumnState.showCovers,
                                 onToggleShowCovers = { middleColumnState.toggleShowCovers() },
+                                wideMode = middleColumnState.wideMode,
+                                onToggleWideMode = { middleColumnState.toggleWideMode() },
                                 onCollapse = { middleColumnState.updateExpanded(false) },
                                 onQueueSongClick = { song, index ->
                                     playerController.clearPriorityQueue()
@@ -1129,17 +1132,34 @@ private fun LandscapePlayerScreen(
                                     playerController.clearPriorityQueue()
                                     playerController.play(song, list, index)
                                 },
+                                onAppendLibraryQueue = { list ->
+                                    if (list.isNotEmpty()) {
+                                        playerController.appendPlaylistToQueue(list) { added, started ->
+                                            when {
+                                                started -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                                    middleNoticeContext.getString(com.rawsmusic.core.ui.R.string.online_detail_added_to_queue_and_playing, added)
+                                                )
+                                                added > 0 -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                                    middleNoticeContext.getString(com.rawsmusic.core.ui.R.string.online_detail_added_to_queue, added)
+                                                )
+                                                else -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                                    middleNoticeContext.getString(com.rawsmusic.core.ui.R.string.online_detail_already_in_queue)
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
                                 primaryTextColor = Color.White.copy(alpha = 0.92f),
                                 secondaryTextColor = Color.White.copy(alpha = 0.66f),
                                 accentColor = rememberCoverAccentColor(artworkKey),
                                 chipBackgroundColor = Color.Black.copy(alpha = 0.28f),
                                 modifier = Modifier
-                                    .weight(1.06f)
+                                    .weight(if (middleColumnState.wideMode) 2.06f else 1.06f)
                                     .fillMaxHeight(),
                             )
                         }
 
-                        Box(
+                        if (!middleColumnState.expanded || !middleColumnState.wideMode) Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()

@@ -212,6 +212,7 @@ fun ComposePlayerContainer(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)? = null,
     albumSongs: List<AudioFile> = emptyList(),
     albumCoverPath: String? = null,
@@ -719,6 +720,7 @@ fun ComposePlayerContainer(
             onToggleInlineQueue = toggleInlineQueue,
             onQueueSongClick = playQueueSong,
             onPlayLibraryQueue = onPlayLibraryQueue,
+            onAppendLibraryQueue = onAppendLibraryQueue,
             onClearPriorityQueue = onClearPriorityQueue,
             onClosePlayer = onClosePlayer,
             morePanelVisible = immersiveMoreVisible,
@@ -863,6 +865,7 @@ fun ComposePlayerContainer(
             onToggleInlineQueue = toggleInlineQueue,
             onQueueSongClick = playQueueSong,
             onPlayLibraryQueue = onPlayLibraryQueue,
+            onAppendLibraryQueue = onAppendLibraryQueue,
             onClearPriorityQueue = onClearPriorityQueue,
             albumSongs = albumSongs,
             albumCoverPath = resolvedAlbumCoverPath,
@@ -960,6 +963,7 @@ private fun ImmersiveComposePlayerContainer(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)?,
     onClosePlayer: () -> Unit,
     morePanelVisible: Boolean,
@@ -1284,6 +1288,7 @@ private fun StandardComposePlayerContainer(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)?,
     albumSongs: List<AudioFile>,
     albumCoverPath: String?,
@@ -1491,6 +1496,7 @@ private fun StandardComposePlayerContainer(
                 queueCurrentIndex = queueCurrentIndex,
                 onQueueSongClick = onQueueSongClick,
                 onPlayLibraryQueue = onPlayLibraryQueue,
+                onAppendLibraryQueue = onAppendLibraryQueue,
                 onClearPriorityQueue = onClearPriorityQueue,
                 onToggleQueue = onToggleInlineQueue,
                 lyricControls = standardLyricControls,
@@ -1591,6 +1597,7 @@ private fun StandardComposePlayerContainer(
                 queueCurrentIndex = queueCurrentIndex,
                 onQueueSongClick = onQueueSongClick,
                 onPlayLibraryQueue = onPlayLibraryQueue,
+                onAppendLibraryQueue = onAppendLibraryQueue,
                 onClearPriorityQueue = onClearPriorityQueue,
                 onToggleQueue = onToggleInlineQueue,
                 sleepTimerSelection = sleepTimerSelection,
@@ -1732,6 +1739,7 @@ private fun StandardPlayerLyricStack(
     onPlayLibraryQueue: (List<AudioFile>, Int) -> Unit = { list, idx ->
         list.getOrNull(idx)?.let { onQueueSongClick(it, idx) }
     },
+    onAppendLibraryQueue: ((List<AudioFile>) -> Unit)? = null,
     onClearPriorityQueue: (() -> Unit)?,
     onToggleQueue: () -> Unit,
     lyricControls: StandardPlayerLyricControls,
@@ -2778,6 +2786,7 @@ private fun StandardPlayerLyricStack(
                 queueCurrentIndex = queueCurrentIndex,
                 onQueueSongClick = onQueueSongClick,
                 onPlayLibraryQueue = onPlayLibraryQueue,
+                onAppendLibraryQueue = onAppendLibraryQueue,
                 onClearPriorityQueue = onClearPriorityQueue,
                 onToggleQueue = onToggleQueue,
                 sleepTimerSelection = sleepTimerSelection,

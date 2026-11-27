@@ -837,10 +837,18 @@ fun LyricMoreSheetContent(
     } else {
         Color.White.copy(alpha = 0.92f)
     }
+    val fontSizeOptions = if (display.embedded) {
+        listOf(8, 12, 16, 24, 28, 32, 36, 40)
+    } else {
+        listOf(24, 28, 32, 36, 40)
+    }
     val fontEntry = DropdownEntry(
-        items = listOf(24, 28, 32, 36, 40).map { size ->
+        items = fontSizeOptions.map { size ->
             DropdownItem(
                 text = when (size) {
+                    8 -> stringResource(R.string.lyric_font_size_micro)
+                    12 -> stringResource(R.string.lyric_font_size_tiny)
+                    16 -> stringResource(R.string.lyric_font_size_compact)
                     24 -> stringResource(R.string.lyric_font_size_small)
                     28 -> stringResource(R.string.lyric_font_size_standard)
                     32 -> stringResource(R.string.lyric_font_size_large)

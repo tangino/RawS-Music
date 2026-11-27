@@ -977,6 +977,11 @@ object AppPreferences {
             get() = kv.decodeBool("ui_landscape_player_middle_column_show_covers", true)
             set(value) { kv.encode("ui_landscape_player_middle_column_show_covers", value) }
 
+        /** 大屏横屏播放页中间栏是否扩展占据歌词栏空间（双栏宽屏模式），默认关闭。 */
+        var landscapePlayerMiddleColumnWideMode: Boolean
+            get() = kv.decodeBool("ui_landscape_player_middle_column_wide_mode", false)
+            set(value) { kv.encode("ui_landscape_player_middle_column_wide_mode", value) }
+
         /** 普通播放页专辑图切换动画：0=透视切换，1=内倾轮播，2=平移。 */
         var playerArtworkAnimationStyle: Int
             get() = kv.decodeInt("ui_player_artwork_animation_style", 0).coerceIn(0, 2)

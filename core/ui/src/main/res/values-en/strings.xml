@@ -585,6 +585,19 @@
     <string name="player_middle_disliked">Disliked</string>
     <string name="player_middle_song_count">%1$d songs</string>
     <string name="player_middle_online_tag">Online · %1$s</string>
+    <string name="lyric_font_size_micro">Micro</string>
+    <string name="lyric_font_size_tiny">Tiny</string>
+    <string name="lyric_font_size_compact">Compact</string>
+    <string name="player_middle_expand_wide">Expand panel (hide lyrics)</string>
+    <string name="player_middle_collapse_wide">Restore 3-column layout</string>
+    <string name="player_middle_play_all">Play All</string>
+    <string name="player_middle_add_to_queue">Add to Queue</string>
+    <string name="player_middle_queue_summary">Queue · %1$d tracks</string>
+    <string name="player_middle_songs_summary">Library · %1$d tracks</string>
+    <string name="online_detail_add_to_queue">Add to Queue</string>
+    <string name="online_detail_added_to_queue">Added %1$d tracks to queue</string>
+    <string name="online_detail_added_to_queue_and_playing">Added %1$d tracks and started playback</string>
+    <string name="online_detail_already_in_queue">All tracks are already in the queue</string>
 
     <string name="download_settings_section">Offline Song Downloads</string>
     <string name="download_settings_dir_title">Save Directory</string>

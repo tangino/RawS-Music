@@ -61,6 +61,8 @@ internal fun InlinePlayerLyrics(
         dimColor = textColor.copy(alpha = textColor.alpha * 0.42f),
         secondaryColor = textColor.copy(alpha = textColor.alpha * 0.7f),
         fontSizeSp = AppPreferences.UI.inlinePlayerLyricFontSizeSp,
+        primaryFontSizeRange = 8..40,
+        secondaryFontSizeRange = 6..25,
         textPosition = LyricTextPosition.from(AppPreferences.UI.lyricTextPosition),
         blurEnabled = AppPreferences.UI.lyricBlurEnabled,
         relativeLineProgressEnabled = AppPreferences.UI.lyricRelativeLineProgressEnabled,

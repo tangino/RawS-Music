@@ -462,6 +462,9 @@
     <string name="queue_clear_priority">清空优先队列</string>
     <string name="queue_now_playing">正在播放</string>
     <string name="lyric_font_size_title">歌词字号</string>
+    <string name="lyric_font_size_micro">极小</string>
+    <string name="lyric_font_size_tiny">超小</string>
+    <string name="lyric_font_size_compact">较小</string>
     <string name="lyric_position_title">歌词位置</string>
     <string name="lyric_position_left">靠左</string>
     <string name="lyric_position_center">居中</string>
@@ -1063,6 +1066,16 @@
     <string name="player_middle_disliked">我不喜欢的音乐</string>
     <string name="player_middle_song_count">%1$d 首</string>
     <string name="player_middle_online_tag">在线 · %1$s</string>
+    <string name="player_middle_expand_wide">扩展中栏（隐藏歌词）</string>
+    <string name="player_middle_collapse_wide">恢复三栏布局</string>
+    <string name="player_middle_play_all">播放全部</string>
+    <string name="player_middle_add_to_queue">加入队列</string>
+    <string name="player_middle_queue_summary">当前播放队列 · 共 %1$d 首</string>
+    <string name="player_middle_songs_summary">曲库歌曲 · 共 %1$d 首</string>
+    <string name="online_detail_add_to_queue">加入队列</string>
+    <string name="online_detail_added_to_queue">已添加 %1$d 首歌曲到播放队列</string>
+    <string name="online_detail_added_to_queue_and_playing">已将 %1$d 首歌曲加入队列并开始播放</string>
+    <string name="online_detail_already_in_queue">歌单歌曲已在播放队列中</string>
 
     <string name="download_settings_section">网络歌曲离线保存</string>
     <string name="download_settings_dir_title">保存目录</string>

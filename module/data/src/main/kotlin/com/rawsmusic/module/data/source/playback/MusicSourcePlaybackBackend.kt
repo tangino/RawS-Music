@@ -54,7 +54,12 @@ interface MusicSourcePlaybackBackend {
     fun seekTo(positionMs: Long)
     fun stop()
     fun peekNextQueueIndex(): Int? = null
+    fun hasActiveQueue(): Boolean = false
     fun onQueueAppended(newItems: List<RawSourceMediaItem>) {}
+    fun appendToVisibleQueue(newItems: List<RawSourceMediaItem>): Int {
+        onQueueAppended(newItems)
+        return newItems.size
+    }
     fun onQueueReplaced(newItems: List<RawSourceMediaItem>, currentIndex: Int) {}
     /** 当在线控制器改用 Media3 ExoPlayer 直接边播边缓存播放时，同步宿主 UI、队列并停止底层 FFmpeg 引擎。 */
     fun syncExternalPlayback(request: MusicSourcePlaybackRequest) {}

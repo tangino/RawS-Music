@@ -32,6 +32,13 @@ sealed interface OnlinePlayResult {
     data class Failed(val reason: String) : OnlinePlayResult
 }
 
+/** 将网络歌单/歌曲追加到当前播放队列的结果。 */
+data class OnlineAppendQueueResult(
+    val addedCount: Int,
+    val startedPlayback: Boolean,
+    val playResult: OnlinePlayResult? = null,
+)
+
 /**
  * 在线歌曲 → RawS 既有播放链路的接线。
  *
@@ -128,6 +135,31 @@ object OnlinePlaybackLauncher {
             AppLogger.d(TAG, "音源有 ${candidates.size} 个候选，但无一通过匹配硬过滤：query=$query")
         }
         return best
+    }
+
+    /**
+     * 将网络歌单或在线歌曲列表追加到当前播放队列（自动去重）。
+     * 若当前全局播放队列为空，则直接以该列表起播第一首并将全部曲目入队。
+     */
+    suspend fun appendToQueue(
+        context: Context,
+        songs: List<OnlineSongItem>,
+    ): OnlineAppendQueueResult {
+        if (songs.isEmpty()) {
+            return OnlineAppendQueueResult(addedCount = 0, startedPlayback = false)
+        }
+        if (!MusicSourcePlaybackController.hasActiveQueue()) {
+            val result = play(context = context, item = songs.first(), queue = songs, index = 0)
+            val started = result is OnlinePlayResult.Started
+            return OnlineAppendQueueResult(
+                addedCount = if (started) songs.size else 0,
+                startedPlayback = started,
+                playResult = result,
+            )
+        }
+        val rawItems = songs.map { OnlineSourceMediaMapper.toRawSourceMediaItem(it) }
+        val added = MusicSourcePlaybackController.appendQueueAndCount(rawItems)
+        return OnlineAppendQueueResult(addedCount = added, startedPlayback = false)
     }
 
     /** 找到候选并交给 RawS 播放控制器起播。优先照搬 OrBitPlayer 的全套寻源与探活算法。 */

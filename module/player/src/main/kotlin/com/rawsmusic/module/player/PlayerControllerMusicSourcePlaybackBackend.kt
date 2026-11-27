@@ -339,16 +339,26 @@ internal class PlayerControllerMusicSourcePlaybackBackend(
         )
     }
 
+    override fun hasActiveQueue(): Boolean = controller.visibleQueue.value.songs.isNotEmpty()
+
     override fun onQueueAppended(newItems: List<com.rawsmusic.core.common.source.RawSourceMediaItem>) {
-        if (newItems.isEmpty()) return
+        appendToVisibleQueue(newItems)
+    }
+
+    override fun appendToVisibleQueue(newItems: List<com.rawsmusic.core.common.source.RawSourceMediaItem>): Int {
+        if (newItems.isEmpty()) return 0
         val curQueue = controller.visibleQueue.value
         val existingPaths = curQueue.songs.map { it.path }.toSet()
-        val newAudioFiles = newItems.map { it.toVirtualAudioFile() }.filter { it.path !in existingPaths }
+        val newAudioFiles = newItems
+            .map { it.toVirtualAudioFile() }
+            .distinctBy { it.path }
+            .filter { it.path !in existingPaths }
         if (newAudioFiles.isNotEmpty()) {
             val updatedSongs = curQueue.songs + newAudioFiles
             controller.adoptVisibleQueueSnapshot(updatedSongs, curQueue.currentIndex)
             AppLogger.d(TAG, "已同步向 PlayerController 队列追加 ${newAudioFiles.size} 首在线曲目，当前总数: ${updatedSongs.size}")
         }
+        return newAudioFiles.size
     }
 
     override fun onQueueReplaced(

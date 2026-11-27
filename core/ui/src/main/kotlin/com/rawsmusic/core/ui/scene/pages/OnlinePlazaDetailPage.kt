@@ -498,6 +498,38 @@ internal fun OnlinePlaylistDetailPage(
                                         }
                                     },
                                     onPlayAll = { if (songs.isNotEmpty()) playSong(songs.first(), 0) },
+                                    onAddToQueue = {
+                                        if (songs.isEmpty()) return@OnlineDetailHeader
+                                        scope.launch {
+                                            val result = OnlinePlaybackLauncher.appendToQueue(context, songs)
+                                            when {
+                                                result.startedPlayback -> AppNoticeBus.post(
+                                                    context.getString(
+                                                        R.string.online_detail_added_to_queue_and_playing,
+                                                        result.addedCount,
+                                                    )
+                                                )
+                                                result.addedCount > 0 -> AppNoticeBus.post(
+                                                    context.getString(
+                                                        R.string.online_detail_added_to_queue,
+                                                        result.addedCount,
+                                                    )
+                                                )
+                                                result.playResult is OnlinePlayResult.NoSourceInstalled -> AppNoticeBus.error(
+                                                    noSourceMessage
+                                                )
+                                                result.playResult is OnlinePlayResult.NoMatchFound -> AppNoticeBus.error(
+                                                    context.getString(R.string.online_detail_no_match, songs.first().title)
+                                                )
+                                                result.playResult is OnlinePlayResult.Failed -> AppNoticeBus.error(
+                                                    context.getString(R.string.online_detail_play_failed, songs.first().title)
+                                                )
+                                                else -> AppNoticeBus.post(
+                                                    context.getString(R.string.online_detail_already_in_queue)
+                                                )
+                                            }
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -556,6 +588,7 @@ private fun OnlineDetailHeader(
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onPlayAll: () -> Unit,
+    onAddToQueue: () -> Unit,
 ) {
     val colors = themeColors()
     var descExpanded by remember(playlist.id) { mutableStateOf(false) }
@@ -731,6 +764,37 @@ private fun OnlineDetailHeader(
                     color = colors.onPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.surface.copy(alpha = 0.78f))
+                    .border(
+                        width = 0.6.dp,
+                        color = colors.outline.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(14.dp),
+                    )
+                    .clickable(onClick = onAddToQueue)
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Playlist,
+                    contentDescription = null,
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = stringResource(R.string.online_detail_add_to_queue),
+                    color = colors.onSurface,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                 )
             }

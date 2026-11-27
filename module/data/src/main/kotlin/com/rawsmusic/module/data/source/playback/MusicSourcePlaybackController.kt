@@ -231,20 +231,46 @@ object MusicSourcePlaybackController {
     }
 
     /**
-     * 向当前在线播放队列末尾追加歌曲（用于电台/推荐流静默续播）
+     * 当前全局播放器或在线控制器是否已有播放队列。
      */
-    fun appendQueue(newItems: List<RawSourceMediaItem>) {
-        if (newItems.isEmpty()) return
+    fun hasActiveQueue(): Boolean {
+        return backend?.hasActiveQueue() == true || mutableSnapshot.value.queue.isNotEmpty()
+    }
+
+    /**
+     * 向当前播放队列末尾追加在线曲目（自动去重），返回实际新增的曲目数量。
+     */
+    fun appendQueueAndCount(newItems: List<RawSourceMediaItem>): Int {
+        if (newItems.isEmpty()) return 0
         val currentSnap = mutableSnapshot.value
         val currentQueue = currentSnap.queue.toMutableList()
         val currentIds = currentQueue.map { it.stableIdentity }.toSet()
-        val toAdd = newItems.filter { it.stableIdentity !in currentIds }
-        if (toAdd.isNotEmpty()) {
-            currentQueue.addAll(toAdd)
+        val distinctInput = newItems.distinctBy { it.stableIdentity }
+        val toAddForSnap = distinctInput.filter { it.stableIdentity !in currentIds }
+        if (toAddForSnap.isNotEmpty()) {
+            currentQueue.addAll(toAddForSnap)
             mutableSnapshot.value = currentSnap.copy(queue = currentQueue)
-            backend?.onQueueAppended(toAdd)
-            com.rawsmusic.core.common.utils.AppLogger.d("MusicSourcePlayback", "已向播放队列静默追加 " + toAdd.size + " 首歌曲，当前队列共 " + currentQueue.size + " 首")
         }
+        val activeBackend = backend
+        val addedCount = if (activeBackend != null) {
+            activeBackend.appendToVisibleQueue(distinctInput)
+        } else {
+            toAddForSnap.size
+        }
+        if (addedCount > 0) {
+            com.rawsmusic.core.common.utils.AppLogger.d(
+                "MusicSourcePlayback",
+                "已向播放队列追加 $addedCount 首在线歌曲，当前在线队列共 ${currentQueue.size} 首"
+            )
+        }
+        return addedCount
+    }
+
+    /**
+     * 向当前在线播放队列末尾追加歌曲（用于电台/推荐流静默续播）
+     */
+    fun appendQueue(newItems: List<RawSourceMediaItem>) {
+        appendQueueAndCount(newItems)
     }
 
     /**

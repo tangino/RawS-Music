@@ -44,6 +44,10 @@ class QQMusicAuthService(
         // 会话缓存，保留二维码对应的 login_sig 凭据
         private val qrSessionCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+        private val COOKIE_ATTRIBUTES = setOf(
+            "path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority"
+        )
+
         /**
          * 计算腾讯 Web ptlogin 的 ptqrtoken 哈希值 (严格匹配前端 32 位有符号整数溢出规则)
          */
@@ -174,15 +178,22 @@ class QQMusicAuthService(
     }
 
     /**
-     * 辅助解析 Set-Cookie 头并加入 Map
+     * 辅助解析 Set-Cookie 头并加入 Map。
+     * 只提取分号前的首个 `name=value`（用 limit=2 避免吞掉含 `=` 的 Base64 Token），
+     * 过滤掉 Path / Domain / Expires / Max-Age / SameSite 等 Cookie 属性，且不以空值覆盖已有凭据。
      */
-    private fun extractCookiesInto(header: String, cookieMap: MutableMap<String, String>) {
-        val parts = header.split(";")
-        for (part in parts) {
-            val kv = part.trim().split("=")
-            if (kv.size == 2 && kv[0].isNotBlank()) {
-                cookieMap[kv[0]] = kv[1]
-            }
+    internal fun extractCookiesInto(header: String, cookieMap: MutableMap<String, String>) {
+        val firstPair = header.substringBefore(';').trim()
+        if (firstPair.isEmpty()) return
+        val eqIdx = firstPair.indexOf('=')
+        if (eqIdx <= 0) return
+        val name = firstPair.substring(0, eqIdx).trim()
+        val value = firstPair.substring(eqIdx + 1).trim()
+        if (name.isEmpty()) return
+        val lower = name.lowercase()
+        if (lower in COOKIE_ATTRIBUTES) return
+        if (value.isNotEmpty() || !cookieMap.containsKey(name)) {
+            cookieMap[name] = value
         }
     }
 
@@ -375,8 +386,9 @@ class QQMusicAuthService(
                                 .header("User-Agent", USER_AGENT)
                                 .header("Origin", "https://y.qq.com")
                                 .header("Referer", "https://y.qq.com/")
-                                .header("Content-Type", "application/x-www-form-urlencoded")
-                                .post(reqPayload.toString().toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                                .header("Cookie", cookieStr)
+                                .header("Content-Type", "application/json; charset=utf-8")
+                                .post(reqPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                                 .build()
 
                             client.newCall(qqLoginReq).execute().use { qqLoginResp ->
@@ -540,25 +552,96 @@ class QQMusicAuthService(
     }
 
     /**
-     * 去除 JSONP 外层函数包装，例如 MusicJsonCallback(...)
+     * 安全去除 JSONP 外层函数包装（例如 `MusicJsonCallback({...})`）。
+     * 若响应本身就是纯 JSON（以 `{` 或 `[` 开头），直接原样返回，
+     * 避免歌单名/昵称中的圆括号 `(...)` 被误截导致整段 JSON 损坏。
      */
-    private fun cleanJsonp(response: String): String {
+    internal fun cleanJsonp(response: String): String {
         val trimmed = response.trim()
-        val start = trimmed.indexOf("(")
-        val end = trimmed.lastIndexOf(")")
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return trimmed
+        }
+        val start = trimmed.indexOf('(')
+        val end = trimmed.lastIndexOf(')')
         if (start != -1 && end != -1 && start < end) {
             return trimmed.substring(start + 1, end).trim()
         }
         return trimmed
     }
 
+    private fun resolveNumericUin(account: PlatformAccount): String {
+        val candidates = listOf(
+            account.userId,
+            account.tokens["uin"].orEmpty(),
+            account.cookies["uin"].orEmpty(),
+            account.cookies["p_uin"].orEmpty(),
+            account.cookies["login_uin"].orEmpty(),
+            account.cookies["qqmusic_uin"].orEmpty(),
+            account.cookies["wxuin"].orEmpty(),
+        )
+        for (raw in candidates) {
+            val cleaned = raw.trim().replace(Regex("^[oO]0*"), "")
+            if (cleaned.isNotEmpty() && cleaned.all { it.isDigit() } && cleaned != "0") {
+                return cleaned
+            }
+        }
+        return account.userId.trim()
+    }
+
+    private fun buildCleanCookieHeader(account: PlatformAccount, uin: String, authKey: String): String {
+        val merged = LinkedHashMap<String, String>()
+        for ((k, v) in account.cookies) {
+            if (k.lowercase() !in COOKIE_ATTRIBUTES && v.isNotBlank()) {
+                merged[k] = v
+            }
+        }
+        if (uin.isNotBlank() && uin.all { it.isDigit() }) {
+            merged.putIfAbsent("uin", uin)
+            merged.putIfAbsent("login_uin", uin)
+            merged.putIfAbsent("qqmusic_uin", uin)
+        }
+        if (authKey.isNotBlank()) {
+            merged.putIfAbsent("qm_keyst", authKey)
+            merged.putIfAbsent("qqmusic_key", authKey)
+        }
+        return merged.entries.joinToString("; ") { "${it.key}=${it.value}" }
+    }
+
+    private fun unescapeHtmlEntities(raw: String): String {
+        if (raw.isEmpty() || !raw.contains('&')) return raw
+        return raw.replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&nbsp;", " ")
+    }
+
     override suspend fun getUserPlaylists(account: PlatformAccount): List<OnlinePlaylist> = withContext(Dispatchers.IO) {
-        val uin = account.userId
-        if (uin.isBlank()) return@withContext emptyList()
+        val uin = resolveNumericUin(account)
+        if (uin.isBlank() || uin == "qq_user") {
+            throw IllegalStateException("QQ 账号缺少有效 UIN，请重新扫码或输入 Cookie 登录")
+        }
 
         val list = mutableListOf<OnlinePlaylist>()
         val uinLong = uin.toLongOrNull() ?: 0L
-        val authKey = account.cookies["qm_keyst"] ?: account.cookies["qqmusic_key"] ?: account.cookies["psrf_musickey_id"] ?: account.tokens["key"] ?: ""
+        val authKey = account.cookies["qm_keyst"]?.takeIf { it.isNotBlank() }
+            ?: account.cookies["qqmusic_key"]?.takeIf { it.isNotBlank() }
+            ?: account.cookies["psrf_musickey_id"]?.takeIf { it.isNotBlank() }
+            ?: account.tokens["key"]?.takeIf { it.isNotBlank() }
+            ?: ""
+        val gtkSource = authKey.ifBlank {
+            account.cookies["p_skey"]?.takeIf { it.isNotBlank() }
+                ?: account.cookies["skey"]?.takeIf { it.isNotBlank() }
+                ?: ""
+        }
+        val gtk = if (gtkSource.isNotBlank()) getGtk(gtkSource) else 5381L
+        val cookieHeader = buildCleanCookieHeader(account, uin, authKey)
+
+        var anyApiSucceeded = false
+        var authRejectedCount = 0
 
         fun addPlaylist(
             id: String,
@@ -570,16 +653,15 @@ class QQMusicAuthService(
             isFavorite: Boolean = false
         ) {
             val cleanId = id.trim()
-            val cleanTitle = title.trim()
+            val cleanTitle = unescapeHtmlEntities(title.trim())
             if (cleanId.isNotBlank() && cleanId != "0" && cleanTitle.isNotBlank()) {
                 if (list.none { it.id == cleanId }) {
-                    // 处理封面图
-                    val finalCover = if (coverUrl.startsWith("http://") || coverUrl.startsWith("https://")) {
-                        coverUrl
-                    } else if (account.avatarUrl.isNotBlank()) {
-                        account.avatarUrl
-                    } else {
-                        ""
+                    val normalizedCover = when {
+                        coverUrl.startsWith("https://") -> coverUrl
+                        coverUrl.startsWith("http://") -> "https://" + coverUrl.removePrefix("http://")
+                        coverUrl.startsWith("//") -> "https:$coverUrl"
+                        account.avatarUrl.isNotBlank() -> account.avatarUrl
+                        else -> ""
                     }
 
                     list.add(
@@ -587,10 +669,10 @@ class QQMusicAuthService(
                             id = cleanId,
                             platform = platform,
                             title = cleanTitle,
-                            coverUrl = finalCover,
+                            coverUrl = normalizedCover,
                             playCount = playCount,
                             trackCount = trackCount,
-                            creatorName = creatorName.ifBlank { account.nickname },
+                            creatorName = unescapeHtmlEntities(creatorName).ifBlank { account.nickname },
                             creatorAvatarUrl = if (!isFavorite) account.avatarUrl else null,
                             customGroup = "QQ 音乐"
                         )
@@ -599,102 +681,259 @@ class QQMusicAuthService(
             }
         }
 
-        // 方案 1 (核心有效源): fcg_user_created_diss 移动端/Web自建歌单接口
+        // 方案 1 (首选现代网关): musicu.fcg -> music.musicasset.PlaylistBaseRead.GetPlaylistByUin
+        // 注意：param.uin 必须为字符串类型（传整数会返回 code=10006），可稳定拉取「我喜欢」与全部自建歌单
         try {
-            val createdDissUrl = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?cv=4747474&ct=24&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=1&uin=$uin&hostuin=$uin&sin=0&size=100"
+            val payload = JSONObject().apply {
+                put("comm", JSONObject().apply {
+                    put("ct", 24)
+                    put("cv", 4747474)
+                    put("g_tk", gtk)
+                    if (uinLong > 0L) put("uin", uinLong)
+                    if (authKey.isNotBlank()) put("authst", authKey)
+                    put("format", "json")
+                    put("platform", "yqq.json")
+                })
+                put("req", JSONObject().apply {
+                    put("module", "music.musicasset.PlaylistBaseRead")
+                    put("method", "GetPlaylistByUin")
+                    put("param", JSONObject().apply {
+                        put("uin", uin)
+                    })
+                })
+            }
+            val req = Request.Builder()
+                .url("https://u.y.qq.com/cgi-bin/musicu.fcg")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://y.qq.com/")
+                .header("Origin", "https://y.qq.com")
+                .header("Cookie", cookieHeader)
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+
+            val respBody = client.newCall(req).execute().use { it.body?.string().orEmpty() }
+            AppLogger.d(TAG, "QQ musicu 自建歌单接口响应(len=${respBody.length}): ${respBody.take(400)}")
+            if (respBody.isNotBlank()) {
+                val json = JSONObject(cleanJsonp(respBody))
+                val reqObj = json.optJSONObject("req")
+                val reqCode = reqObj?.optInt("code", -1) ?: -1
+                if (reqCode == 0) {
+                    anyApiSucceeded = true
+                    val vPlaylist = reqObj?.optJSONObject("data")?.optJSONArray("v_playlist")
+                    if (vPlaylist != null) {
+                        for (i in 0 until vPlaylist.length()) {
+                            val item = vPlaylist.optJSONObject(i) ?: continue
+                            val tid = item.optLong("tid", 0L)
+                            val dirId = item.optLong("dirId", item.optLong("dirid", 0L))
+                            val id = if (tid > 0L) tid.toString() else if (dirId > 0L) "dir_$dirId" else ""
+                            val title = item.optString("dirName", item.optString("title", ""))
+                            val cover = item.optString("picUrl", "")
+                                .ifBlank { item.optString("bigpicUrl", "") }
+                                .ifBlank { item.optString("picurl", "") }
+                            val songCnt = item.optInt("songNum", item.optInt("song_cnt", 0))
+                            val listenNum = item.optLong("listenNum", item.optLong("listen_num", 0L))
+                            addPlaylist(
+                                id = id,
+                                title = title,
+                                coverUrl = cover,
+                                trackCount = songCnt,
+                                playCount = listenNum,
+                                creatorName = account.nickname,
+                                isFavorite = false
+                            )
+                        }
+                    }
+                } else if (reqCode == 1000 || reqCode == 2001 || reqCode == 4000) {
+                    authRejectedCount++
+                    AppLogger.w(TAG, "musicu GetPlaylistByUin 返回鉴权错误 code=$reqCode")
+                }
+            }
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "musicu 自建歌单接口解析失败: ${e.message}")
+        }
+
+        // 方案 2 (补充自建歌单): fcg_user_created_diss 自建歌单接口
+        try {
+            val createdDissUrl = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss" +
+                "?g_tk=$gtk&g_tk_new_20200303=$gtk&cv=4747474&ct=24&format=json&inCharset=utf-8&outCharset=utf-8" +
+                "&notice=0&platform=yqq&needNewCode=1&loginUin=$uin&hostuin=$uin&uin=$uin&sin=0&size=200"
             val req = Request.Builder()
                 .url(createdDissUrl)
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", "https://y.qq.com/")
                 .header("Origin", "https://y.qq.com")
-                .header("Cookie", account.toCookieHeader())
+                .header("Cookie", cookieHeader)
                 .get()
                 .build()
 
             val body = client.newCall(req).execute().use { it.body?.string().orEmpty() }
-            AppLogger.d(TAG, "QQ 用户自建歌单接口响应: $body")
+            AppLogger.d(TAG, "QQ 用户自建歌单接口响应(len=${body.length}): ${body.take(400)}")
 
             if (body.isNotBlank()) {
                 val json = JSONObject(cleanJsonp(body))
-                val disslist = json.optJSONObject("data")?.optJSONArray("disslist")
-                if (disslist != null) {
-                    for (i in 0 until disslist.length()) {
-                        val item = disslist.getJSONObject(i)
-                        val tid = item.optLong("tid", 0L)
-                        val dirid = item.optLong("dirid", 0L)
-                        val id = if (tid > 0L) tid.toString() else if (dirid > 0L) "dir_$dirid" else ""
-                        val title = item.optString("diss_name", "")
-                        val cover = item.optString("diss_cover", "")
-                        val songCnt = item.optInt("song_cnt", 0)
-                        val listenNum = item.optLong("listen_num", 0L)
+                val code = json.optInt("code", -1)
+                if (code == 0) {
+                    anyApiSucceeded = true
+                    val disslist = json.optJSONObject("data")?.optJSONArray("disslist")
+                    if (disslist != null) {
+                        for (i in 0 until disslist.length()) {
+                            val item = disslist.optJSONObject(i) ?: continue
+                            val tid = item.optLong("tid", 0L)
+                            val dirid = item.optLong("dirid", 0L)
+                            val id = if (tid > 0L) tid.toString() else if (dirid > 0L) "dir_$dirid" else ""
+                            val title = item.optString("diss_name", "")
+                            val cover = item.optString("diss_cover", "")
+                            val songCnt = item.optInt("song_cnt", 0)
+                            val listenNum = item.optLong("listen_num", 0L)
 
-                        addPlaylist(
-                            id = id,
-                            title = title,
-                            coverUrl = cover,
-                            trackCount = songCnt,
-                            playCount = listenNum,
-                            creatorName = account.nickname,
-                            isFavorite = false
-                        )
+                            addPlaylist(
+                                id = id,
+                                title = title,
+                                coverUrl = cover,
+                                trackCount = songCnt,
+                                playCount = listenNum,
+                                creatorName = account.nickname,
+                                isFavorite = false
+                            )
+                        }
                     }
+                } else if (code == 1000 || code == 2001 || code == 4000) {
+                    authRejectedCount++
+                    AppLogger.w(TAG, "fcg_user_created_diss 返回鉴权错误 code=$code")
                 }
             }
         } catch (e: Exception) {
             AppLogger.e(TAG, "拉取 QQ 用户自建歌单异常: ${e.message}", e)
         }
 
-        // 方案 2: 用户个人主页接口获取收藏歌单及兜底
-        if (list.size <= 3) {
-            try {
-                val homepageUrl = "https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg?g_tk=5381&loginUin=$uin&hostUin=$uin&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0&cid=205360838&ct=20&cv=269&reqfrom=1&reqtype=1&userid=$uin&uin=$uin"
-                val hpReq = Request.Builder()
-                    .url(homepageUrl)
-                    .header("User-Agent", USER_AGENT)
-                    .header("Referer", "https://y.qq.com/")
-                    .header("Origin", "https://y.qq.com")
-                    .header("Cookie", account.toCookieHeader())
-                    .get()
-                    .build()
+        // 方案 2: 个人主页接口（始终拉取，同时补齐「我喜欢」歌单、自建歌单与收藏歌单）
+        try {
+            val homepageUrl = "https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg" +
+                "?g_tk=$gtk&g_tk_new_20200303=$gtk&loginUin=$uin&hostUin=$uin&format=json&inCharset=utf8&outCharset=utf-8" +
+                "&notice=0&platform=yqq.json&needNewCode=0&cid=205360838&ct=20&cv=269&reqfrom=1&reqtype=1&userid=$uin&uin=$uin"
+            val hpReq = Request.Builder()
+                .url(homepageUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://y.qq.com/")
+                .header("Origin", "https://y.qq.com")
+                .header("Cookie", cookieHeader)
+                .get()
+                .build()
 
-                val hpBody = client.newCall(hpReq).execute().use { it.body?.string().orEmpty() }
+            val hpBody = client.newCall(hpReq).execute().use { it.body?.string().orEmpty() }
+            AppLogger.d(TAG, "QQ 个人主页歌单接口响应(len=${hpBody.length}): ${hpBody.take(400)}")
 
-                if (hpBody.isNotBlank()) {
-                    val hpJson = JSONObject(cleanJsonp(hpBody))
+            if (hpBody.isNotBlank()) {
+                val hpJson = JSONObject(cleanJsonp(hpBody))
+                val code = hpJson.optInt("code", -1)
+                if (code == 0) {
+                    anyApiSucceeded = true
                     val hpData = hpJson.optJSONObject("data")
                     if (hpData != null) {
-                        // 解析主页的 mydiss
+                        // 解析「我喜欢」等默认歌单（mymusic）
+                        val mymusic = hpData.optJSONArray("mymusic")
+                        if (mymusic != null) {
+                            for (i in 0 until mymusic.length()) {
+                                val item = mymusic.optJSONObject(i) ?: continue
+                                val id = item.optString("id", "").ifBlank {
+                                    item.optLong("id", 0L).takeIf { it > 0L }?.toString().orEmpty()
+                                }
+                                val title = item.optString("title", "我喜欢")
+                                val pic = item.optString("laypic", item.optString("picurl", ""))
+                                val num = item.optInt("num0", item.optInt("num", 0))
+                                if (id.isNotBlank() && num > 0) {
+                                    addPlaylist(id, title, pic, num, 0L, account.nickname, false)
+                                }
+                            }
+                        }
+
+                        // 解析主页的 mydiss（自建歌单）
                         val mydiss = hpData.optJSONObject("mydiss")?.optJSONArray("list")
                         if (mydiss != null) {
                             for (i in 0 until mydiss.length()) {
-                                val item = mydiss.getJSONObject(i)
-                                val id = item.optString("dissid", item.optString("dirid", item.optString("tid", "")))
+                                val item = mydiss.optJSONObject(i) ?: continue
+                                val id = item.optString("dissid", "")
+                                    .ifBlank { item.optString("tid", "") }
+                                    .ifBlank { item.optString("dirid", "").takeIf { it.isNotBlank() && it != "0" }?.let { "dir_$it" }.orEmpty() }
                                 val title = item.optString("title", item.optString("diss_name", ""))
-                                val pic = item.optString("pic", item.optString("picurl", ""))
+                                val pic = item.optString("picurl", item.optString("pic", ""))
                                 val songCnt = item.optInt("song_cnt", item.optInt("song_num", 0))
                                 val listenNum = item.optLong("listen_num", 0L)
                                 addPlaylist(id, title, pic, songCnt, listenNum, account.nickname, false)
                             }
                         }
 
-                        // 解析主页的 fav_diss (收藏歌单)
+                        // 解析主页的 fav_diss（收藏歌单）
                         val favDiss = hpData.optJSONObject("fav_diss")?.optJSONArray("list")
                         if (favDiss != null) {
                             for (i in 0 until favDiss.length()) {
-                                val item = favDiss.getJSONObject(i)
-                                val id = item.optString("dissid", item.optString("dirid", item.optString("tid", "")))
+                                val item = favDiss.optJSONObject(i) ?: continue
+                                val id = item.optString("dissid", "")
+                                    .ifBlank { item.optString("tid", "") }
+                                    .ifBlank { item.optString("dirid", "") }
                                 val title = item.optString("title", item.optString("diss_name", ""))
-                                val pic = item.optString("pic", item.optString("picurl", ""))
+                                val pic = item.optString("picurl", item.optString("pic", ""))
                                 val songCnt = item.optInt("song_cnt", item.optInt("song_num", 0))
                                 val creator = item.optString("nickname", "QQ 音乐用户")
                                 addPlaylist(id, title, pic, songCnt, 0L, creator, true)
                             }
                         }
                     }
+                } else if (code == 1000 || code == 2001 || code == 4000) {
+                    authRejectedCount++
+                    AppLogger.w(TAG, "fcg_get_profile_homepage 返回鉴权错误 code=$code")
                 }
-            } catch (e: Exception) {
-                AppLogger.w(TAG, "主页歌单接口解析失败: ${e.message}")
             }
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "主页歌单接口解析失败: ${e.message}")
+        }
+
+        // 方案 3: 收藏歌单专用接口 fcg_get_profile_order_asset.fcg（独立补全全部收藏歌单）
+        try {
+            val favUrl = "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg" +
+                "?g_tk=$gtk&g_tk_new_20200303=$gtk&loginUin=$uin&hostUin=$uin&format=json&inCharset=utf8&outCharset=utf-8" +
+                "&notice=0&platform=yqq.json&needNewCode=0&ct=20&cid=205360956&userid=$uin&reqtype=3&sin=0&ein=100"
+            val favReq = Request.Builder()
+                .url(favUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://y.qq.com/")
+                .header("Origin", "https://y.qq.com")
+                .header("Cookie", cookieHeader)
+                .get()
+                .build()
+
+            val favBody = client.newCall(favReq).execute().use { it.body?.string().orEmpty() }
+            if (favBody.isNotBlank()) {
+                val favJson = JSONObject(cleanJsonp(favBody))
+                if (favJson.optInt("code", -1) == 0) {
+                    anyApiSucceeded = true
+                    val cdlist = favJson.optJSONObject("data")?.optJSONArray("cdlist")
+                    if (cdlist != null) {
+                        for (i in 0 until cdlist.length()) {
+                            val item = cdlist.optJSONObject(i) ?: continue
+                            val id = item.optString("dissid", "")
+                                .ifBlank { item.optLong("dissid", 0L).takeIf { it > 0L }?.toString().orEmpty() }
+                            val title = item.optString("dissname", item.optString("title", ""))
+                            val pic = item.optString("logo", item.optString("picurl", ""))
+                            val songCnt = item.optInt("songnum", item.optInt("song_cnt", 0))
+                            val listenNum = item.optLong("listennum", 0L)
+                            val creator = item.optString("nickname", "QQ 音乐用户")
+                            addPlaylist(id, title, pic, songCnt, listenNum, creator, true)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "收藏歌单接口解析失败: ${e.message}")
+        }
+
+        if (list.isEmpty() && !anyApiSucceeded) {
+            val hint = if (authRejectedCount > 0) {
+                "QQ 音乐登录凭据已失效或未获歌单授权，请重新扫码或更新 Cookie"
+            } else {
+                "拉取 QQ 音乐歌单失败，请检查网络后重试"
+            }
+            throw IllegalStateException(hint)
         }
 
         AppLogger.i(TAG, "成功为用户 $uin 拉取到 ${list.size} 个自建/收藏歌单")

@@ -4060,6 +4060,23 @@ class MainActivity : ComponentActivity() {
                         playerController?.clearPriorityQueue()
                         playerController?.play(song, list, index)
                     },
+                    onAppendLibraryQueue = { list ->
+                        if (list.isNotEmpty()) {
+                            playerController?.appendPlaylistToQueue(list) { added, started ->
+                                when {
+                                    started -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                        getString(com.rawsmusic.core.ui.R.string.online_detail_added_to_queue_and_playing, added)
+                                    )
+                                    added > 0 -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                        getString(com.rawsmusic.core.ui.R.string.online_detail_added_to_queue, added)
+                                    )
+                                    else -> com.rawsmusic.core.common.ui.AppNoticeBus.post(
+                                        getString(com.rawsmusic.core.ui.R.string.online_detail_already_in_queue)
+                                    )
+                                }
+                            }
+                        }
+                    },
                     onClearPriorityQueue = { playerController?.clearPriorityQueue() },
                     albumSongs = playerAlbumSongs,
                     albumCoverPath = playerAlbumCoverPath,
